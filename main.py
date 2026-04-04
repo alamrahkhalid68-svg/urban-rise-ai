@@ -1,5 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from auth import get_current_user, get_user_by_id, is_admin, is_employee, is_owner, is_partner, is_tenant, password_matches, require_login, require_role
@@ -9,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from db import get_db
 from html import escape
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -21,6 +23,7 @@ from urllib.parse import quote
 app = FastAPI()
 app.include_router(admin_users_router)
 templates = Jinja2Templates(directory="templates")
+logger = logging.getLogger("urbanrise")
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("URBANRISE_SESSION_SECRET", "urban-rise-ai-internal-session-secret"),
@@ -137,6 +140,80 @@ HOME_BUTTON = """
 })();
 </script>
 """
+
+
+def wants_json_response(request: Request) -> bool:
+    path = request.url.path or "/"
+    accept = (request.headers.get("accept") or "").lower()
+    content_type = (request.headers.get("content-type") or "").lower()
+    return (
+        path.startswith("/ai/")
+        or path == "/session-info"
+        or "application/json" in accept
+        or "application/json" in content_type
+    )
+
+
+def safe_error_response(request: Request, exc: Exception, status_code: int = 500):
+    logger.exception("Unhandled application error on %s %s", request.method, request.url.path, exc_info=exc)
+    if wants_json_response(request):
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "حدث خطأ غير متوقع أثناء معالجة الطلب.",
+            },
+            status_code=status_code,
+        )
+    return HTMLResponse(
+        f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark" dir="rtl">
+{HOME_BUTTON}
+<div class="dashboard" style="max-width:760px;">
+    <div class="inventory-panel inventory-table-panel" style="padding:32px;text-align:center;">
+        <h1 class="system-title" style="margin-bottom:12px;">حدث خطأ غير متوقع</h1>
+        <div class="inventory-note" style="margin:18px 0;">تعذر إكمال الطلب الحالي. يمكنك المحاولة مرة أخرى أو الرجوع للصفحة السابقة.</div>
+        <a href="/" class="glass-btn back-btn">⬅ الرئيسية</a>
+    </div>
+</div>
+""",
+        status_code=status_code,
+    )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return safe_error_response(request, exc, status_code=500)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    if wants_json_response(request):
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "البيانات المرسلة غير مكتملة أو غير صحيحة.",
+                "details": exc.errors(),
+            },
+            status_code=422,
+        )
+    return HTMLResponse(
+        f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark" dir="rtl">
+{HOME_BUTTON}
+<div class="dashboard" style="max-width:760px;">
+    <div class="inventory-panel inventory-table-panel" style="padding:32px;text-align:center;">
+        <h1 class="system-title" style="margin-bottom:12px;">تعذر تنفيذ الطلب</h1>
+        <div class="inventory-note" style="margin:18px 0;">البيانات المطلوبة غير مكتملة أو غير صحيحة.</div>
+        <a href="/" class="glass-btn back-btn">⬅ الرئيسية</a>
+    </div>
+</div>
+""",
+        status_code=422,
+    )
 
 # ======================
 # قاعدة البيانات
@@ -890,7 +967,7 @@ def normalize_arabic_digits(value: str) -> str:
     return (value or "").translate(translation)
 
 
-PROJECT_DAILY_UPLOAD_DIR = os.path.join("static", "uploads", "project_daily")
+UPLOADS_DIR = os.path.join("static", "uploads")
 
 
 def save_project_daily_attachment(attachment: UploadFile | None) -> str:
@@ -904,10 +981,10 @@ def save_project_daily_attachment(attachment: UploadFile | None) -> str:
     _, ext = os.path.splitext(original_name)
     safe_ext = re.sub(r"[^a-zA-Z0-9.]", "", ext)[:10]
     safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", os.path.splitext(original_name)[0]).strip("_") or "attachment"
-    unique_name = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{safe_ext}"
+    unique_name = f"project_daily_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{safe_ext}"
 
-    os.makedirs(PROJECT_DAILY_UPLOAD_DIR, exist_ok=True)
-    file_path = os.path.join(PROJECT_DAILY_UPLOAD_DIR, unique_name)
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    file_path = os.path.join(UPLOADS_DIR, unique_name)
 
     attachment.file.seek(0)
     file_bytes = attachment.file.read()
@@ -917,7 +994,7 @@ def save_project_daily_attachment(attachment: UploadFile | None) -> str:
     with open(file_path, "wb") as output_file:
         output_file.write(file_bytes)
 
-    return f"/static/uploads/project_daily/{unique_name}"
+    return f"/static/uploads/{unique_name}"
 
 
 def delete_project_daily_attachment_file(attachment_path: str) -> None:
@@ -925,13 +1002,13 @@ def delete_project_daily_attachment_file(attachment_path: str) -> None:
         return
 
     normalized_path = str(attachment_path).replace("\\", "/")
-    expected_prefix = "/static/uploads/project_daily/"
+    expected_prefix = "/static/uploads/"
     if not normalized_path.startswith(expected_prefix):
         return
 
     local_relative_path = normalized_path.lstrip("/").replace("/", os.sep)
     local_path = os.path.abspath(local_relative_path)
-    uploads_root = os.path.abspath(PROJECT_DAILY_UPLOAD_DIR)
+    uploads_root = os.path.abspath(UPLOADS_DIR)
     if not local_path.startswith(uploads_root):
         return
 
@@ -940,6 +1017,77 @@ def delete_project_daily_attachment_file(attachment_path: str) -> None:
             os.remove(local_path)
         except OSError:
             pass
+
+
+def save_maintenance_image(image: UploadFile | None) -> str:
+    if not image or not getattr(image, "filename", ""):
+        return ""
+
+    original_name = os.path.basename(str(image.filename or "")).strip()
+    if not original_name:
+        return ""
+
+    _, ext = os.path.splitext(original_name)
+    safe_ext = re.sub(r"[^a-zA-Z0-9.]", "", ext)[:10]
+    safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", os.path.splitext(original_name)[0]).strip("_") or "maintenance"
+    unique_name = f"maintenance_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{safe_ext}"
+
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    file_path = os.path.join(UPLOADS_DIR, unique_name)
+
+    image.file.seek(0)
+    file_bytes = image.file.read()
+    if not file_bytes:
+        return ""
+
+    with open(file_path, "wb") as output_file:
+        output_file.write(file_bytes)
+
+    return f"/static/uploads/{unique_name}"
+
+
+def cascade_delete_project_records(project_id: int, company: str = "") -> None:
+    conn = get_db()
+    try:
+        project = conn.execute(
+            "SELECT id, contract_id FROM projects WHERE id = ? AND company = ?",
+            (project_id, company),
+        ).fetchone()
+        if not project:
+            return
+
+        daily_attachments = conn.execute(
+            "SELECT attachment_path FROM project_daily WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+        for row in daily_attachments:
+            delete_project_daily_attachment_file(row["attachment_path"] or "")
+
+        conn.execute("DELETE FROM project_daily WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM project_expenses WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM project_equipment WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM project_suppliers WHERE project_id = ?", (project_id,))
+
+        contract_id = project["contract_id"]
+        quote_id = None
+        if contract_id:
+            contract = conn.execute(
+                "SELECT quote_id FROM contracts WHERE id = ?",
+                (contract_id,),
+            ).fetchone()
+            if contract:
+                quote_id = contract["quote_id"]
+            conn.execute("DELETE FROM contracts WHERE id = ?", (contract_id,))
+
+        if quote_id:
+            conn.execute("DELETE FROM quote_items WHERE quote_id = ?", (quote_id,))
+            conn.execute("DELETE FROM quote_payments WHERE quote_id = ?", (quote_id,))
+            conn.execute("DELETE FROM quotes WHERE id = ?", (quote_id,))
+
+        conn.execute("DELETE FROM projects WHERE id = ? AND company = ?", (project_id, company))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def parse_project_duration_days(project_row, quote_row) -> int:
@@ -1783,21 +1931,24 @@ def login_submit(
 
 @app.middleware("http")
 async def authentication_middleware(request: Request, call_next):
-    path = request.url.path or "/"
+    try:
+        path = request.url.path or "/"
 
-    if path.startswith("/static") or path in {"/login", "/logout"}:
+        if path.startswith("/static") or path in {"/login", "/logout"}:
+            return await call_next(request)
+
+        request.state.current_user = None
+        session_available = isinstance(request.scope.get("session"), dict)
+        if session_available:
+            request.state.current_user = get_current_user(request)
+
+        if any(path == prefix or path.startswith(f"{prefix}/") for prefix in PROTECTED_ROUTE_PREFIXES):
+            if session_available and not request.state.current_user:
+                return RedirectResponse(url="/login", status_code=303)
+
         return await call_next(request)
-
-    request.state.current_user = None
-    session_available = isinstance(request.scope.get("session"), dict)
-    if session_available:
-        request.state.current_user = get_current_user(request)
-
-    if any(path == prefix or path.startswith(f"{prefix}/") for prefix in PROTECTED_ROUTE_PREFIXES):
-        if session_available and not request.state.current_user:
-            return RedirectResponse(url="/login", status_code=303)
-
-    return await call_next(request)
+    except Exception as exc:
+        return safe_error_response(request, exc, status_code=500)
 
 
 @app.get("/logout")
@@ -2562,7 +2713,7 @@ def save_project(
     conn.commit()
     conn.close()
 
-    return f'<meta http-equiv="refresh" content="0; url=/projects?company={company}">'
+    return RedirectResponse(url=f"/projects?company={company}", status_code=303)
 
 
 def render_project_structured_fields(company: str, project: sqlite3.Row | None = None) -> str:
@@ -2880,7 +3031,7 @@ def save_quote(
     conn.commit()
     conn.close()
 
-    return f'<meta http-equiv="refresh" content="0; url=/quote/{quote_id}?company={company}">'
+    return RedirectResponse(url=f"/quote/{quote_id}?company={company}", status_code=303)
 
 
 @app.get("/edit-quote/{quote_id}", response_class=HTMLResponse)
@@ -3208,7 +3359,7 @@ def add_item(
     )
     conn.commit()
     conn.close()
-    return f'<meta http-equiv="refresh" content="0; url=/quote/{quote_id}?company={company}">'
+    return RedirectResponse(url=f"/quote/{quote_id}?company={company}", status_code=303)
 
 @app.post("/add-payment/{quote_id}")
 def add_payment(
@@ -3713,7 +3864,7 @@ def save_employee(
     conn.commit()
     conn.close()
 
-    return f'<meta http-equiv="refresh" content="0; url=/employees?company={company}">'
+    return RedirectResponse(url=f"/employees?company={company}", status_code=303)
 
 @app.get("/edit-employee/{employee_id}", response_class=HTMLResponse)
 def edit_employee_form(request: Request, employee_id: int, company: str = ""):
