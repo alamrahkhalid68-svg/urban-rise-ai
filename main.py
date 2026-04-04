@@ -890,6 +890,58 @@ def normalize_arabic_digits(value: str) -> str:
     return (value or "").translate(translation)
 
 
+PROJECT_DAILY_UPLOAD_DIR = os.path.join("static", "uploads", "project_daily")
+
+
+def save_project_daily_attachment(attachment: UploadFile | None) -> str:
+    if not attachment or not getattr(attachment, "filename", ""):
+        return ""
+
+    original_name = os.path.basename(str(attachment.filename or "")).strip()
+    if not original_name:
+        return ""
+
+    _, ext = os.path.splitext(original_name)
+    safe_ext = re.sub(r"[^a-zA-Z0-9.]", "", ext)[:10]
+    safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", os.path.splitext(original_name)[0]).strip("_") or "attachment"
+    unique_name = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{safe_ext}"
+
+    os.makedirs(PROJECT_DAILY_UPLOAD_DIR, exist_ok=True)
+    file_path = os.path.join(PROJECT_DAILY_UPLOAD_DIR, unique_name)
+
+    attachment.file.seek(0)
+    file_bytes = attachment.file.read()
+    if not file_bytes:
+        return ""
+
+    with open(file_path, "wb") as output_file:
+        output_file.write(file_bytes)
+
+    return f"/static/uploads/project_daily/{unique_name}"
+
+
+def delete_project_daily_attachment_file(attachment_path: str) -> None:
+    if not attachment_path:
+        return
+
+    normalized_path = str(attachment_path).replace("\\", "/")
+    expected_prefix = "/static/uploads/project_daily/"
+    if not normalized_path.startswith(expected_prefix):
+        return
+
+    local_relative_path = normalized_path.lstrip("/").replace("/", os.sep)
+    local_path = os.path.abspath(local_relative_path)
+    uploads_root = os.path.abspath(PROJECT_DAILY_UPLOAD_DIR)
+    if not local_path.startswith(uploads_root):
+        return
+
+    if os.path.exists(local_path):
+        try:
+            os.remove(local_path)
+        except OSError:
+            pass
+
+
 def parse_project_duration_days(project_row, quote_row) -> int:
     start_date = (project_row["start_date"] or "").strip() if project_row else ""
     end_date = (project_row["end_date"] or "").strip() if project_row else ""
@@ -3870,9 +3922,9 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
     if is_employee(access_result) and normalize_access_value(company) == "works":
         allowed_sections = get_employee_allowed_sections(access_result["id"], company)
         if allowed_sections == {"daily_log"}:
-            return access_denied_response(
-                "ليس لديك صلاحية الوصول إلى صفحة المشروع",
-                back_url=f"/project-daily?project_id={project_id}&company={company}",
+            return RedirectResponse(
+                url=f"/project-daily?project_id={project_id}&company={company}",
+                status_code=303,
             )
         if allowed_sections == {"expenses"}:
             return access_denied_response(
@@ -4280,8 +4332,8 @@ def project_daily(request: Request, project_id: int, company: str = ""):
     if is_employee(access_result) and normalize_access_value(company) == "works":
         allowed_sections = get_employee_allowed_sections(access_result["id"], company)
         if allowed_sections == {"daily_log"}:
-            back_url = f"/project-daily?project_id={project_id}&company={company}"
-            back_label = "⬅ رجوع"
+            back_url = f"/projects?company={company}"
+            back_label = "⬅ رجوع للمشاريع"
 
     conn = get_db()
 
