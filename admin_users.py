@@ -243,6 +243,7 @@ def render_admin_users_landing(request: Request, current_user, message: str = ""
     ]
 
     return templates.TemplateResponse(
+        request,
         "admin_users_landing.html",
         {
             "request": request,
@@ -285,6 +286,7 @@ def render_company_users_page(
             )
 
     return templates.TemplateResponse(
+        request,
         "admin_users_company.html",
         {
             "request": request,
@@ -603,4 +605,3 @@ def admin_delete_user(
         url=build_redirect_url(redirect_target, message="تم حذف المستخدم"),
         status_code=303,
     )
-

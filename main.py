@@ -1655,11 +1655,15 @@ def login_page(request: Request):
     user = getattr(request.state, "current_user", None) or get_current_user(request)
     if user:
         return RedirectResponse(url=get_role_landing_url(user), status_code=303)
-    return templates.TemplateResponse("login.html", {
-        "request": request,
-        "error": "",
-        "username": "",
-    })
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {
+            "request": request,
+            "error": "",
+            "username": "",
+        },
+    )
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -1673,6 +1677,7 @@ def login_submit(
 
     if not clean_username or not clean_password:
         return templates.TemplateResponse(
+            request,
             "login.html",
             {
                 "request": request,
@@ -1693,6 +1698,7 @@ def login_submit(
 
     if not user or user["role"] not in AUTH_ROLES or not password_matches(user["password"] or "", clean_password):
         return templates.TemplateResponse(
+            request,
             "login.html",
             {
                 "request": request,
@@ -1705,6 +1711,7 @@ def login_submit(
     session_data = request.scope.get("session")
     if not isinstance(session_data, dict):
         return templates.TemplateResponse(
+            request,
             "login.html",
             {
                 "request": request,
@@ -5698,6 +5705,7 @@ def property_management_home(request: Request, message: str = "", error: str = "
     ]
 
     return templates.TemplateResponse(
+        request,
         "property_management.html",
         {
             "request": request,
