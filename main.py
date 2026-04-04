@@ -3400,73 +3400,86 @@ def convert_to_contract(request: Request, quote_id: int, company: str = ""):
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
     conn = get_db()
+    try:
+        quote = conn.execute(
+            "SELECT * FROM quotes WHERE id = ? AND company = ?",
+            (quote_id, company)
+        ).fetchone()
+        if not quote:
+            return HTMLResponse(
+                "<div class='inventory-note' style='margin:20px 0;'>عرض السعر غير موجود أو لا يتبع هذه الشركة.</div>",
+                status_code=404,
+            )
 
-    # جلب بيانات عرض السعر
-    quote = conn.execute(
-        "SELECT * FROM quotes WHERE id = ?",
-        (quote_id,)
-    ).fetchone()
+        existing_contract = conn.execute(
+            "SELECT id FROM contracts WHERE quote_id = ? AND company = ?",
+            (quote_id, company)
+        ).fetchone()
 
-    # نتأكد هل فيه عقد مسبق لهذا العرض
-    existing = conn.execute(
-        "SELECT id FROM contracts WHERE quote_id = ?",
-        (quote_id,)
-    ).fetchone()
+        contract_id = existing_contract["id"] if existing_contract else None
+        if not contract_id:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO contracts (company, quote_id, status) VALUES (?, ?, ?)",
+                (company, quote_id, "ساري")
+            )
+            contract_id = cur.lastrowid
 
-    if existing:
-        conn.close()
+        existing_project = conn.execute(
+            "SELECT id FROM projects WHERE contract_id = ? AND company = ?",
+            (contract_id, company)
+        ).fetchone()
+        if existing_project:
+            project_id = existing_project["id"]
+        else:
+            quote_keys = set(quote.keys())
+            project_name = (quote["project_location"] or "").strip() or f"مشروع عرض {quote_id}"
+            project_client = (quote["client"] or "").strip() or "غير محدد"
+            start_date = ""
+            end_date = ""
+            status = "جاري"
+            conn.execute(
+                """
+                INSERT INTO projects (
+                    company, name, client, start_date, end_date, status, contract_id,
+                    project_type, work_type, finish_level, area
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    company,
+                    project_name,
+                    project_client,
+                    start_date,
+                    end_date,
+                    status,
+                    contract_id,
+                    (quote["project_type"] or "").strip() if "project_type" in quote_keys and quote["project_type"] else "",
+                    (quote["work_type"] or "").strip() if "work_type" in quote_keys and quote["work_type"] else "",
+                    (quote["finish_level"] or "").strip() if "finish_level" in quote_keys and quote["finish_level"] else "",
+                    safe_float(quote["area"]) if "area" in quote_keys and str(quote["area"]).strip() else None,
+                )
+            )
+            project_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        conn.execute(
+            "UPDATE quotes SET status = ? WHERE id = ? AND company = ?",
+            ("تم التحويل لعقد", quote_id, company)
+        )
+        conn.commit()
         return RedirectResponse(
-            url=f"/contract/{existing['id']}?company={company}",
+            url=f"/project/{project_id}?company={company}",
             status_code=303
         )
-
-    # إنشاء عقد جديد
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO contracts (company, quote_id, status) VALUES (?, ?, ?)",
-        (company, quote_id, "ساري")
-    )
-
-    contract_id = cur.lastrowid
-
-    # إنشاء مشروع تلقائي مرتبط بالعقد
-    quote_keys = set(quote.keys()) if quote else set()
-    conn.execute(
-        """
-        INSERT INTO projects (
-            company, name, client, start_date, end_date, status, contract_id,
-            project_type, work_type, finish_level, area
+    except Exception as exc:
+        conn.rollback()
+        logger.exception("Failed to convert quote %s to contract/project for company %s", quote_id, company, exc_info=exc)
+        return HTMLResponse(
+            "<div class='inventory-note' style='margin:20px 0;'>تعذر تحويل عرض السعر إلى عقد ومشروع. يرجى التحقق من البيانات ثم المحاولة مرة أخرى.</div>",
+            status_code=500,
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            company,
-            quote["project_location"],
-            quote["client"],
-            "",
-            "",
-            "جاري",
-            contract_id,
-            (quote["project_type"] or "").strip() if "project_type" in quote_keys and quote["project_type"] else "",
-            (quote["work_type"] or "").strip() if "work_type" in quote_keys and quote["work_type"] else "",
-            (quote["finish_level"] or "").strip() if "finish_level" in quote_keys and quote["finish_level"] else "",
-            safe_float(quote["area"]) if "area" in quote_keys and str(quote["area"]).strip() else None,
-        )
-    )
-
-    # تحديث حالة عرض السعر
-    conn.execute(
-        "UPDATE quotes SET status = ? WHERE id = ?",
-        ("تم التحويل لعقد", quote_id)
-    )
-
-    conn.commit()
-    conn.close()
-
-    return RedirectResponse(
-        url=f"/contract/{contract_id}?company={company}",
-        status_code=303
-    )
+    finally:
+        conn.close()
 # ======================
 # العقود
 # ======================
