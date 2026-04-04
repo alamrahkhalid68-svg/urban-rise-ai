@@ -1,0 +1,29 @@
+﻿<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark" dir="rtl">
+{{ home_button|safe }}
+<div class="dashboard admin-users-landing-page" style="max-width:1200px;">
+    <div class="inventory-panel inventory-table-panel admin-users-landing-panel" style="padding:32px;">
+        <div class="admin-users-landing-header">
+            <div class="admin-users-landing-copy">
+                <h1 class="system-title admin-users-landing-title">إدارة المستخدمين</h1>
+                <p class="admin-users-landing-subtitle">اختر جهة الإدارة المطلوبة لعرض المستخدمين والصلاحيات بشكل واضح ومفصول حسب الشركة.</p>
+            </div>
+        </div>
+
+        {% if message %}
+        <div class="inventory-success-panel" style="margin-bottom:18px;"><p style="margin:0;">{{ message }}</p></div>
+        {% endif %}
+        {% if error_message %}
+        <div class="inventory-warning-panel" style="margin-bottom:18px;"><p style="margin:0;">{{ error_message }}</p></div>
+        {% endif %}
+
+        <div class="companies admin-users-landing-grid">
+            {% for card in company_cards %}
+            <a href="{{ card.href }}" class="company-card admin-users-landing-card" style="text-align:right;min-height:180px;">
+                <h3 class="admin-users-landing-card-title" style="margin-top:16px;">{{ card.title }}</h3>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+</div>

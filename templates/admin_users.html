@@ -1,0 +1,189 @@
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark" dir="rtl">
+{{ home_button|safe }}
+<div class="dashboard" style="max-width:1400px;">
+    <div class="inventory-panel inventory-table-panel" style="padding:32px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:24px;">
+            <div>
+                <h1 class="system-title" style="margin-bottom:8px;">إدارة المستخدمين</h1>
+                <p style="margin:0;color:#d7dde8;">لوحة بسيطة لإضافة المستخدمين وربطهم بالأملاك أو سجلات المستأجرين.</p>
+            </div>
+            <a href="/" class="glass-btn">الرئيسية</a>
+        </div>
+
+        {% if message %}
+        <div class="inventory-success-panel" style="margin-bottom:18px;"><p style="margin:0;">{{ message }}</p></div>
+        {% endif %}
+        {% if error_message %}
+        <div class="inventory-warning-panel" style="margin-bottom:18px;"><p style="margin:0;">{{ error_message }}</p></div>
+        {% endif %}
+
+        <div class="inventory-form-grid" style="margin-bottom:24px;">
+            <div class="inventory-panel inventory-table-panel" style="padding:24px;">
+                <h2 class="section-title" style="margin-bottom:16px;">إضافة مستخدم</h2>
+                <form action="/admin/users/create" method="post" data-role-form>
+                    <label>اسم المستخدم</label>
+                    <input type="text" name="username" required>
+
+                    <label>كلمة المرور</label>
+                    <input type="password" name="password" required>
+
+                    <label>الدور</label>
+                    <select name="role" data-role-select required>
+                        {% for role_option in base_role_options %}
+                        <option value="{{ role_option }}">{{ role_option }}</option>
+                        {% endfor %}
+                    </select>
+
+                    <div data-owner-fields style="display:none;">
+                        <label>ربط الملك</label>
+                        <select name="property_id">
+                            <option value="">اختر الملك</option>
+                            {% for prop in properties %}
+                            <option value="{{ prop.id }}">{{ prop.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div data-tenant-fields style="display:none;">
+                        <label>ربط المستأجر</label>
+                        <select name="tenant_record_id">
+                            <option value="">اختر المستأجر</option>
+                            {% for tenant in tenant_records %}
+                            <option value="{{ tenant.id }}">{{ tenant.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div data-employee-fields style="display:none;margin-top:10px;">
+                        <label>الشركة</label>
+                        <select name="company">
+                            <option value="">اختر الشركة</option>
+                            {% for company_value, company_label in employee_company_options %}
+                            <option value="{{ company_value }}">{{ company_label }}</option>
+                            {% endfor %}
+                        </select>
+                        <label>القسم</label>
+                        <select name="section">
+                            <option value="">اختر القسم</option>
+                            {% for section_value, section_label in employee_section_options %}
+                            <option value="{{ section_value }}">{{ section_label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <button type="submit" class="glass-btn gold-text" style="margin-top:14px;">إنشاء المستخدم</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="inventory-panel inventory-table-panel">
+            <h2 class="section-title">المستخدمون الحاليون</h2>
+            <div class="inventory-table-wrap">
+                <table class="inventory-table">
+                    <thead>
+                        <tr>
+                            <th>اسم المستخدم</th>
+                            <th>الدور</th>
+                            <th>الاسم الكامل</th>
+                            <th>الإجراءات</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if users %}
+                        {% for user in users %}
+                        <tr>
+                            <td>{{ user.username }}</td>
+                            <td>{{ user.role }}</td>
+                            <td>{{ user.full_name or '-' }}</td>
+                            <td>
+                                <form action="/admin/users/update/{{ user.id }}" method="post" class="admin-user-form" data-role-form>
+                                    <input type="text" name="username" value="{{ user.username }}" required>
+                                    <input type="password" name="password" placeholder="اتركه فارغاً بدون تغيير">
+                                    <select name="role" data-role-select>
+                                        {% for role_option in base_role_options %}
+                                        <option value="{{ role_option }}"{% if user.role == role_option %} selected{% endif %}>{{ role_option }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <div data-owner-fields style="display:{% if user.role == 'owner' %}block{% else %}none{% endif %};margin-top:10px;">
+                                        <select name="property_id">
+                                            <option value="">اختر الملك</option>
+                                            {% for prop in properties %}
+                                            <option value="{{ prop.id }}"{% if user.selected_property_id == prop.id %} selected{% endif %}>{{ prop.name }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                    <div data-tenant-fields style="display:{% if user.role == 'tenant' %}block{% else %}none{% endif %};margin-top:10px;">
+                                        <select name="tenant_record_id">
+                                            <option value="">اختر المستأجر</option>
+                                            {% for tenant in tenant_records %}
+                                            <option value="{{ tenant.id }}"{% if user.selected_tenant_id == tenant.id %} selected{% endif %}>{{ tenant.label }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                    <div data-employee-fields style="display:{% if user.role == 'employee' %}block{% else %}none{% endif %};margin-top:10px;">
+                                        <label>الشركة</label>
+                                        <select name="company">
+                                            <option value="">اختر الشركة</option>
+                                            {% for company_value, company_label in employee_company_options %}
+                                            <option value="{{ company_value }}"{% if user.selected_company == company_value %} selected{% endif %}>{{ company_label }}</option>
+                                            {% endfor %}
+                                        </select>
+                                        <label>القسم</label>
+                                        <select name="section">
+                                            <option value="">اختر القسم</option>
+                                            {% for section_value, section_label in employee_section_options %}
+                                            <option value="{{ section_value }}"{% if user.selected_section == section_value %} selected{% endif %}>{{ section_label }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+                                        <button type="submit" class="glass-btn gold-text">تحديث</button>
+                                        {% if user.can_delete %}
+                                        <form action="/admin/users/delete/{{ user.id }}" method="post" style="display:inline;">
+                                            <button type="submit" class="glass-btn back-btn" onclick="return confirm('هل تريد حذف هذا المستخدم؟')">حذف</button>
+                                        </form>
+                                        {% endif %}
+                                    </div>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        {% else %}
+                        <tr><td colspan="4">لا يوجد مستخدمون</td></tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+function toggleAdminUserFields(form) {
+    const roleSelect = form.querySelector('[data-role-select]');
+    const ownerFields = form.querySelector('[data-owner-fields]');
+    const tenantFields = form.querySelector('[data-tenant-fields]');
+    const employeeFields = form.querySelector('[data-employee-fields]');
+    if (!roleSelect) {
+        return;
+    }
+
+    if (ownerFields) {
+        ownerFields.style.display = roleSelect.value === "owner" ? "block" : "none";
+    }
+    if (tenantFields) {
+        tenantFields.style.display = roleSelect.value === "tenant" ? "block" : "none";
+    }
+    if (employeeFields) {
+        employeeFields.style.display = roleSelect.value === "employee" ? "block" : "none";
+    }
+}
+
+document.querySelectorAll('[data-role-form]').forEach((form) => {
+    const roleSelect = form.querySelector('[data-role-select]');
+    if (roleSelect) {
+        roleSelect.addEventListener('change', () => toggleAdminUserFields(form));
+    }
+    toggleAdminUserFields(form);
+});
+</script>

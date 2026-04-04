@@ -1,0 +1,1010 @@
+/* =========================
+   Dark System Theme
+========================= */
+
+body.system-dark{
+
+    background-image: url("/static/background.jpg");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+
+    color:#000000;
+}
+
+.system-dark .dashboard h1 {
+    color: #000000;
+}
+
+.system-dark .dashboard p {
+    color: #ffffff;
+}
+
+.system-dark .company-card {
+    backdrop-filter: blur(20px);
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+}
+
+
+.glass-btn {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 10px 18px;
+    border-radius: 12px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: 0.3s;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    box-sizing: border-box;
+    font-family: inherit;
+}
+
+.glass-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.gold-text {
+    background: linear-gradient(135deg, #f5d27a, #ffffff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: #f5d27a;
+    text-shadow: 0 0 6px rgba(245, 210, 122, 0.3);
+}
+
+.action-btn {
+    background: #111 !important;
+    color: #fff !important;
+    border-radius: 8px;
+    padding: 6px 12px;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 13px;
+    border: 1px solid #111 !important;
+    backdrop-filter: none !important;
+    -webkit-text-fill-color: #fff !important;
+    text-shadow: none !important;
+    margin: 0 4px;
+}
+
+.action-btn:hover {
+    background: #000 !important;
+}
+
+.delete-btn {
+    background: rgba(127, 29, 29, 0.88) !important;
+    border-color: rgba(127, 29, 29, 0.95) !important;
+}
+
+.delete-btn:hover {
+    background: rgba(153, 27, 27, 0.95) !important;
+}
+
+.back-btn {
+    color: #000 !important;
+}
+
+.home-button {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 9999;
+    font-weight: bold;
+}
+
+.contract-page {
+    background: #ffffff;
+    background-image: none !important;
+    color: #000;
+    padding: 40px;
+    max-width: 800px;
+    margin: 40px auto;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    line-height: 2;
+    text-align: right;
+    box-sizing: border-box;
+}
+
+.contract-clean {
+    background: #ffffff;
+}
+
+.watermark {
+    display: none;
+}
+
+
+/* =========================
+   الأساسيات
+========================= */
+body {
+    margin: 0;
+    font-family: "Segoe UI", Tahoma, Arial;
+    background: #8fa1b5; /* الخلفية الرئيسية */
+    direction: rtl;
+}
+
+/* =========================
+   الحاوية العامة
+========================= */
+.dashboard {
+    padding: 50px 30px;
+    text-align: center;
+}
+
+.dashboard h1 {
+    color: #0e1a2b;
+    font-size: 36px;
+    margin-bottom: 10px;
+}
+
+.dashboard p {
+    color: #1f2a3a;
+    font-size: 18px;
+    margin-bottom: 45px;
+}
+
+/* =========================
+   شبكة الكروت
+========================= */
+.companies {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 35px;
+    max-width: 950px;
+    margin: auto;
+}
+
+/* =========================
+   الكرت الأساسي
+========================= */
+.company-card {
+    height: 180px;
+    border-radius: 30px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    font-size: 24px;
+    font-weight: bold;
+    color: #ffffff;
+    box-shadow: 0 18px 35px rgba(0,0,0,0.25);
+    transition: all 0.35s ease;
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(15px);
+    border: 1px solid rgba(255,255,255,0.22);
+}
+
+.company-card:hover {
+    transform: translateY(-8px) scale(1.03);
+    box-shadow: 0 30px 55px rgba(0,0,0,0.35);
+}
+
+/* =========================
+   ألوان الكروت (واضحة وفخمة)
+========================= */
+
+/* المقاولات */
+.company-card.works {
+    color: #ffffff;
+}
+
+/* التطوير العقاري */
+.company-card.realestate {
+    color: #ffffff;
+}
+
+/* اللوجستيات */
+.company-card.logistics {
+    background: rgba(255,255,255,0.18);
+    color: #111;
+}
+
+/* الصفحات الداخلية (عقود – عروض أسعار – إلخ) */
+.company-card:not(.works):not(.realestate):not(.logistics) {
+    color: #ffffff;
+}
+
+/* =========================
+   النص داخل الكرت
+========================= */
+.company-card h2 {
+    margin: 0;
+    line-height: 1.4;
+    background: linear-gradient(135deg, #f5d27a, #ffffff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: #f5d27a;
+    text-shadow: 0 0 6px rgba(245, 210, 122, 0.3);
+}
+
+.company-card h3 {
+    background: linear-gradient(135deg, #f5d27a, #ffffff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: #f5d27a;
+    text-shadow: 0 0 6px rgba(245, 210, 122, 0.3);
+}
+
+.company-card p {
+    margin-top: 8px;
+    font-size: 17px;
+    font-weight: normal;
+    opacity: 0.9;
+}
+
+/* =========================
+   روابط الرجوع
+========================= */
+.dashboard a[href="/"] {
+    display: inline-block;
+    margin-top: 45px;
+    color: #0e1a2b;
+    font-weight: bold;
+    text-decoration: none;
+}
+
+.dashboard a[href="/"]:hover {
+    text-decoration: underline;
+}
+
+.inventory-layout {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 24px;
+    max-width: 1100px;
+    margin: 0 auto 30px auto;
+}
+
+.inventory-panel {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 24px;
+    padding: 24px;
+    box-shadow: 0 18px 35px rgba(0, 0, 0, 0.2);
+    text-align: right;
+}
+
+.inventory-panel h3 {
+    margin-top: 0;
+    color: #ffffff;
+}
+
+.inventory-panel form {
+    display: grid;
+    gap: 12px;
+}
+
+.inventory-panel label {
+    color: #ffffff;
+    font-weight: 600;
+}
+
+.inventory-panel input,
+.inventory-panel select,
+.inventory-panel textarea {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.92);
+    color: #111;
+    box-sizing: border-box;
+    font-family: inherit;
+}
+
+.inventory-table-panel {
+    max-width: 1100px;
+    margin: 0 auto 24px auto;
+}
+
+.inventory-table-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.inventory-note {
+    max-width: 1100px;
+    margin: 0 auto 20px auto;
+    padding: 14px 18px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    color: #fff;
+    text-align: right;
+}
+
+.success-note {
+    border-color: rgba(74, 222, 128, 0.55);
+}
+
+.error-note {
+    border-color: rgba(248, 113, 113, 0.6);
+}
+
+.inventory-alert {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(239, 68, 68, 0.14);
+    color: #9f1239;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.inventory-warning-panel {
+    max-width: 1100px;
+    margin: 0 auto 24px auto;
+    padding: 22px 24px;
+    border-radius: 24px;
+    background: rgba(255, 226, 226, 0.18);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(248, 113, 113, 0.38);
+    box-shadow: 0 18px 35px rgba(127, 29, 29, 0.18);
+    color: #7f1d1d;
+    text-align: right;
+}
+
+.inventory-warning-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+}
+
+.inventory-warning-head h3 {
+    margin: 8px 0 6px 0;
+    color: #7f1d1d;
+}
+
+.inventory-warning-head p {
+    margin: 0;
+    color: rgba(127, 29, 29, 0.9);
+}
+
+.inventory-warning-badge {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(220, 38, 38, 0.12);
+    border: 1px solid rgba(220, 38, 38, 0.2);
+    color: #991b1b;
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.inventory-warning-table-wrap {
+    overflow-x: auto;
+}
+
+.inventory-warning-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: rgba(255, 255, 255, 0.58);
+    border-radius: 18px;
+    overflow: hidden;
+}
+
+.inventory-warning-table th,
+.inventory-warning-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(248, 113, 113, 0.18);
+    text-align: right;
+}
+
+.inventory-warning-table th {
+    background: rgba(254, 242, 242, 0.88);
+    color: #7f1d1d;
+}
+
+.inventory-warning-table tr:last-child td {
+    border-bottom: none;
+}
+
+.company-card-warning {
+    margin-top: 10px;
+    padding: 8px 12px;
+    border-radius: 14px;
+    background: rgba(254, 226, 226, 0.18);
+    border: 1px solid rgba(248, 113, 113, 0.28);
+    color: #7f1d1d;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.6;
+}
+
+.finance-page-header {
+    max-width: 1100px;
+    margin: 0 auto 26px auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    flex-wrap: wrap;
+}
+
+.finance-page-header h1 {
+    margin: 0 0 8px 0;
+}
+
+.finance-page-header p {
+    margin: 0;
+}
+
+.finance-summary-grid {
+    max-width: 1100px;
+    margin: 0 auto 24px auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 18px;
+}
+
+.finance-card {
+    background: rgba(255, 255, 255, 0.11);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 24px;
+    padding: 22px;
+    text-align: right;
+    box-shadow: 0 18px 35px rgba(0, 0, 0, 0.2);
+}
+
+.finance-card span {
+    display: block;
+    color: rgba(255, 255, 255, 0.88);
+    font-size: 14px;
+    margin-bottom: 10px;
+}
+
+.finance-card strong {
+    display: block;
+    color: #ffffff;
+    font-size: 30px;
+    line-height: 1.4;
+}
+
+.finance-card-secondary strong {
+    font-size: 26px;
+}
+
+.finance-card-positive {
+    background: rgba(34, 197, 94, 0.14);
+    border-color: rgba(34, 197, 94, 0.28);
+}
+
+.finance-card-negative {
+    background: rgba(248, 113, 113, 0.16);
+    border-color: rgba(248, 113, 113, 0.34);
+}
+
+.finance-card-expense {
+    background: rgba(251, 191, 36, 0.14);
+    border-color: rgba(251, 191, 36, 0.28);
+}
+
+.finance-summary-grid-secondary .finance-card {
+    padding: 18px 20px;
+}
+
+.finance-chart-grid {
+    max-width: 1100px;
+    margin: 0 auto 24px auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 24px;
+}
+
+.finance-chart-card h3 {
+    margin-bottom: 10px;
+}
+
+.finance-chart-note {
+    margin-bottom: 18px !important;
+    color: rgba(255, 255, 255, 0.82) !important;
+    font-size: 14px !important;
+}
+
+.finance-pie-shell {
+    position: relative;
+    min-height: 360px;
+    padding: 18px;
+    border-radius: 28px;
+    background:
+        radial-gradient(circle at top, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.06) 48%, rgba(15, 23, 42, 0.18) 100%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(15, 23, 42, 0.18));
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 28px 55px rgba(15, 23, 42, 0.22);
+}
+
+.finance-pie-shell::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    width: 66%;
+    height: 28px;
+    border-radius: 999px;
+    background: radial-gradient(circle, rgba(15, 23, 42, 0.28) 0%, rgba(15, 23, 42, 0.08) 48%, rgba(15, 23, 42, 0) 75%);
+    filter: blur(8px);
+}
+
+.finance-pie-stage {
+    position: relative;
+    height: 320px;
+}
+
+.finance-pie-stage canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.finance-line-stage {
+    position: relative;
+    min-height: 320px;
+    padding: 16px;
+    border-radius: 24px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(15, 23, 42, 0.18));
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 20px 40px rgba(15, 23, 42, 0.16);
+}
+
+.finance-line-stage canvas {
+    width: 100% !important;
+    height: 300px !important;
+}
+
+.finance-bar-chart {
+    display: grid;
+    gap: 16px;
+}
+
+.finance-bar-item {
+    display: grid;
+    gap: 8px;
+}
+
+.finance-bar-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: #ffffff;
+    font-size: 14px;
+}
+
+.finance-bar-meta strong {
+    font-size: 15px;
+    color: #ffffff;
+}
+
+.finance-bar-track {
+    height: 14px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.14);
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.finance-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+}
+
+.finance-bar-fill-gold {
+    background: linear-gradient(90deg, rgba(245, 208, 122, 0.95), rgba(255, 244, 214, 0.95));
+}
+
+.finance-bar-fill-red {
+    background: linear-gradient(90deg, rgba(248, 113, 113, 0.92), rgba(254, 202, 202, 0.95));
+}
+
+.finance-bar-fill-green {
+    background: linear-gradient(90deg, rgba(74, 222, 128, 0.92), rgba(187, 247, 208, 0.95));
+}
+
+.finance-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: rgba(255, 255, 255, 0.88);
+    overflow: hidden;
+    border-radius: 18px;
+}
+
+.finance-table th,
+.finance-table td {
+    padding: 12px 14px;
+    text-align: right;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+    color: #0f172a;
+}
+
+.finance-table th {
+    background: rgba(226, 232, 240, 0.75);
+    color: #0f172a;
+}
+
+.finance-table tr:last-child td {
+    border-bottom: none;
+}
+
+.finance-warning-soft {
+    background: rgba(255, 237, 213, 0.18);
+    border-color: rgba(251, 146, 60, 0.34);
+    color: #9a3412;
+}
+
+.finance-warning-soft .inventory-warning-head h3,
+.finance-warning-soft .inventory-warning-head p,
+.finance-warning-soft .inventory-warning-badge {
+    color: #9a3412;
+}
+
+.inventory-status-ok {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(34, 197, 94, 0.14);
+    color: #166534;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.inventory-row-low td {
+    background: rgba(254, 226, 226, 0.8);
+}
+
+.property-site-card {
+    min-height: 220px;
+    height: auto;
+    padding: 22px;
+    box-sizing: border-box;
+}
+
+.property-site-card h3 {
+    margin: 0 0 10px 0;
+}
+
+.property-site-card p {
+    margin: 4px 0;
+    font-size: 15px;
+    line-height: 1.6;
+}
+
+.admin-users-landing-page {
+    text-align: right;
+}
+
+.admin-users-landing-panel {
+    max-width: 1120px;
+}
+
+.admin-users-landing-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-bottom: 28px;
+}
+
+.admin-users-landing-copy {
+    flex: 1 1 420px;
+    min-width: 0;
+}
+
+.admin-users-landing-title {
+    margin: 0 0 14px 0 !important;
+    line-height: 1.35;
+}
+
+.admin-users-landing-subtitle {
+    margin: 0 !important;
+    color: #d7dde8 !important;
+    font-size: 17px !important;
+    line-height: 1.9 !important;
+    max-width: 760px;
+}
+
+.admin-users-landing-grid {
+    max-width: 100%;
+    margin: 0;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 24px;
+    align-items: stretch;
+}
+
+.admin-users-landing-card {
+    min-height: 230px !important;
+    height: auto;
+    align-items: flex-start;
+    justify-content: flex-start;
+    text-align: right;
+    gap: 12px;
+    padding: 24px 22px;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.admin-users-landing-card .tag-chip {
+    margin-bottom: 2px;
+}
+
+.admin-users-landing-card-title {
+    margin: 0 !important;
+    font-size: 24px;
+    line-height: 1.55;
+    white-space: normal;
+    word-break: break-word;
+}
+
+.admin-users-landing-card-description {
+    margin: 0 !important;
+    font-size: 15px !important;
+    line-height: 1.9 !important;
+    color: rgba(255, 255, 255, 0.92) !important;
+}
+
+@media (max-width: 700px) {
+    .admin-users-landing-panel {
+        padding: 24px 20px !important;
+    }
+
+    .admin-users-landing-header {
+        margin-bottom: 24px;
+    }
+
+    .admin-users-landing-title {
+        font-size: 30px;
+    }
+
+    .admin-users-landing-card {
+        min-height: 210px !important;
+        padding: 22px 18px;
+    }
+
+    .admin-users-landing-card-title {
+        font-size: 21px;
+    }
+}
+
+.maintenance-preview {
+    max-width: 100%;
+    border-radius: 18px;
+    margin-top: 18px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+}
+
+.maintenance-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+    margin-bottom: 18px;
+}
+body {
+    background: #9aa9b8;
+    direction: rtl;
+    font-family: Tahoma, Arial;
+}
+
+.quote-wrapper {
+    display: flex;
+    justify-content: center;
+    padding: 40px 0;
+}
+
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px solid #000;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+.title {
+    font-size: 26px;
+    font-weight: bold;
+}
+
+.logo {
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.info {
+    text-align: right;
+    margin-bottom: 20px;
+}
+
+.intro {
+    margin: 20px 0;
+    line-height: 1.9;
+}
+
+.items {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+}
+
+.items th,
+.items td {
+    border: 1px solid #333;
+    padding: 10px;
+    text-align: center;
+}
+
+.items th {
+    background: #f2f2f2;
+}
+
+.footer-text {
+    margin-top: 30px;
+}
+
+.signature {
+    margin-top: 40px;
+    text-align: left;
+    font-weight: bold;
+}
+
+/* =========================
+   Quote – عزل كامل
+========================= */
+
+body {
+    background: #9aa9b8;
+}
+
+/* حاوية الطباعة */
+
+
+.header {
+    border-bottom: 2px solid #000;
+    padding-bottom: 15px;
+    margin-bottom: 25px;
+}
+
+.title {
+    font-size: 28px;
+    letter-spacing: 1px;
+}
+
+.logo {
+    font-size: 16px;
+    opacity: 0.8;
+}
+
+/* =========================
+   PDF Layout
+========================= */
+.quote-page {
+    background: #ffffff;
+    width: 720px;
+    margin: 40px auto;
+    padding: 40px;
+    box-sizing: border-box;
+    box-shadow: 0 0 20px rgba(0,0,0,0.15);
+}
+
+.info {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+    margin-bottom: 25px;
+}
+.items th {
+    background: #e9ecef;
+    font-weight: bold;
+    font-size: 14px;
+}
+
+.items td {
+    font-size: 14px;
+}
+
+.items td:last-child,
+.items th:last-child {
+    text-align: left;
+}
+
+.items tfoot td {
+    background: #f5f5f5;
+    font-size: 15px;
+}
+.header {
+    border-bottom: 2px solid #222;
+}
+
+.title {
+    color: #111;
+}
+
+.logo {
+    color: #444;
+}
+
+.intro,
+.footer-text {
+    color: #222;
+    font-size: 14px;
+    line-height: 1.9;
+}
+/* زر الطباعة */
+.print-btn {
+    display: inline-block;
+    margin-top: 25px;
+    padding: 10px 18px;
+    background: #111;
+    color: #fff;
+    text-decoration: none;
+    font-size: 14px;
+    border-radius: 6px;
+}
+
+@media (max-width: 700px) {
+    .finance-page-header,
+    .finance-bar-meta {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
+
+
+
+@page {
+    size: A4;
+    margin: 0;
+}
+
+@media print {
+
+    body {
+        margin: 0;
+        padding: 0;
+        background: white;
+    }
+
+    .quote-page {
+        width: 190mm;
+        padding: 15mm;
+        margin: 0 auto;
+        box-sizing: border-box;
+        box-shadow: none;
+    }
+
+    table {
+        width: 100%;
+    }
+
+}
+
+/* علامة مائية للطباعة فقط */
+@media print {
+
+    .watermark {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        opacity: 0.05;
+        width: 60%;
+        z-index: 0;
+    }
+
+}

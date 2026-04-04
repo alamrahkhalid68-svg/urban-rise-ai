@@ -1,0 +1,51 @@
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{{ home_button|safe }}
+<div class="dashboard">
+
+<h1>إدارة الأملاك</h1>
+<p>لوحة احترافية لإدارة المواقع والأملاك السكنية والتجارية وربط التشغيل اليومي بكل ملك</p>
+
+{% if message %}<div class="inventory-note">{{ message }}</div>{% endif %}
+{% if error %}<div class="inventory-note" style="border-color:rgba(127,29,29,0.45);color:#fecaca;">{{ error }}</div>{% endif %}
+
+{% if not is_owner_read_only %}
+<a href="/property-management/new" class="glass-btn gold-text">إضافة عقار جديد</a>
+{% endif %}
+{% if not is_owner_read_only and not is_property_accounts_employee %}
+<a href="/maintenance-management" class="glass-btn gold-text">لوحة الصيانة الداخلية</a>
+{% endif %}
+{% if not is_owner_read_only %}
+<a href="/client-maintenance" class="glass-btn gold-text">واجهة العميل التجريبية</a>
+{% endif %}
+
+<br><br>
+
+<div class="companies">
+{% if properties %}
+{% for prop in properties %}
+        <div class="company-card realestate property-site-card">
+            <a href="/property-management/{{ prop.id }}" style="text-decoration:none;color:inherit;display:block;">
+                <h3>{{ prop.name }}</h3>
+                <p>📍 {{ prop.location }}</p>
+                <p>🏷️ {{ prop.property_type }}</p>
+                <p>👤 {{ prop.supervisor }}</p>
+            </a>
+            {% if not is_owner_read_only %}
+            <div style="display:flex;gap:8px;justify-content:flex-start;flex-wrap:wrap;margin-top:12px;">
+                <a href="/edit-property/{{ prop.id }}" class="action-btn">تعديل</a>
+                <a href="/delete-property/{{ prop.id }}" class="action-btn delete-btn">حذف</a>
+            </div>
+            {% endif %}
+        </div>
+{% endfor %}
+{% else %}
+<div class="inventory-note">لا توجد أملاك مضافة حتى الآن</div>
+{% endif %}
+</div>
+
+<br>
+<a href="/company/realestate" class="glass-btn back-btn">⬅ رجوع</a>
+
+</div>

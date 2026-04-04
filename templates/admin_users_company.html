@@ -1,0 +1,300 @@
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark" dir="rtl">
+{{ home_button|safe }}
+<div class="dashboard" style="max-width:1450px;">
+    <div class="inventory-panel inventory-table-panel" style="padding:32px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:24px;">
+            <div>
+                <h1 class="system-title" style="margin-bottom:8px;">{{ page_config.title }}</h1>
+                <p style="margin:0;color:#d7dde8;">{{ page_config.description }}</p>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                <a href="/admin/users" class="glass-btn">اختيار الجهة</a>
+                <a href="/" class="glass-btn">الرئيسية</a>
+            </div>
+        </div>
+
+        {% if message %}
+        <div class="inventory-success-panel" style="margin-bottom:18px;"><p style="margin:0;">{{ message }}</p></div>
+        {% endif %}
+        {% if error_message %}
+        <div class="inventory-warning-panel" style="margin-bottom:18px;"><p style="margin:0;">{{ error_message }}</p></div>
+        {% endif %}
+
+        <div class="inventory-form-grid" style="margin-bottom:24px;grid-template-columns:minmax(320px, 430px) 1fr;align-items:start;">
+            <div class="inventory-panel inventory-table-panel" style="padding:24px;">
+                <h2 class="section-title" style="margin-bottom:16px;">إضافة مستخدم</h2>
+                <form action="/admin/users/create" method="post" data-role-form data-page-company="{{ page_company }}">
+                    <input type="hidden" name="redirect_to" value="/admin/users/{{ page_company }}">
+                    {% if page_company != 'general' %}
+                    <input type="hidden" name="company" value="{{ page_company }}">
+                    {% endif %}
+
+                    <label>اسم المستخدم</label>
+                    <input type="text" name="username" required>
+
+                    <label>كلمة المرور</label>
+                    <input type="password" name="password" required>
+
+                    <label>الدور</label>
+                    <select name="role" data-role-select required>
+                        {% for role_option in allowed_roles %}
+                        <option value="{{ role_option }}">{{ {'admin':'مدير النظام','partner':'شريك','employee':'موظف','owner':'مالك','tenant':'مستأجر'}[role_option] }}</option>
+                        {% endfor %}
+                    </select>
+
+                    {% if page_company == 'general' %}
+                    <div data-general-partner-fields style="display:none;margin-top:10px;">
+                        <label>شركات الشريك</label>
+                        <div style="display:grid;gap:8px;margin-top:8px;">
+                            {% for company_value, company_label in partner_company_options %}
+                            <label style="display:flex;align-items:center;gap:8px;">
+                                <input type="checkbox" name="companies" value="{{ company_value }}">
+                                <span>{{ company_label }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div data-general-inventory-fields style="display:none;margin-top:10px;">
+                        <input type="hidden" name="company" value="all" data-inventory-company>
+                        <input type="hidden" name="section" value="inventory" data-inventory-section>
+                        <label>القسم</label>
+                        <div class="inventory-note">المستودع</div>
+                        <p style="margin:8px 0 0;color:#d7dde8;">هذا المستخدم يصل إلى المستودع المشترك على مستوى النظام بدون اختيار شركة محددة.</p>
+                    </div>
+                    {% elif allowed_sections %}
+                    <div data-company-fields style="display:block;margin-top:10px;">
+                        <label>القسم</label>
+                        <select name="section" data-section-select>
+                            <option value="">اختر القسم</option>
+                            {% for section_value, section_label in allowed_sections %}
+                            <option value="{{ section_value }}">{{ section_label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% else %}
+                    <input type="hidden" name="section" value="">
+                    {% endif %}
+
+                    <div data-owner-fields style="display:none;margin-top:10px;">
+                        <label>ربط المالك بالعقار</label>
+                        <select name="property_id">
+                            <option value="">اختر العقار</option>
+                            {% for prop in properties %}
+                            <option value="{{ prop.id }}">{{ prop.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div data-tenant-fields style="display:none;margin-top:10px;">
+                        <label>ربط المستأجر</label>
+                        <select name="tenant_record_id">
+                            <option value="">اختر المستأجر</option>
+                            {% for tenant in tenant_records %}
+                            <option value="{{ tenant.id }}">{{ tenant.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <button type="submit" class="glass-btn gold-text" style="margin-top:14px;">إنشاء المستخدم</button>
+                </form>
+            </div>
+
+            <div class="inventory-panel inventory-table-panel" style="padding:24px;">
+                <h2 class="section-title" style="margin-bottom:16px;">المستخدمون الحاليون</h2>
+                <div class="inventory-table-wrap">
+                    <table class="inventory-table">
+                        <thead>
+                            <tr>
+                                <th>اسم المستخدم</th>
+                                <th>الدور</th>
+                                <th>الاسم الكامل</th>
+                                <th>القسم / النطاق</th>
+                                <th>الإجراءات</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% if users %}
+                            {% for user in users %}
+                            <tr>
+                                <td>{{ user.username }}</td>
+                                <td>{{ user.role_label }}</td>
+                                <td>{{ user.full_name or '-' }}</td>
+                                <td>
+                                    {% if page_company == 'general' and user.role == 'partner' %}
+                                    {{ user.selected_companies_labels }}
+                                    {% elif user.role == 'employee' %}
+                                    {{ user.selected_section_label }}
+                                    {% elif user.role == 'owner' %}
+                                    مالك مرتبط بعقار
+                                    {% elif user.role == 'tenant' %}
+                                    مستأجر مرتبط
+                                    {% else %}
+                                    -
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <form action="/admin/users/update/{{ user.id }}" method="post" class="admin-user-form" data-role-form data-page-company="{{ page_company }}">
+                                        <input type="hidden" name="redirect_to" value="/admin/users/{{ page_company }}">
+                                        {% if page_company != 'general' %}
+                                        <input type="hidden" name="company" value="{{ page_company }}">
+                                        {% endif %}
+
+                                        <input type="text" name="username" value="{{ user.username }}" required>
+                                        <input type="password" name="password" placeholder="اتركه فارغاً بدون تغيير">
+                                        <select name="role" data-role-select>
+                                            {% for role_option in allowed_roles %}
+                                            <option value="{{ role_option }}"{% if user.role == role_option %} selected{% endif %}>{{ {'admin':'مدير النظام','partner':'شريك','employee':'موظف','owner':'مالك','tenant':'مستأجر'}[role_option] }}</option>
+                                            {% endfor %}
+                                        </select>
+
+                                        {% if page_company == 'general' %}
+                                        <div data-general-partner-fields style="display:none;margin-top:10px;">
+                                            <label>شركات الشريك</label>
+                                            <div style="display:grid;gap:8px;margin-top:8px;">
+                                                {% for company_value, company_label in partner_company_options %}
+                                                <label style="display:flex;align-items:center;gap:8px;">
+                                                    <input type="checkbox" name="companies" value="{{ company_value }}"{% if company_value in user.selected_companies %} checked{% endif %}>
+                                                    <span>{{ company_label }}</span>
+                                                </label>
+                                                {% endfor %}
+                                            </div>
+                                        </div>
+
+                                        <div data-general-inventory-fields style="display:none;margin-top:10px;">
+                                            <input type="hidden" name="company" value="all" data-inventory-company>
+                                            <input type="hidden" name="section" value="inventory" data-inventory-section>
+                                            <label>القسم</label>
+                                            <div class="inventory-note">المستودع</div>
+                                        </div>
+                                        {% elif allowed_sections %}
+                                        <div data-company-fields style="display:block;margin-top:10px;">
+                                            <label>القسم</label>
+                                            <select name="section" data-section-select>
+                                                <option value="">اختر القسم</option>
+                                                {% for section_value, section_label in allowed_sections %}
+                                                <option value="{{ section_value }}"{% if user.selected_section == section_value %} selected{% endif %}>{{ section_label }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+                                        {% else %}
+                                        <input type="hidden" name="section" value="">
+                                        {% endif %}
+
+                                        <div data-owner-fields style="display:{% if user.role == 'owner' %}block{% else %}none{% endif %};margin-top:10px;">
+                                            <label>ربط المالك بالعقار</label>
+                                            <select name="property_id">
+                                                <option value="">اختر العقار</option>
+                                                {% for prop in properties %}
+                                                <option value="{{ prop.id }}"{% if user.selected_property_id == prop.id %} selected{% endif %}>{{ prop.name }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+
+                                        <div data-tenant-fields style="display:{% if user.role == 'tenant' %}block{% else %}none{% endif %};margin-top:10px;">
+                                            <label>ربط المستأجر</label>
+                                            <select name="tenant_record_id">
+                                                <option value="">اختر المستأجر</option>
+                                                {% for tenant in tenant_records %}
+                                                <option value="{{ tenant.id }}"{% if user.selected_tenant_id == tenant.id %} selected{% endif %}>{{ tenant.label }}</option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+
+                                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+                                            <button type="submit" class="glass-btn gold-text">تحديث</button>
+                                            {% if user.can_delete %}
+                                            <button type="submit" form="delete-user-{{ user.id }}" class="glass-btn back-btn" onclick="return confirm('هل تريد حذف هذا المستخدم؟')">حذف</button>
+                                            {% endif %}
+                                        </div>
+                                    </form>
+                                    {% if user.can_delete %}
+                                    <form id="delete-user-{{ user.id }}" action="/admin/users/delete/{{ user.id }}" method="post" style="display:none;">
+                                        <input type="hidden" name="redirect_to" value="/admin/users/{{ page_company }}">
+                                    </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                            {% else %}
+                            <tr><td colspan="5">لا يوجد مستخدمون في هذه الصفحة</td></tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+const ROLE_LABEL_RULES = {
+    owner: { owner: true, tenant: false, company: false, partnerCompanies: false, inventory: false },
+    tenant: { owner: false, tenant: true, company: false, partnerCompanies: false, inventory: false },
+    employee: { owner: false, tenant: false, company: true, partnerCompanies: false, inventory: false },
+    partner: { owner: false, tenant: false, company: false, partnerCompanies: true, inventory: false },
+    admin: { owner: false, tenant: false, company: false, partnerCompanies: false, inventory: false }
+};
+
+function toggleAdminUserFields(form) {
+    const roleSelect = form.querySelector('[data-role-select]');
+    const ownerFields = form.querySelector('[data-owner-fields]');
+    const tenantFields = form.querySelector('[data-tenant-fields]');
+    const companyFields = form.querySelector('[data-company-fields]');
+    const sectionSelect = form.querySelector('[data-section-select]');
+    const generalPartnerFields = form.querySelector('[data-general-partner-fields]');
+    const generalInventoryFields = form.querySelector('[data-general-inventory-fields]');
+    const inventoryCompanyInput = form.querySelector('[data-inventory-company]');
+    const inventorySectionInput = form.querySelector('[data-inventory-section]');
+    const pageCompany = form.dataset.pageCompany || '';
+    if (!roleSelect) {
+        return;
+    }
+
+    const role = roleSelect.value;
+    const rules = ROLE_LABEL_RULES[role] || ROLE_LABEL_RULES.admin;
+    const isGeneralPage = pageCompany === 'general';
+    const showInventoryUser = isGeneralPage && role === 'employee';
+    const showPartnerCompanies = isGeneralPage && role === 'partner';
+    const showCompanySection = !isGeneralPage && rules.company;
+
+    if (ownerFields) {
+        ownerFields.style.display = rules.owner ? 'block' : 'none';
+    }
+    if (tenantFields) {
+        tenantFields.style.display = rules.tenant ? 'block' : 'none';
+    }
+    if (companyFields) {
+        companyFields.style.display = showCompanySection ? 'block' : 'none';
+        if (!showCompanySection && sectionSelect) {
+            sectionSelect.value = '';
+        }
+    }
+    if (generalPartnerFields) {
+        generalPartnerFields.style.display = showPartnerCompanies ? 'block' : 'none';
+        if (!showPartnerCompanies) {
+            generalPartnerFields.querySelectorAll('input[type="checkbox"]').forEach((item) => {
+                item.checked = false;
+            });
+        }
+    }
+    if (generalInventoryFields) {
+        generalInventoryFields.style.display = showInventoryUser ? 'block' : 'none';
+        if (inventoryCompanyInput) {
+            inventoryCompanyInput.disabled = !showInventoryUser;
+        }
+        if (inventorySectionInput) {
+            inventorySectionInput.disabled = !showInventoryUser;
+        }
+    }
+}
+
+document.querySelectorAll('[data-role-form]').forEach((form) => {
+    const roleSelect = form.querySelector('[data-role-select]');
+    if (roleSelect) {
+        roleSelect.addEventListener('change', () => toggleAdminUserFields(form));
+    }
+    toggleAdminUserFields(form);
+});
+</script>
