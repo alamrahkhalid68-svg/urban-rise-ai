@@ -1670,6 +1670,12 @@ def is_works_expenses_suppliers_employee(user, company: str) -> bool:
     return is_works_expenses_only_user(user, company)
 
 
+def is_works_daily_log_only_employee(user, company: str) -> bool:
+    if not user or not is_employee(user) or not is_works_company(company):
+        return False
+    return get_employee_allowed_sections(user["id"], company) == {"daily_log"}
+
+
 def is_works_partner_user(user, company: str) -> bool:
     if not user or not is_partner(user) or not is_works_company(company):
         return False
@@ -1804,6 +1810,17 @@ def ensure_works_expenses_suppliers_scope(user, project_id: int, company: str):
     )
 
 
+def ensure_works_daily_log_scope(user, project_id: int, company: str):
+    if not is_works_daily_log_only_employee(user, company):
+        return user
+    if not project_id:
+        return RedirectResponse(url="/projects?company=works", status_code=303)
+    return RedirectResponse(
+        url=f"/project-daily?project_id={project_id}&company={company}",
+        status_code=303,
+    )
+
+
 def ensure_not_works_partner_write(user, company: str):
     if is_works_partner_user(user, company):
         return access_denied_response(
@@ -1842,9 +1859,6 @@ def get_role_landing_url(user) -> str:
             if section == "maintenance" and company in {"realestate", "all"}:
                 return "/maintenance-management"
             if section == "daily_log" and company in {"works", "all"}:
-                project_id = get_first_company_project_id("works")
-                if project_id:
-                    return f"/project-daily?project_id={project_id}&company=works"
                 return "/projects?company=works"
             if section == "expenses" and company in {"works", "all"}:
                 return "/projects?company=works"
@@ -2420,6 +2434,8 @@ def company_page(request: Request, company: str):
     allowed_sections = get_employee_allowed_sections(access_result["id"], company) if is_employee(access_result) else set()
     if is_works_expenses_only_user(access_result, company):
         return RedirectResponse(url=get_works_expenses_landing_url(), status_code=303)
+    if is_works_daily_log_only_employee(access_result, company):
+        return RedirectResponse(url="/projects?company=works", status_code=303)
     is_works_partner_read_only = is_works_partner_user(access_result, company)
 
     if company == "realestate":
@@ -2527,6 +2543,7 @@ def projects_page(request: Request, company: str = ""):
         return access_result
     is_read_only_works_partner = is_works_partner_user(access_result, company)
     is_works_expenses_scope_user = is_works_expenses_suppliers_employee(access_result, company)
+    is_works_daily_scope_user = is_works_daily_log_only_employee(access_result, company)
     conn = get_db()
     projects = conn.execute(
         "SELECT * FROM projects WHERE company = ?",
@@ -2546,13 +2563,13 @@ def projects_page(request: Request, company: str = ""):
         <tr>
             <td>{p['id']}</td>
             <td>
-                <a href="/project/{p['id']}?company={company}">
+                <a href="{'/project-daily?project_id=' + str(p['id']) + '&company=' + company if is_works_daily_scope_user else '/project/' + str(p['id']) + '?company=' + company}">
                     {p['name']}
                 </a>
             </td>
             <td>{p['client']}</td>
             <td>{p['status']}</td>
-            <td>{"-" if is_read_only_works_partner or is_works_expenses_scope_user else f'''<a href="/edit-project/{p['id']}?company={company}" class="action-btn">تعديل</a><a href="/delete-project/{p['id']}?company={company}" class="action-btn" onclick="return confirm('هل تريد حذف هذا المشروع؟')">حذف</a>'''}</td>
+            <td>{"-" if is_read_only_works_partner or is_works_expenses_scope_user or is_works_daily_scope_user else f'''<a href="/edit-project/{p['id']}?company={company}" class="action-btn">تعديل</a><a href="/delete-project/{p['id']}?company={company}" class="action-btn" onclick="return confirm('هل تريد حذف هذا المشروع؟')">حذف</a>'''}</td>
         </tr>
         """
 
@@ -2567,7 +2584,7 @@ def projects_page(request: Request, company: str = ""):
 
 {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
 
-{"" if is_read_only_works_partner or is_works_expenses_scope_user else f"""
+{"" if is_read_only_works_partner or is_works_expenses_scope_user or is_works_daily_scope_user else f"""
 <a href="/new-project?company={company}" class="company-card {company}">
 <h2>➕ مشروع جديد</h2>
 </a>
@@ -4803,6 +4820,9 @@ def project_equipment(request: Request, project_id: int, company: str = ""):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    daily_scope_redirect = ensure_works_daily_log_scope(access_result, project_id, company)
+    if not isinstance(daily_scope_redirect, sqlite3.Row):
+        return daily_scope_redirect
     scope_redirect = ensure_works_expenses_suppliers_scope(access_result, project_id, company)
     if not isinstance(scope_redirect, sqlite3.Row):
         return scope_redirect
