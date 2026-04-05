@@ -3,7 +3,7 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from auth import get_current_user, get_user_by_id, is_admin, is_employee, is_owner, is_partner, is_tenant, password_matches, require_login, require_role
+from auth import get_current_user, get_user_by_id, is_admin, is_employee, is_owner, is_partner, is_project_manager, is_tenant, password_matches, require_login, require_role
 from admin_users import router as admin_users_router
 from access_control import ensure_company_access, ensure_employee_any_section_access, ensure_employee_section_access, ensure_property_access, ensure_request_belongs_to_tenant, ensure_tenant_access, get_accessible_property_ids, get_employee_allowed_sections, get_primary_tenant_id, get_user_company_access_rows, get_user_tenant_access_ids, normalize_access_value, user_has_company_access, user_has_property_access, user_has_tenant_access
 from fastapi.staticfiles import StaticFiles
@@ -31,7 +31,7 @@ app.add_middleware(
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-AUTH_ROLES = {"admin", "partner", "employee", "owner", "tenant"}
+AUTH_ROLES = {"admin", "partner", "employee", "project_manager", "owner", "tenant"}
 PROTECTED_ROUTE_PREFIXES = (
     "/",
     "/company",
@@ -531,7 +531,8 @@ CREATE TABLE IF NOT EXISTS investment_projects (
     name TEXT,
     location TEXT,
     units INTEGER,
-    status TEXT
+    status TEXT,
+    assigned_user_id INTEGER
 )
 """)
 
@@ -722,6 +723,8 @@ for statement in [
     "ALTER TABLE projects ADD COLUMN work_type TEXT",
     "ALTER TABLE projects ADD COLUMN finish_level TEXT",
     "ALTER TABLE projects ADD COLUMN area REAL",
+    "ALTER TABLE projects ADD COLUMN assigned_user_id INTEGER",
+    "ALTER TABLE investment_projects ADD COLUMN assigned_user_id INTEGER",
     "ALTER TABLE maintenance_requests ADD COLUMN request_source TEXT",
     "ALTER TABLE maintenance_requests ADD COLUMN maintenance_type TEXT",
     "ALTER TABLE maintenance_requests ADD COLUMN priority TEXT",
@@ -859,6 +862,14 @@ CREATE TABLE IF NOT EXISTS user_company_access (
     user_id INTEGER NOT NULL,
     company TEXT NOT NULL,
     section TEXT
+)
+""")
+
+conn.execute("""
+CREATE TABLE IF NOT EXISTS user_investment_project_access (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    project_id INTEGER NOT NULL
 )
 """)
 
@@ -1830,6 +1841,94 @@ def ensure_not_works_partner_write(user, company: str):
     return user
 
 
+
+def is_active_projects_project_manager(user) -> bool:
+    return bool(user) and is_project_manager(user) and user_has_company_access(user["id"], "realestate", "active_projects")
+
+
+def get_assigned_investment_project_ids(user_id: int) -> list[int]:
+    if not user_id:
+        return []
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT project_id
+            FROM user_investment_project_access
+            WHERE user_id = ?
+            ORDER BY project_id ASC
+            """,
+            (user_id,),
+        ).fetchall()
+        return [row["project_id"] for row in rows]
+    finally:
+        conn.close()
+
+
+def get_investment_project_manager_options():
+    conn = get_db()
+    try:
+        return conn.execute(
+            """
+            SELECT DISTINCT users.id, COALESCE(NULLIF(TRIM(users.full_name), ''), users.username) AS display_name
+            FROM users
+            LEFT JOIN user_company_access access ON access.user_id = users.id
+            WHERE users.role = 'project_manager'
+              AND users.is_active = 1
+              AND LOWER(TRIM(COALESCE(access.company, ''))) = 'realestate'
+              AND LOWER(TRIM(COALESCE(access.section, ''))) = 'active_projects'
+            ORDER BY display_name COLLATE NOCASE ASC, users.id ASC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def build_investment_project_manager_select(selected_user_id: int | None = None) -> str:
+    options = ['<option value="">بدون تعيين</option>']
+    for user in get_investment_project_manager_options():
+        display_name = escape(user["display_name"] or f"مستخدم #{user['id']}")
+        selected_attr = " selected" if selected_user_id == user["id"] else ""
+        options.append(f'<option value="{user["id"]}"{selected_attr}>{display_name}</option>')
+    return "".join(options)
+
+
+def get_investment_projects_for_user(user):
+    conn = get_db()
+    try:
+        if is_active_projects_project_manager(user):
+            project_ids = get_assigned_investment_project_ids(user["id"])
+            if not project_ids:
+                return []
+            placeholders = ", ".join("?" for _ in project_ids)
+            return conn.execute(
+                f"SELECT * FROM investment_projects WHERE id IN ({placeholders}) ORDER BY id DESC",
+                project_ids,
+            ).fetchall()
+        return conn.execute("SELECT * FROM investment_projects ORDER BY id DESC").fetchall()
+    finally:
+        conn.close()
+
+
+def ensure_investment_project_access(request: Request, project_id: int, back_url: str = "/investment-projects"):
+    user = getattr(request.state, "current_user", None) or get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=303)
+    if not project_id:
+        return RedirectResponse(url=back_url, status_code=303)
+    if is_active_projects_project_manager(user) and project_id not in set(get_assigned_investment_project_ids(user["id"])):
+        return access_denied_response("ليس لديك صلاحية الوصول إلى هذا المشروع", back_url=back_url)
+    return user
+
+
+def ensure_investment_project_management_access(request: Request, back_url: str = "/investment-projects"):
+    user = getattr(request.state, "current_user", None) or get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=303)
+    if is_active_projects_project_manager(user):
+        return access_denied_response("مدير المشروع لا يمكنه إنشاء أو تعديل هيكل المشاريع", back_url=back_url)
+    return user
+
 def get_role_landing_url(user) -> str:
     if not user:
         return "/login"
@@ -1866,6 +1965,12 @@ def get_role_landing_url(user) -> str:
             if fallback_company == "realestate":
                 return get_realestate_landing_url(user)
             return f"/company/{fallback_company}"
+
+    if is_active_projects_project_manager(user):
+        project_ids = get_assigned_investment_project_ids(user["id"])
+        if len(project_ids) == 1:
+            return f"/investment-project/{project_ids[0]}"
+        return "/investment-projects"
 
     if is_partner(user) and user_has_company_access(user["id"], "works"):
         return "/company/works"
@@ -2423,6 +2528,8 @@ def inventory_withdraw(
 @app.get("/company/{company}", response_class=HTMLResponse)
 def company_page(request: Request, company: str):
     user = getattr(request.state, "current_user", None) or get_current_user(request)
+    if is_active_projects_project_manager(user):
+        return RedirectResponse(url=get_role_landing_url(user), status_code=303)
     if is_employee(user) and company == "works":
         access_result = ensure_employee_any_section_access(request, company, {"daily_log", "expenses"})
     else:
@@ -10417,7 +10524,10 @@ def client_maintenance_detail(web_request: Request, request_id: int, tenant_id: 
 """
 
 @app.get("/realestate-investment", response_class=HTMLResponse)
-def realestate_investment():
+def realestate_investment(request: Request):
+    user = getattr(request.state, "current_user", None) or get_current_user(request)
+    if is_active_projects_project_manager(user):
+        return RedirectResponse(url="/investment-projects", status_code=303)
 
     return f"""
 <meta charset="UTF-8">
@@ -10448,26 +10558,34 @@ def realestate_investment():
 """
 
 @app.get("/investment-projects", response_class=HTMLResponse)
-def investment_projects():
+def investment_projects(request: Request):
+    try:
+        user = getattr(request.state, "current_user", None) or get_current_user(request)
+        projects = get_investment_projects_for_user(user)
+        if is_active_projects_project_manager(user) and len(projects) == 1:
+            return RedirectResponse(url=f"/investment-project/{projects[0]['id']}", status_code=303)
 
-    conn = get_db()
-
-    projects = conn.execute(
-        "SELECT * FROM investment_projects"
-    ).fetchall()
-
-    conn.close()
-
-    buttons = ""
-
-    for p in projects:
-        buttons += f"""
+        buttons = ""
+        for p in projects:
+            buttons += f"""
 <a href="/investment-project/{p['id']}" class="company-card realestate">
 <h2>{p['name']}</h2>
+<p>{escape(p['location'] or 'بدون موقع')}</p>
 </a>
 """
 
-    return f"""
+        create_button = ""
+        back_url = "/realestate-investment"
+        if not is_active_projects_project_manager(user):
+            create_button = """
+<a href="/new-investment-project" class="company-card realestate">
+<h2>➕ إضافة مشروع</h2>
+</a>
+"""
+        else:
+            back_url = "/"
+
+        return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
 <body class="system-dark">
@@ -10476,29 +10594,33 @@ def investment_projects():
 
 <h1>المشاريع القائمة</h1>
 
-<a href="/new-investment-project" class="company-card realestate">
-<h2>➕ إضافة مشروع</h2>
-</a>
+{create_button}
 
 <br><br>
 
 <div class="companies">
 
-{buttons if buttons else "<p>لا توجد مشاريع</p>"}
+{buttons if buttons else "<p>لا توجد مشاريع مخصصة لك حالياً</p>"}
 
 </div>
 
 <br>
 
-<a href="/realestate-investment" class="glass-btn back-btn">⬅ رجوع</a>
+<a href="{back_url}" class="glass-btn back-btn">⬅ رجوع</a>
 
 </div>
 """
+    except Exception as exc:
+        return safe_error_response(request, exc, status_code=500)
 
 @app.get("/new-investment-project", response_class=HTMLResponse)
-def new_investment_project():
+def new_investment_project(request: Request):
+    try:
+        access_result = ensure_investment_project_management_access(request)
+        if not isinstance(access_result, sqlite3.Row):
+            return access_result
 
-    return f"""
+        return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
 <body class="system-dark">
@@ -10538,131 +10660,192 @@ def new_investment_project():
 
 </div>
 """
+    except Exception as exc:
+        return safe_error_response(request, exc, status_code=500)
 
 @app.post("/save-investment-project")
 def save_investment_project(
+    request: Request,
     name: str = Form(...),
     location: str = Form(""),
-    units: int = Form(0)
+    units: int = Form(0),
 ):
+    try:
+        access_result = ensure_investment_project_management_access(request)
+        if not isinstance(access_result, sqlite3.Row):
+            return access_result
 
-    conn = get_db()
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO investment_projects (name, location, units, status) VALUES (?, ?, ?, ?)",
+            (name, location, units, "قائم")
+        )
+        conn.commit()
+        conn.close()
 
-    conn.execute(
-        "INSERT INTO investment_projects (name, location, units, status) VALUES (?, ?, ?, ?)",
-        (name, location, units, "قائم")
-    )
+        return RedirectResponse(
+            url="/investment-projects",
+            status_code=303
+        )
+    except Exception as exc:
+        return safe_error_response(request, exc, status_code=500)
 
-    conn.commit()
-    conn.close()
 
-    return RedirectResponse(
-        url="/investment-projects",
-        status_code=303
-    )
+@app.get("/edit-investment-project/{project_id}", response_class=HTMLResponse)
+def edit_investment_project(request: Request, project_id: int):
+    try:
+        access_result = ensure_investment_project_management_access(request)
+        if not isinstance(access_result, sqlite3.Row):
+            return access_result
+
+        conn = get_db()
+        project = conn.execute("SELECT * FROM investment_projects WHERE id = ?", (project_id,)).fetchone()
+        conn.close()
+        if not project:
+            return RedirectResponse(url="/investment-projects", status_code=303)
+
+        return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+
+<div class="dashboard">
+
+<h1>تعديل المشروع الاستثماري</h1>
+
+<form action="/update-investment-project/{project_id}" method="post">
+
+اسم المشروع:
+<br>
+<input type="text" name="name" value="{escape(project['name'] or '')}" required>
+
+<br><br>
+
+الموقع:
+<br>
+<input type="text" name="location" value="{escape(project['location'] or '')}">
+
+<br><br>
+
+عدد الوحدات:
+<br>
+<input type="number" name="units" value="{project['units'] or 0}">
+
+<br><br>
+
+الحالة:
+<br>
+<input type="text" name="status" value="{escape(project['status'] or 'قائم')}">
+
+<br><br>
+
+<button type="submit" class="glass-btn gold-text">حفظ التعديل</button>
+
+</form>
+
+<br>
+
+<a href="/investment-project/{project_id}" class="glass-btn back-btn">⬅ رجوع</a>
+
+</div>
+"""
+    except Exception as exc:
+        return safe_error_response(request, exc, status_code=500)
+
+
+@app.post("/update-investment-project/{project_id}")
+def update_investment_project(
+    request: Request,
+    project_id: int,
+    name: str = Form(...),
+    location: str = Form(""),
+    units: int = Form(0),
+    status: str = Form("قائم"),
+):
+    try:
+        access_result = ensure_investment_project_management_access(request)
+        if not isinstance(access_result, sqlite3.Row):
+            return access_result
+
+        conn = get_db()
+        conn.execute(
+            "UPDATE investment_projects SET name = ?, location = ?, units = ?, status = ? WHERE id = ?",
+            (name, location, units, status, project_id),
+        )
+        conn.commit()
+        conn.close()
+        return RedirectResponse(url=f"/investment-project/{project_id}", status_code=303)
+    except Exception as exc:
+        return safe_error_response(request, exc, status_code=500)
 
 @app.get("/investment-project/{project_id}", response_class=HTMLResponse)
-def investment_project_dashboard(project_id: int):
+def investment_project_dashboard(request: Request, project_id: int):
+    try:
+        access_result = ensure_investment_project_access(request, project_id)
+        if not isinstance(access_result, sqlite3.Row):
+            return access_result
+        user = access_result
 
-    from datetime import datetime
+        conn = get_db()
+        project = conn.execute(
+            "SELECT * FROM investment_projects WHERE id = ?",
+            (project_id,),
+        ).fetchone()
+        if not project:
+            conn.close()
+            return HTMLResponse("<h2>المشروع غير موجود</h2>", status_code=404)
 
-    conn = get_db()
-
-    project = conn.execute(
-        "SELECT * FROM investment_projects WHERE id = ?",
-        (project_id,)
-    ).fetchone()
-
-    if not project:
+        units = conn.execute(
+            "SELECT * FROM investment_units WHERE project_id = ?",
+            (project_id,)
+        ).fetchall()
+        contracts = conn.execute(
+            """
+            SELECT investment_contracts.*, investment_units.name as unit_name
+            FROM investment_contracts
+            JOIN investment_units ON investment_contracts.unit_id = investment_units.id
+            WHERE investment_units.project_id = ?
+            """,
+            (project_id,),
+        ).fetchall()
+        expenses = conn.execute(
+            "SELECT * FROM investment_expenses WHERE project_id = ?",
+            (project_id,)
+        ).fetchall()
         conn.close()
-        return "<h2>المشروع غير موجود</h2>"
 
-    units = conn.execute(
-        "SELECT * FROM investment_units WHERE project_id = ?",
-        (project_id,)
-    ).fetchall()
+        total_units = len(units)
+        rented_units = len(contracts)
+        empty_units = total_units - rented_units
+        occupancy_rate = round((rented_units / total_units) * 100) if total_units > 0 else 0
 
-    contracts = conn.execute("""
-        SELECT investment_contracts.*, investment_units.name as unit_name
-        FROM investment_contracts
-        JOIN investment_units
-        ON investment_contracts.unit_id = investment_units.id
-        WHERE investment_units.project_id = ?
-""", (project_id,)).fetchall()
+        yearly_income = 0
+        for c in contracts:
+            rent = c["rent"] or 0
+            payment = c["payment_type"]
+            if payment == "شهري":
+                yearly_income += rent * 12
+            elif payment == "ربع سنوي":
+                yearly_income += rent * 4
+            elif payment == "نصف سنوي":
+                yearly_income += rent * 2
+            elif payment == "سنوي":
+                yearly_income += rent
 
-    expenses = conn.execute(
-        "SELECT * FROM investment_expenses WHERE project_id = ?",
-        (project_id,)
-    ).fetchall()
+        total_expenses = sum((e["amount"] or 0) for e in expenses)
+        profit = int(yearly_income - total_expenses)
+        yearly_income = int(yearly_income)
+        total_expenses = int(total_expenses)
 
-    conn.close()
-
-    # -----------------------
-    # حساب الوحدات
-    # -----------------------
-
-    total_units = len(units)
-    rented_units = len(contracts)
-    empty_units = total_units - rented_units
-
-    occupancy_rate = 0
-    if total_units > 0:
-        occupancy_rate = round((rented_units / total_units) * 100)
-
-    # -----------------------
-    # حساب الإيرادات
-    # -----------------------
-
-    yearly_income = 0
-
-    for c in contracts:
-
-        rent = c["rent"] or 0
-        payment = c["payment_type"]
-
-        if payment == "شهري":
-            yearly_income += rent * 12
-
-        elif payment == "ربع سنوي":
-            yearly_income += rent * 4
-
-        elif payment == "نصف سنوي":
-            yearly_income += rent * 2
-
-        elif payment == "سنوي":
-            yearly_income += rent
-
-    # -----------------------
-    # حساب المصروفات
-    # -----------------------
-
-    total_expenses = 0
-    for e in expenses:
-        total_expenses += e["amount"] or 0
-
-    profit = yearly_income - total_expenses
-
-    yearly_income = int(yearly_income)
-    total_expenses = int(total_expenses)
-    profit = int(profit)
-
-    # -----------------------
-    # العقود التي ستنتهي قريباً
-    # -----------------------
-
-    today = datetime.today()
-    ending_contracts = ""
-
-    for c in contracts:
-
-        if c["end_date"]:
-
-            end = datetime.strptime(c["end_date"], "%Y-%m-%d")
-            days_left = (end - today).days
-
-            if 0 <= days_left <= 30:
-
-                ending_contracts += f"""
+        today = datetime.today()
+        ending_contracts = ""
+        for c in contracts:
+            if c["end_date"]:
+                end = datetime.strptime(c["end_date"], "%Y-%m-%d")
+                days_left = (end - today).days
+                if 0 <= days_left <= 30:
+                    ending_contracts += f"""
 <tr>
 <td>{c['unit_name']}</td>
 <td>{days_left} يوم</td>
@@ -10670,11 +10853,11 @@ def investment_project_dashboard(project_id: int):
 </tr>
 """
 
-    # -----------------------
-    # الصفحة
-    # -----------------------
+        edit_button = ""
+        if not is_active_projects_project_manager(user):
+            edit_button = f'<a href="/edit-investment-project/{project_id}" class="glass-btn gold-text">تعديل المشروع</a>'
 
-    return f"""
+        return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
 <body class="system-dark">
@@ -10683,108 +10866,80 @@ def investment_project_dashboard(project_id: int):
 <div class="dashboard">
 
 <h1>{project['name']}</h1>
-
-<p>الموقع: {project['location']}</p>
+<p>الموقع: {project['location'] or '-'}</p>
 
 <br><br>
 
 <h2>ملخص المشروع</h2>
-
 <table border="1" style="background:white;margin:auto;width:60%;text-align:center">
-
 <tr>
 <th>الإيرادات السنوية</th>
 <th>المصروفات</th>
 <th>صافي الربح</th>
 </tr>
-
 <tr>
 <td>{yearly_income} ريال</td>
 <td>{total_expenses} ريال</td>
 <td>{profit} ريال</td>
 </tr>
-
 </table>
 
 <br><br>
 
 <h2>حالة الوحدات</h2>
-
 <table border="1" style="background:white;margin:auto;width:60%;text-align:center">
-
 <tr>
 <th>عدد الوحدات</th>
 <th>الوحدات المؤجرة</th>
 <th>الوحدات الفارغة</th>
 <th>نسبة الإشغال</th>
 </tr>
-
 <tr>
 <td>{total_units}</td>
 <td>{rented_units}</td>
 <td>{empty_units}</td>
 <td>{occupancy_rate}%</td>
 </tr>
-
 </table>
 
 <br><br>
 
 <h2>العقود التي ستنتهي قريباً</h2>
-
 <table border="1" style="background:white;margin:auto;width:60%;text-align:center">
-
 <tr>
 <th>الوحدة</th>
 <th>الأيام المتبقية</th>
 <th>تاريخ النهاية</th>
 </tr>
-
 {ending_contracts if ending_contracts else "<tr><td colspan='3'>لا يوجد عقود قريبة الانتهاء</td></tr>"}
-
 </table>
 
 <br><br>
 
 <div class="companies">
-
-<a href="/investment-units?project_id={project_id}" class="company-card realestate">
-<h2>الوحدات</h2>
-</a>
-
-<a href="/investment-tenants?project_id={project_id}" class="company-card realestate">
-<h2>المستأجرين</h2>
-</a>
-
-<a href="/investment-contracts?project_id={project_id}" class="company-card realestate">
-<h2>العقود</h2>
-</a>
-
-<a href="/investment-income?project_id={project_id}" class="company-card realestate">
-<h2>الإيرادات</h2>
-</a>
-
-<a href="/investment-expenses?project_id={project_id}" class="company-card realestate">
-<h2>المصروفات</h2>
-</a>
-
-<a href="/investment-employees?project_id={project_id}" class="company-card realestate">
-<h2>الموظفين</h2>
-</a>
-
+<a href="/investment-units?project_id={project_id}" class="company-card realestate"><h2>الوحدات</h2></a>
+<a href="/investment-tenants?project_id={project_id}" class="company-card realestate"><h2>المستأجرين</h2></a>
+<a href="/investment-contracts?project_id={project_id}" class="company-card realestate"><h2>العقود</h2></a>
+<a href="/investment-income?project_id={project_id}" class="company-card realestate"><h2>الإيرادات</h2></a>
+<a href="/investment-expenses?project_id={project_id}" class="company-card realestate"><h2>المصروفات</h2></a>
+<a href="/investment-employees?project_id={project_id}" class="company-card realestate"><h2>الموظفين</h2></a>
 </div>
 
 <br>
-
+{edit_button}
+<br><br>
 <a href="/investment-projects" class="glass-btn back-btn">⬅ رجوع</a>
 
 </div>
 """
-
-
+    except Exception as exc:
+        return safe_error_response(request, exc, status_code=500)
 
 @app.get("/investment-units", response_class=HTMLResponse)
-def investment_units(project_id: int):
+def investment_units(request: Request, project_id: int):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
@@ -10894,12 +11049,16 @@ onclick="return confirm('هل تريد حذف الوحدة؟')" class="action-bt
 
 @app.post("/save-unit")
 def save_unit(
+    request: Request,
     project_id: int = Form(...),
     name: str = Form(...),
     type: str = Form(...),
     rent: float = Form(0),
     status: str = Form(...)
 ):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
@@ -10917,7 +11076,10 @@ def save_unit(
     )
 
 @app.get("/investment-tenants", response_class=HTMLResponse)
-def investment_tenants(project_id: int):
+def investment_tenants(request: Request, project_id: int):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
@@ -11034,14 +11196,23 @@ onclick="return confirm('حذف المستأجر؟')" class="action-btn">
 
 @app.post("/save-tenant")
 def save_tenant(
+    request: Request,
     project_id: int = Form(...),
     unit_id: int = Form(...),
     name: str = Form(...),
     phone: str = Form(""),
     id_number: str = Form("")
 ):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
+
+    unit = conn.execute("SELECT id FROM investment_units WHERE id = ? AND project_id = ?", (unit_id, project_id)).fetchone()
+    if not unit:
+        conn.close()
+        return access_denied_response("الوحدة المحددة لا تتبع هذا المشروع", back_url=f"/investment-tenants?project_id={project_id}")
 
     conn.execute(
         "INSERT INTO investment_tenants (unit_id, name, phone, id_number) VALUES (?, ?, ?, ?)",
@@ -11057,7 +11228,10 @@ def save_tenant(
     )
 
 @app.get("/investment-contracts", response_class=HTMLResponse)
-def investment_contracts(project_id: int):
+def investment_contracts(request: Request, project_id: int):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
@@ -11074,7 +11248,14 @@ def investment_contracts(project_id: int):
     """, (project_id,)).fetchall()
 
     tenants = conn.execute(
-        "SELECT * FROM investment_tenants"
+        """
+        SELECT investment_tenants.*
+        FROM investment_tenants
+        JOIN investment_units ON investment_units.id = investment_tenants.unit_id
+        WHERE investment_units.project_id = ?
+        ORDER BY investment_tenants.id DESC
+        """,
+        (project_id,)
     ).fetchall()
 
     units = conn.execute(
@@ -11201,6 +11382,7 @@ onclick="return confirm('حذف العقد؟')" class="action-btn">
 
 @app.post("/save-investment-contract")
 def save_investment_contract(
+    request: Request,
     project_id: int = Form(...),
     tenant_id: int = Form(...),
     unit_id: int = Form(...),
@@ -11209,8 +11391,25 @@ def save_investment_contract(
     start_date: str = Form(...),
     end_date: str = Form(...)
 ):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
+
+    unit = conn.execute("SELECT id FROM investment_units WHERE id = ? AND project_id = ?", (unit_id, project_id)).fetchone()
+    tenant = conn.execute(
+        """
+        SELECT investment_tenants.id
+        FROM investment_tenants
+        JOIN investment_units ON investment_units.id = investment_tenants.unit_id
+        WHERE investment_tenants.id = ? AND investment_units.project_id = ?
+        """,
+        (tenant_id, project_id),
+    ).fetchone()
+    if not unit or not tenant:
+        conn.close()
+        return access_denied_response("بيانات العقد لا تتبع هذا المشروع", back_url=f"/investment-contracts?project_id={project_id}")
 
     conn.execute(
         """INSERT INTO investment_contracts 
@@ -11228,7 +11427,10 @@ def save_investment_contract(
     )
 
 @app.get("/investment-income", response_class=HTMLResponse)
-def investment_income(project_id: int):
+def investment_income(request: Request, project_id: int):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
@@ -11317,7 +11519,10 @@ def investment_income(project_id: int):
 """
 
 @app.get("/investment-expenses", response_class=HTMLResponse)
-def investment_expenses(project_id: int):
+def investment_expenses(request: Request, project_id: int):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
@@ -11409,10 +11614,14 @@ onclick="return confirm('حذف المصروف؟')" class="action-btn">
 
 @app.post("/save-investment-expense")
 def save_investment_expense(
+    request: Request,
     project_id: int = Form(...),
     title: str = Form(...),
     amount: float = Form(...)
 ):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
@@ -11430,7 +11639,10 @@ def save_investment_expense(
     )
 
 @app.get("/investment-employees", response_class=HTMLResponse)
-def investment_employees(project_id: int):
+def investment_employees(request: Request, project_id: int):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
@@ -11518,11 +11730,15 @@ onclick="return confirm('حذف الموظف؟')" class="action-btn">
 
 @app.post("/save-investment-employee")
 def save_investment_employee(
+    request: Request,
     project_id: int = Form(...),
     name: str = Form(...),
     role: str = Form(""),
     phone: str = Form("")
 ):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
@@ -11540,13 +11756,16 @@ def save_investment_employee(
     )
 
 @app.get("/delete-unit/{unit_id}")
-def delete_unit(unit_id: int, project_id: int):
+def delete_unit(request: Request, unit_id: int, project_id: int):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
     conn.execute(
-        "DELETE FROM investment_units WHERE id = ?",
-        (unit_id,)
+        "DELETE FROM investment_units WHERE id = ? AND project_id = ?",
+        (unit_id, project_id)
     )
 
     conn.commit()
@@ -11559,13 +11778,16 @@ def delete_unit(unit_id: int, project_id: int):
 
 
 @app.get("/edit-unit/{unit_id}", response_class=HTMLResponse)
-def edit_unit(unit_id: int, project_id: int):
+def edit_unit(request: Request, unit_id: int, project_id: int):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
     unit = conn.execute(
-        "SELECT * FROM investment_units WHERE id = ?",
-        (unit_id,)
+        "SELECT * FROM investment_units WHERE id = ? AND project_id = ?",
+        (unit_id, project_id)
     ).fetchone()
 
     conn.close()
@@ -11613,6 +11835,7 @@ def edit_unit(unit_id: int, project_id: int):
 
 @app.post("/update-unit")
 def update_unit(
+    request: Request,
     unit_id: int = Form(...),
     project_id: int = Form(...),
     name: str = Form(...),
@@ -11620,14 +11843,17 @@ def update_unit(
     rent: float = Form(...),
     status: str = Form(...)
 ):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
     conn.execute("""
     UPDATE investment_units
     SET name=?, type=?, rent=?, status=?
-    WHERE id=?
-    """, (name, type, rent, status, unit_id))
+    WHERE id=? AND project_id=?
+    """, (name, type, rent, status, unit_id, project_id))
 
     conn.commit()
     conn.close()
@@ -11638,13 +11864,19 @@ def update_unit(
     )
 
 @app.get("/delete-tenant/{tenant_id}")
-def delete_tenant(tenant_id: int, project_id: int):
+def delete_tenant(request: Request, tenant_id: int, project_id: int):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
     conn.execute(
-        "DELETE FROM investment_tenants WHERE id=?",
-        (tenant_id,)
+        """
+        DELETE FROM investment_tenants
+        WHERE id = ? AND unit_id IN (SELECT id FROM investment_units WHERE project_id = ?)
+        """,
+        (tenant_id, project_id)
     )
 
     conn.commit()
@@ -11657,13 +11889,19 @@ def delete_tenant(tenant_id: int, project_id: int):
 
 
 @app.get("/delete-contract/{contract_id}")
-def delete_contract(contract_id: int, project_id: int):
+def delete_contract(request: Request, contract_id: int, project_id: int):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
     conn.execute(
-        "DELETE FROM investment_contracts WHERE id=?",
-        (contract_id,)
+        """
+        DELETE FROM investment_contracts
+        WHERE id = ? AND unit_id IN (SELECT id FROM investment_units WHERE project_id = ?)
+        """,
+        (contract_id, project_id)
     )
 
     conn.commit()
@@ -11676,13 +11914,16 @@ def delete_contract(contract_id: int, project_id: int):
 
 
 @app.get("/delete-expense/{expense_id}")
-def delete_expense(expense_id: int, project_id: int):
+def delete_expense(request: Request, expense_id: int, project_id: int):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
     conn.execute(
-        "DELETE FROM investment_expenses WHERE id=?",
-        (expense_id,)
+        "DELETE FROM investment_expenses WHERE id = ? AND project_id = ?",
+        (expense_id, project_id)
     )
 
     conn.commit()
@@ -11694,13 +11935,16 @@ def delete_expense(expense_id: int, project_id: int):
     )
 
 @app.get("/delete-investment-employee/{employee_id}")
-def delete_investment_employee(employee_id: int, project_id: int):
+def delete_investment_employee(request: Request, employee_id: int, project_id: int):
+    access_result = ensure_investment_project_access(request, project_id)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
 
     conn = get_db()
 
     conn.execute(
-        "DELETE FROM investment_employees WHERE id=?",
-        (employee_id,)
+        "DELETE FROM investment_employees WHERE id = ? AND project_id = ?",
+        (employee_id, project_id)
     )
 
     conn.commit()

@@ -66,6 +66,29 @@ def sync_tenant_user_link(conn, user_id: int, role: str, tenant_record_id: int |
         )
 
 
+def sync_user_investment_project_access(conn, user_id: int, role: str, project_ids: list[int] | None):
+    conn.execute("DELETE FROM user_investment_project_access WHERE user_id = ?", (user_id,))
+    if normalize_access_value(role) != "project_manager":
+        return
+
+    clean_project_ids = []
+    for project_id in project_ids or []:
+        if project_id and project_id not in clean_project_ids:
+            clean_project_ids.append(project_id)
+
+    for project_id in clean_project_ids:
+        existing_project = conn.execute(
+            "SELECT 1 FROM investment_projects WHERE id = ? LIMIT 1",
+            (project_id,),
+        ).fetchone()
+        if not existing_project:
+            continue
+        conn.execute(
+            "INSERT INTO user_investment_project_access (user_id, project_id) VALUES (?, ?)",
+            (user_id, project_id),
+        )
+
+
 def sync_user_company_access(
     conn,
     user_id: int,
@@ -113,6 +136,13 @@ def sync_user_company_access(
                 "INSERT INTO user_company_access (user_id, company, section) VALUES (?, ?, ?)",
                 (user_id, clean_company, clean_section),
             )
+        return
+
+    if clean_role == "project_manager" and clean_company and clean_section:
+        conn.execute(
+            "INSERT INTO user_company_access (user_id, company, section) VALUES (?, ?, ?)",
+            (user_id, clean_company, clean_section),
+        )
 
 
 def load_admin_users_data():
@@ -140,6 +170,13 @@ def load_admin_users_data():
             LEFT JOIN property_properties pp ON pp.id = pt.property_id
             LEFT JOIN property_units pu ON pu.id = pt.unit_id
             ORDER BY pp.name, pu.name, pt.name, pt.id
+            """
+        ).fetchall()
+        investment_projects = conn.execute(
+            """
+            SELECT id, name, location
+            FROM investment_projects
+            ORDER BY name, id
             """
         ).fetchall()
         owner_links = {
@@ -171,10 +208,15 @@ def load_admin_users_data():
                     "section": normalize_access_value(row["section"] or ""),
                 }
             )
+        investment_project_links: dict[int, list[int]] = {}
+        for row in conn.execute(
+            "SELECT user_id, project_id FROM user_investment_project_access ORDER BY id"
+        ).fetchall():
+            investment_project_links.setdefault(row["user_id"], []).append(row["project_id"])
     finally:
         conn.close()
 
-    return users, properties, tenant_records, owner_links, tenant_links, company_access_rows
+    return users, properties, tenant_records, investment_projects, owner_links, tenant_links, company_access_rows, investment_project_links
 
 
 def build_property_items(properties):
@@ -196,7 +238,21 @@ def build_tenant_items(tenant_records):
     return tenant_items
 
 
-def build_user_item(user, current_user, owner_links, tenant_links, access_rows):
+def build_investment_project_items(investment_projects):
+    return [
+        {
+            "id": project["id"],
+            "name": project["name"] or f"مشروع #{project['id']}",
+            "label": (
+                f"{project['name'] or f'مشروع #{project['id']}'}"
+                + (f" - {project['location']}" if project["location"] else "")
+            ),
+        }
+        for project in investment_projects
+    ]
+
+
+def build_user_item(user, current_user, owner_links, tenant_links, access_rows, selected_project_ids=None, investment_project_items=None):
     selected_company = ""
     selected_section = ""
     selected_companies = []
@@ -223,6 +279,12 @@ def build_user_item(user, current_user, owner_links, tenant_links, access_rows):
         "selected_companies_labels": ", ".join(get_company_label(item) for item in selected_companies if item) or "-",
         "selected_section": selected_section,
         "selected_section_label": get_section_label(selected_company, selected_section),
+        "selected_project_ids": selected_project_ids or [],
+        "selected_projects_labels": ", ".join(
+            item["name"]
+            for item in (investment_project_items or [])
+            if item["id"] in set(selected_project_ids or [])
+        ) or "-",
         "can_delete": bool(current_user and current_user["id"] != user["id"]),
     }
 
@@ -263,9 +325,11 @@ def render_company_users_page(
     users,
     properties,
     tenant_records,
+    investment_projects,
     owner_links,
     tenant_links,
     company_access_rows,
+    investment_project_links,
     message: str = "",
     error_message: str = "",
 ):
@@ -276,13 +340,22 @@ def render_company_users_page(
     allowed_sections = get_allowed_sections_for_company(page_company)
     property_items = build_property_items(properties)
     tenant_items = build_tenant_items(tenant_records)
+    investment_project_items = build_investment_project_items(investment_projects)
 
     scoped_users = []
     for user in users:
         access_rows = company_access_rows.get(user["id"], [])
         if user_matches_company_scope(user, access_rows, page_company):
             scoped_users.append(
-                build_user_item(user, current_user, owner_links, tenant_links, access_rows)
+                build_user_item(
+                    user,
+                    current_user,
+                    owner_links,
+                    tenant_links,
+                    access_rows,
+                    selected_project_ids=investment_project_links.get(user["id"], []),
+                    investment_project_items=investment_project_items,
+                )
             )
 
     return templates.TemplateResponse(
@@ -297,6 +370,7 @@ def render_company_users_page(
             "users": scoped_users,
             "properties": property_items,
             "tenant_records": tenant_items,
+            "investment_projects": investment_project_items,
             "allowed_roles": allowed_roles,
             "allowed_sections": allowed_sections,
             "partner_company_options": get_general_partner_company_options(),
@@ -332,7 +406,7 @@ def admin_company_users_page(company_key: str, request: Request):
             status_code=303,
         )
 
-    users, properties, tenant_records, owner_links, tenant_links, company_access_rows = load_admin_users_data()
+    users, properties, tenant_records, investment_projects, owner_links, tenant_links, company_access_rows, investment_project_links = load_admin_users_data()
     return render_company_users_page(
         request=request,
         current_user=current_user,
@@ -340,9 +414,11 @@ def admin_company_users_page(company_key: str, request: Request):
         users=users,
         properties=properties,
         tenant_records=tenant_records,
+        investment_projects=investment_projects,
         owner_links=owner_links,
         tenant_links=tenant_links,
         company_access_rows=company_access_rows,
+        investment_project_links=investment_project_links,
         message=request.query_params.get("message", ""),
         error_message=request.query_params.get("error", ""),
     )
@@ -378,6 +454,12 @@ def validate_user_form(role: str, company: str, section: str, redirect_target: s
             status_code=303,
         )
 
+    if clean_role == "project_manager" and (clean_company != "realestate" or clean_section != "active_projects"):
+        return RedirectResponse(
+            url=build_redirect_url(redirect_target, error="يرجى اختيار التطوير العقاري مع قسم المشاريع النشطة لمدير المشروع"),
+            status_code=303,
+        )
+
     if redirect_target == "/admin/users/works":
         if clean_role != "employee":
             return RedirectResponse(
@@ -391,12 +473,12 @@ def validate_user_form(role: str, company: str, section: str, redirect_target: s
             )
 
     if redirect_target == "/admin/users/realestate":
-        if clean_role not in {"employee", "owner", "tenant"}:
+        if clean_role not in {"employee", "project_manager", "owner", "tenant"}:
             return RedirectResponse(
                 url=build_redirect_url(redirect_target, error="صفحة العقار مخصصة للموظف والمالك والمستأجر فقط"),
                 status_code=303,
             )
-        if clean_role == "employee" and clean_company != "realestate":
+        if clean_role in {"employee", "project_manager"} and clean_company != "realestate":
             return RedirectResponse(
                 url=build_redirect_url(redirect_target, error="هذه الصفحة مخصصة لمستخدمي العقار فقط"),
                 status_code=303,
@@ -423,7 +505,7 @@ def validate_user_form(role: str, company: str, section: str, redirect_target: s
                 url=build_redirect_url(redirect_target, error="هذا الدور غير متاح في هذه الصفحة"),
                 status_code=303,
             )
-        if clean_role == "employee":
+        if clean_role in {"employee", "project_manager"}:
             allowed_sections = {value for value, _ in get_allowed_sections_for_company(clean_company)}
             if clean_section not in allowed_sections:
                 return RedirectResponse(
@@ -444,6 +526,7 @@ def admin_create_user(
     company: str = Form(""),
     section: str = Form(""),
     companies: list[str] = Form([]),
+    investment_project_ids: list[str] = Form([]),
     redirect_to: str = Form("/admin/users"),
 ):
     current_user = require_role(request, {"admin"})
@@ -459,6 +542,7 @@ def admin_create_user(
     selected_company = normalize_access_value(company)
     selected_section = normalize_access_value(section)
     selected_companies = [normalize_access_value(item) for item in (companies or []) if normalize_access_value(item)]
+    selected_project_ids = [int(item) for item in (investment_project_ids or []) if str(item).strip().isdigit()]
 
     if not clean_username or not clean_password:
         return RedirectResponse(
@@ -483,6 +567,7 @@ def admin_create_user(
         sync_owner_property_access(conn, user_id, clean_role, selected_property_id)
         sync_tenant_user_link(conn, user_id, clean_role, selected_tenant_id)
         sync_user_company_access(conn, user_id, clean_role, selected_company, selected_section, selected_companies)
+        sync_user_investment_project_access(conn, user_id, clean_role, selected_project_ids)
         conn.commit()
     except sqlite3.IntegrityError:
         conn.rollback()
@@ -511,6 +596,7 @@ def admin_update_user(
     company: str = Form(""),
     section: str = Form(""),
     companies: list[str] = Form([]),
+    investment_project_ids: list[str] = Form([]),
     redirect_to: str = Form("/admin/users"),
 ):
     current_user = require_role(request, {"admin"})
@@ -526,6 +612,7 @@ def admin_update_user(
     selected_company = normalize_access_value(company)
     selected_section = normalize_access_value(section)
     selected_companies = [normalize_access_value(item) for item in (companies or []) if normalize_access_value(item)]
+    selected_project_ids = [int(item) for item in (investment_project_ids or []) if str(item).strip().isdigit()]
 
     if not clean_username:
         return RedirectResponse(
@@ -560,6 +647,7 @@ def admin_update_user(
         sync_owner_property_access(conn, user_id, clean_role, selected_property_id)
         sync_tenant_user_link(conn, user_id, clean_role, selected_tenant_id)
         sync_user_company_access(conn, user_id, clean_role, selected_company, selected_section, selected_companies)
+        sync_user_investment_project_access(conn, user_id, clean_role, selected_project_ids)
         conn.commit()
     except sqlite3.IntegrityError:
         conn.rollback()

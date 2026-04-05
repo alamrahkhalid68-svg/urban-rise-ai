@@ -8,6 +8,7 @@ from auth import (
     is_employee,
     is_owner,
     is_partner,
+    is_project_manager,
     is_tenant,
 )
 from db import get_db
@@ -83,7 +84,7 @@ def get_accessible_property_ids(user_id: int) -> list[int]:
     user = get_user_by_id(user_id)
     if not user or not user["is_active"]:
         return []
-    if is_admin(user) or (is_employee(user) or is_partner(user)) and user_has_company_access(user_id, "realestate"):
+    if is_admin(user) or (is_employee(user) or is_partner(user) or is_project_manager(user)) and user_has_company_access(user_id, "realestate"):
         conn = get_db()
         rows = conn.execute("SELECT id FROM property_properties ORDER BY id").fetchall()
         conn.close()
@@ -121,7 +122,7 @@ def user_has_company_access(user_id: int, company: str, section: str | None = No
 
     conn = get_db()
     try:
-        if is_employee(user) or is_partner(user):
+        if is_employee(user) or is_partner(user) or is_project_manager(user):
             clean_company = normalize_access_value(company)
             clean_section = normalize_access_value(section or "")
             if section:

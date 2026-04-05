@@ -40,7 +40,7 @@
                     <label>الدور</label>
                     <select name="role" data-role-select required>
                         {% for role_option in allowed_roles %}
-                        <option value="{{ role_option }}">{{ {'admin':'مدير النظام','partner':'شريك','employee':'موظف','owner':'مالك','tenant':'مستأجر'}[role_option] }}</option>
+                        <option value="{{ role_option }}">{{ {'admin':'مدير النظام','partner':'شريك','employee':'موظف','project_manager':'مدير مشروع','owner':'مالك','tenant':'مستأجر'}[role_option] }}</option>
                         {% endfor %}
                     </select>
 
@@ -98,6 +98,16 @@
                         </select>
                     </div>
 
+                    <div data-project-manager-fields style="display:none;margin-top:10px;">
+                        <label>المشاريع المعيّنة</label>
+                        <select name="investment_project_ids" multiple size="6">
+                            {% for project in investment_projects %}
+                            <option value="{{ project.id }}">{{ project.label }}</option>
+                            {% endfor %}
+                        </select>
+                        <p style="margin:8px 0 0;color:#d7dde8;">يمكن اختيار مشروع واحد أو عدة مشاريع من المشاريع النشطة المسجلة.</p>
+                    </div>
+
                     <button type="submit" class="glass-btn gold-text" style="margin-top:14px;">إنشاء المستخدم</button>
                 </form>
             </div>
@@ -125,6 +135,8 @@
                                 <td>
                                     {% if page_company == 'general' and user.role == 'partner' %}
                                     {{ user.selected_companies_labels }}
+                                    {% elif user.role == 'project_manager' %}
+                                    {{ user.selected_projects_labels }}
                                     {% elif user.role == 'employee' %}
                                     {{ user.selected_section_label }}
                                     {% elif user.role == 'owner' %}
@@ -146,7 +158,7 @@
                                         <input type="password" name="password" placeholder="اتركه فارغاً بدون تغيير">
                                         <select name="role" data-role-select>
                                             {% for role_option in allowed_roles %}
-                                            <option value="{{ role_option }}"{% if user.role == role_option %} selected{% endif %}>{{ {'admin':'مدير النظام','partner':'شريك','employee':'موظف','owner':'مالك','tenant':'مستأجر'}[role_option] }}</option>
+                                            <option value="{{ role_option }}"{% if user.role == role_option %} selected{% endif %}>{{ {'admin':'مدير النظام','partner':'شريك','employee':'موظف','project_manager':'مدير مشروع','owner':'مالك','tenant':'مستأجر'}[role_option] }}</option>
                                             {% endfor %}
                                         </select>
 
@@ -203,6 +215,16 @@
                                             </select>
                                         </div>
 
+                                        <div data-project-manager-fields style="display:{% if user.role == 'project_manager' %}block{% else %}none{% endif %};margin-top:10px;">
+                                            <label>المشاريع المعيّنة</label>
+                                            <select name="investment_project_ids" multiple size="6">
+                                                {% for project in investment_projects %}
+                                                <option value="{{ project.id }}"{% if project.id in user.selected_project_ids %} selected{% endif %}>{{ project.label }}</option>
+                                                {% endfor %}
+                                            </select>
+                                            <p style="margin:8px 0 0;color:#d7dde8;">يمكن اختيار مشروع واحد أو عدة مشاريع من المشاريع النشطة المسجلة.</p>
+                                        </div>
+
                                         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
                                             <button type="submit" class="glass-btn gold-text">تحديث</button>
                                             {% if user.can_delete %}
@@ -233,6 +255,7 @@ const ROLE_LABEL_RULES = {
     owner: { owner: true, tenant: false, company: false, partnerCompanies: false, inventory: false },
     tenant: { owner: false, tenant: true, company: false, partnerCompanies: false, inventory: false },
     employee: { owner: false, tenant: false, company: true, partnerCompanies: false, inventory: false },
+    project_manager: { owner: false, tenant: false, company: true, partnerCompanies: false, inventory: false },
     partner: { owner: false, tenant: false, company: false, partnerCompanies: true, inventory: false },
     admin: { owner: false, tenant: false, company: false, partnerCompanies: false, inventory: false }
 };
@@ -241,6 +264,7 @@ function toggleAdminUserFields(form) {
     const roleSelect = form.querySelector('[data-role-select]');
     const ownerFields = form.querySelector('[data-owner-fields]');
     const tenantFields = form.querySelector('[data-tenant-fields]');
+    const projectManagerFields = form.querySelector('[data-project-manager-fields]');
     const companyFields = form.querySelector('[data-company-fields]');
     const sectionSelect = form.querySelector('[data-section-select]');
     const generalPartnerFields = form.querySelector('[data-general-partner-fields]');
@@ -264,6 +288,15 @@ function toggleAdminUserFields(form) {
     }
     if (tenantFields) {
         tenantFields.style.display = rules.tenant ? 'block' : 'none';
+    }
+    if (projectManagerFields) {
+        const showProjectManagerFields = pageCompany === 'realestate' && role === 'project_manager';
+        projectManagerFields.style.display = showProjectManagerFields ? 'block' : 'none';
+        if (!showProjectManagerFields) {
+            projectManagerFields.querySelectorAll('option').forEach((item) => {
+                item.selected = false;
+            });
+        }
     }
     if (companyFields) {
         companyFields.style.display = showCompanySection ? 'block' : 'none';

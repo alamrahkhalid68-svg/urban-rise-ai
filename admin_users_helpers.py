@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Iterable
 
@@ -8,6 +8,7 @@ ROLE_LABELS = {
     "admin": "مدير النظام",
     "partner": "شريك",
     "employee": "موظف",
+    "project_manager": "مدير مشروع",
     "owner": "مالك",
     "tenant": "مستأجر",
 }
@@ -35,10 +36,11 @@ COMPANY_PAGE_CONFIG = {
         "label": COMPANY_LABELS["realestate"],
         "title": "صفحة مستخدمي التطوير العقاري / إدارة الأملاك",
         "description": "إدارة مستخدمي العقار مع المحافظة على ربط المالك والمستأجر كما هو.",
-        "roles": ["employee", "owner", "tenant"],
+        "roles": ["employee", "project_manager", "owner", "tenant"],
         "sections": [
             ("property_accounts", "موظف إدارة الأملاك / الحسابات"),
             ("maintenance", "موظف الصيانة"),
+            ("active_projects", "مدير المشاريع النشطة"),
         ],
     },
     "logistics": {
@@ -103,6 +105,7 @@ def get_section_label(company: str, section: str) -> str:
         "inventory": "المستودع",
         "property_accounts": "موظف إدارة الأملاك / الحسابات",
         "maintenance": "موظف الصيانة",
+        "active_projects": "مدير المشاريع النشطة",
     }
     return fallback_labels.get(clean_section, clean_section)
 
@@ -131,7 +134,7 @@ def user_matches_company_scope(user: dict, access_rows: Iterable[dict], company:
     if clean_company == "realestate":
         if clean_role in {"owner", "tenant"}:
             return True
-        if clean_role != "employee":
+        if clean_role not in {"employee", "project_manager"}:
             return False
         return any(normalize_access_value(row["company"] or "") == "realestate" for row in access_rows)
 

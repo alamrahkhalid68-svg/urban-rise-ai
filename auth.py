@@ -74,6 +74,10 @@ def is_employee(user) -> bool:
     return bool(user and user["role"] == "employee")
 
 
+def is_project_manager(user) -> bool:
+    return bool(user and user["role"] == "project_manager")
+
+
 def is_owner(user) -> bool:
     return bool(user and user["role"] == "owner")
 
