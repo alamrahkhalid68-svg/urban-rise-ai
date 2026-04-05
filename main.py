@@ -1666,6 +1666,10 @@ def is_works_expenses_only_user(user, company: str) -> bool:
     return get_employee_allowed_sections(user["id"], company) == {"expenses"}
 
 
+def is_works_expenses_suppliers_employee(user, company: str) -> bool:
+    return is_works_expenses_only_user(user, company)
+
+
 def is_works_partner_user(user, company: str) -> bool:
     if not user or not is_partner(user) or not is_works_company(company):
         return False
@@ -1779,16 +1783,24 @@ def realestate_owner_read_only(user) -> bool:
 
 
 def get_works_expenses_landing_url() -> str:
-    project_id = get_first_company_project_id("works")
-    if project_id:
-        return f"/project-expenses?project_id={project_id}&company=works"
-    return "/"
+    return "/projects?company=works"
 
 
 def deny_works_expenses_summary_access():
     return access_denied_response(
         "ليس لديك صلاحية الوصول إلى هذه الصفحة",
         back_url=get_works_expenses_landing_url(),
+    )
+
+
+def ensure_works_expenses_suppliers_scope(user, project_id: int, company: str):
+    if not is_works_expenses_suppliers_employee(user, company):
+        return user
+    if not project_id:
+        return RedirectResponse(url=get_works_expenses_landing_url(), status_code=303)
+    return RedirectResponse(
+        url=f"/project-expenses?project_id={project_id}&company={company}",
+        status_code=303,
     )
 
 
@@ -1835,9 +1847,6 @@ def get_role_landing_url(user) -> str:
                     return f"/project-daily?project_id={project_id}&company=works"
                 return "/projects?company=works"
             if section == "expenses" and company in {"works", "all"}:
-                project_id = get_first_company_project_id("works")
-                if project_id:
-                    return f"/project-expenses?project_id={project_id}&company=works"
                 return "/projects?company=works"
         if fallback_company:
             if fallback_company == "realestate":
@@ -2516,9 +2525,8 @@ def projects_page(request: Request, company: str = ""):
         access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
-    if is_works_expenses_only_user(access_result, company):
-        return deny_works_expenses_summary_access()
     is_read_only_works_partner = is_works_partner_user(access_result, company)
+    is_works_expenses_scope_user = is_works_expenses_suppliers_employee(access_result, company)
     conn = get_db()
     projects = conn.execute(
         "SELECT * FROM projects WHERE company = ?",
@@ -2544,7 +2552,7 @@ def projects_page(request: Request, company: str = ""):
             </td>
             <td>{p['client']}</td>
             <td>{p['status']}</td>
-            <td>{"-" if is_read_only_works_partner else f'''<a href="/edit-project/{p['id']}?company={company}" class="action-btn">تعديل</a><a href="/delete-project/{p['id']}?company={company}" class="action-btn" onclick="return confirm('هل تريد حذف هذا المشروع؟')">حذف</a>'''}</td>
+            <td>{"-" if is_read_only_works_partner or is_works_expenses_scope_user else f'''<a href="/edit-project/{p['id']}?company={company}" class="action-btn">تعديل</a><a href="/delete-project/{p['id']}?company={company}" class="action-btn" onclick="return confirm('هل تريد حذف هذا المشروع؟')">حذف</a>'''}</td>
         </tr>
         """
 
@@ -2559,7 +2567,7 @@ def projects_page(request: Request, company: str = ""):
 
 {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
 
-{"" if is_read_only_works_partner else f"""
+{"" if is_read_only_works_partner or is_works_expenses_scope_user else f"""
 <a href="/new-project?company={company}" class="company-card {company}">
 <h2>➕ مشروع جديد</h2>
 </a>
@@ -2593,6 +2601,8 @@ def new_project_form(request: Request, company: str = ""):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    if is_works_expenses_suppliers_employee(access_result, company):
+        return RedirectResponse(url="/projects?company=works", status_code=303)
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
@@ -2681,6 +2691,8 @@ def save_project(
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    if is_works_expenses_suppliers_employee(access_result, company):
+        return RedirectResponse(url="/projects?company=works", status_code=303)
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
@@ -2762,6 +2774,8 @@ def edit_project_form(request: Request, project_id: int, company: str = ""):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    if is_works_expenses_suppliers_employee(access_result, company):
+        return RedirectResponse(url="/projects?company=works", status_code=303)
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
@@ -2835,6 +2849,8 @@ def update_project(
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    if is_works_expenses_suppliers_employee(access_result, company):
+        return RedirectResponse(url="/projects?company=works", status_code=303)
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
@@ -2873,6 +2889,8 @@ def delete_project(request: Request, project_id: int, company: str = ""):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    if is_works_expenses_suppliers_employee(access_result, company):
+        return RedirectResponse(url="/projects?company=works", status_code=303)
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
@@ -3963,7 +3981,7 @@ def analyze_project_route(request: Request, project_id: int, company: str = ""):
         access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
-    if is_works_expenses_only_user(access_result, company):
+    if is_works_expenses_suppliers_employee(access_result, company):
         return deny_works_expenses_summary_access()
     if is_employee(access_result) and normalize_access_value(company) == "works":
         allowed_sections = get_employee_allowed_sections(access_result["id"], company)
@@ -4039,7 +4057,7 @@ def analyze_project_items_route(request: Request, project_id: int, company: str 
             "تحليل البنود متاح لمشاريع المقاولات فقط",
             back_url=f"/project/{project_id}?company={company}",
         )
-    if is_works_expenses_only_user(access_result, company):
+    if is_works_expenses_suppliers_employee(access_result, company):
         return deny_works_expenses_summary_access()
     if is_employee(access_result):
         allowed_sections = get_employee_allowed_sections(access_result["id"], company)
@@ -4080,20 +4098,12 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
         access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
-    if is_works_expenses_only_user(access_result, company):
-        return deny_works_expenses_summary_access()
-
     if is_employee(access_result) and normalize_access_value(company) == "works":
         allowed_sections = get_employee_allowed_sections(access_result["id"], company)
         if allowed_sections == {"daily_log"}:
             return RedirectResponse(
                 url=f"/project-daily?project_id={project_id}&company={company}",
                 status_code=303,
-            )
-        if allowed_sections == {"expenses"}:
-            return access_denied_response(
-                "ليس لديك صلاحية الوصول إلى صفحة المشروع",
-                back_url=f"/project-expenses?project_id={project_id}&company={company}",
             )
     is_read_only_works_partner = is_works_partner_user(access_result, company)
 
@@ -4106,6 +4116,37 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
     if not project:
         conn.close()
         return "<h2>المشروع غير موجود</h2>"
+
+    if is_works_expenses_suppliers_employee(access_result, company):
+        conn.close()
+        return f'''
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+
+<div class="dashboard">
+
+<h1>{project['name']}</h1>
+
+<div class="companies">
+
+<a href="/project-expenses?project_id={project_id}&company={company}" class="company-card {company}">
+<h2>المصروفات</h2>
+</a>
+
+<a href="/project-suppliers?project_id={project_id}&company={company}" class="company-card {company}">
+<h2>الموردين</h2>
+</a>
+
+</div>
+
+<br>
+
+<a href="/projects?company={company}" class="glass-btn back-btn">⬅ رجوع</a>
+
+</div>
+'''
 
     contract = conn.execute(
         "SELECT * FROM contracts WHERE id = ?",
@@ -4272,8 +4313,8 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
     if is_employee(access_result) and normalize_access_value(company) == "works":
         allowed_sections = get_employee_allowed_sections(access_result["id"], company)
         if allowed_sections == {"expenses"}:
-            back_url = f"/project-expenses?project_id={project_id}&company={company}"
-            back_label = "⬅ رجوع"
+            back_url = f"/projects?company={company}"
+            back_label = "⬅ رجوع للمشاريع"
 
     conn = get_db()
 
@@ -4353,7 +4394,7 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
 
 <br>
 
-<a href="{back_url}" class="glass-btn back-btn">⬅ رجوع</a>
+<a href="{back_url}" class="glass-btn back-btn">{back_label}</a>
 
 </div>
 """
@@ -4762,6 +4803,9 @@ def project_equipment(request: Request, project_id: int, company: str = ""):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    scope_redirect = ensure_works_expenses_suppliers_scope(access_result, project_id, company)
+    if not isinstance(scope_redirect, sqlite3.Row):
+        return scope_redirect
     is_read_only_works_partner = is_works_partner_user(access_result, company)
 
     conn = get_db()
@@ -4870,6 +4914,8 @@ def save_equipment(
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    if is_works_expenses_suppliers_employee(access_result, company):
+        return RedirectResponse(url=f"/project-expenses?project_id={project_id}&company={company}", status_code=303)
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
@@ -4895,6 +4941,8 @@ def edit_project_equipment(request: Request, equipment_id: int, project_id: int,
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    if is_works_expenses_suppliers_employee(access_result, company):
+        return RedirectResponse(url=f"/project-expenses?project_id={project_id}&company={company}", status_code=303)
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
@@ -4954,6 +5002,8 @@ def update_project_equipment(
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    if is_works_expenses_suppliers_employee(access_result, company):
+        return RedirectResponse(url=f"/project-expenses?project_id={project_id}&company={company}", status_code=303)
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
@@ -4975,6 +5025,8 @@ def delete_project_equipment(request: Request, equipment_id: int, project_id: in
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    if is_works_expenses_suppliers_employee(access_result, company):
+        return RedirectResponse(url=f"/project-expenses?project_id={project_id}&company={company}", status_code=303)
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
@@ -4992,7 +5044,11 @@ def delete_project_equipment(request: Request, equipment_id: int, project_id: in
 
 
 @app.get("/project-suppliers", response_class=HTMLResponse)
-def project_suppliers(project_id: int, company: str = ""):
+def project_suppliers(request: Request, project_id: int, company: str = ""):
+    access_result = ensure_employee_section_access(request, company, "expenses")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, company)
 
     conn = get_db()
 
@@ -5012,10 +5068,7 @@ def project_suppliers(project_id: int, company: str = ""):
             <td>{s['material']}</td>
             <td>{s['phone']}</td>
             <td>{s['date']}</td>
-            <td>
-                <a href="/edit-project-supplier/{s['id']}?project_id={project_id}&company={company}" class="action-btn">تعديل</a>
-                <a href="/delete-project-supplier/{s['id']}?project_id={project_id}&company={company}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا المورد؟')">حذف</a>
-            </td>
+            <td>{"-" if is_read_only_works_partner else f'''<a href="/edit-project-supplier/{s['id']}?project_id={project_id}&company={company}" class="action-btn">تعديل</a><a href="/delete-project-supplier/{s['id']}?project_id={project_id}&company={company}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا المورد؟')">حذف</a>'''}</td>
         </tr>
         """
 
@@ -5029,6 +5082,9 @@ def project_suppliers(project_id: int, company: str = ""):
 
 <h1>موردين المشروع</h1>
 
+{"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
+
+{"" if is_read_only_works_partner else f"""
 <form action="/save-supplier" method="post">
 
 <input type="hidden" name="project_id" value="{project_id}">
@@ -5052,6 +5108,7 @@ def project_suppliers(project_id: int, company: str = ""):
 <button type="submit" class="glass-btn gold-text">إضافة المورد</button>
 
 </form>
+"""}
 
 <br><br>
 
@@ -5078,12 +5135,19 @@ def project_suppliers(project_id: int, company: str = ""):
 
 @app.post("/save-supplier")
 def save_supplier(
+    request: Request,
     project_id: int = Form(...),
     company: str = Form(...),
     name: str = Form(...),
     material: str = Form(""),
     phone: str = Form("")
 ):
+    access_result = ensure_employee_section_access(request, company, "expenses")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
 
     conn = get_db()
 
@@ -5102,7 +5166,13 @@ def save_supplier(
 
 
 @app.get("/edit-project-supplier/{supplier_id}", response_class=HTMLResponse)
-def edit_project_supplier(supplier_id: int, project_id: int, company: str = ""):
+def edit_project_supplier(request: Request, supplier_id: int, project_id: int, company: str = ""):
+    access_result = ensure_employee_section_access(request, company, "expenses")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
     conn = get_db()
     supplier = conn.execute(
         "SELECT * FROM project_suppliers WHERE id = ? AND project_id = ?",
@@ -5148,6 +5218,7 @@ def edit_project_supplier(supplier_id: int, project_id: int, company: str = ""):
 
 @app.post("/update-project-supplier/{supplier_id}")
 def update_project_supplier(
+    request: Request,
     supplier_id: int,
     project_id: int = Form(...),
     company: str = Form(...),
@@ -5155,6 +5226,12 @@ def update_project_supplier(
     material: str = Form(""),
     phone: str = Form(""),
 ):
+    access_result = ensure_employee_section_access(request, company, "expenses")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
     conn = get_db()
     conn.execute(
         "UPDATE project_suppliers SET name = ?, material = ?, phone = ? WHERE id = ? AND project_id = ?",
@@ -5169,7 +5246,13 @@ def update_project_supplier(
 
 
 @app.get("/delete-project-supplier/{supplier_id}")
-def delete_project_supplier(supplier_id: int, project_id: int, company: str = ""):
+def delete_project_supplier(request: Request, supplier_id: int, project_id: int, company: str = ""):
+    access_result = ensure_employee_section_access(request, company, "expenses")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
     conn = get_db()
     conn.execute(
         "DELETE FROM project_suppliers WHERE id = ? AND project_id = ?",
