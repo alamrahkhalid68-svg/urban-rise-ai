@@ -2,7 +2,7 @@
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from auth import get_current_user, get_user_by_id, is_admin, is_employee, is_owner, is_partner, is_project_manager, is_tenant, password_matches, require_login, require_role
 from admin_users import router as admin_users_router
 from access_control import ensure_company_access, ensure_employee_any_section_access, ensure_employee_section_access, ensure_property_access, ensure_request_belongs_to_tenant, ensure_tenant_access, get_accessible_property_ids, get_employee_allowed_sections, get_primary_tenant_id, get_user_company_access_rows, get_user_tenant_access_ids, normalize_access_value, user_has_company_access, user_has_property_access, user_has_tenant_access
@@ -13,9 +13,11 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import urllib.error
 import urllib.request
+import uuid
 from datetime import date, datetime, time, timedelta
 from starlette.middleware.sessions import SessionMiddleware
 from urllib.parse import quote
@@ -461,6 +463,17 @@ CREATE TABLE IF NOT EXISTS contracts (
     company TEXT,
     quote_id INTEGER,
     status TEXT
+)
+""")
+
+conn.execute("""
+CREATE TABLE IF NOT EXISTS contract_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contract_id INTEGER NOT NULL,
+    source_type TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    uploaded_at TEXT
 )
 """)
 
@@ -1797,6 +1810,185 @@ def ensure_realestate_write_access(request: Request, property_id: int = 0, area:
 
 def realestate_owner_read_only(user) -> bool:
     return bool(user) and is_owner(user)
+
+
+def get_owner_accessible_property_set(user) -> set[int]:
+    if not realestate_owner_read_only(user):
+        return set()
+    return set(get_accessible_property_ids(user["id"]))
+
+
+def filter_rows_by_property_scope(rows, property_ids: set[int], field_name: str = "property_id"):
+    if not property_ids:
+        return rows
+    return [row for row in rows if row[field_name] in property_ids]
+
+
+CONTRACT_ATTACHMENT_SOURCE_WORKS = "works_contract"
+CONTRACT_ATTACHMENT_SOURCE_PROPERTY = "property_contract"
+CONTRACT_ATTACHMENT_SOURCE_INVESTMENT = "investment_contract"
+CONTRACT_ATTACHMENT_UPLOAD_DIR = os.path.join("static", "uploads", "contracts")
+
+
+def get_contract_attachment_back_url(source_type: str, company: str = "", property_id: int = 0, project_id: int = 0) -> str:
+    if source_type == CONTRACT_ATTACHMENT_SOURCE_WORKS:
+        return f"/contracts?company={quote(str(company or ''))}"
+    if source_type == CONTRACT_ATTACHMENT_SOURCE_PROPERTY:
+        return f"/property-rental-contracts?property_id={property_id}"
+    if source_type == CONTRACT_ATTACHMENT_SOURCE_INVESTMENT:
+        return f"/investment-contracts?project_id={project_id}"
+    return "/"
+
+
+def get_contract_attachment_rows(conn, source_type: str, contract_ids) -> dict[int, list[sqlite3.Row]]:
+    if not contract_ids:
+        return {}
+    unique_ids = sorted({int(contract_id) for contract_id in contract_ids if contract_id})
+    if not unique_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in unique_ids)
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM contract_attachments
+        WHERE source_type = ? AND contract_id IN ({placeholders})
+        ORDER BY id DESC
+        """,
+        [source_type, *unique_ids],
+    ).fetchall()
+    attachments_map: dict[int, list[sqlite3.Row]] = {}
+    for row in rows:
+        attachments_map.setdefault(row["contract_id"], []).append(row)
+    return attachments_map
+
+
+def render_contract_attachments_html(
+    attachments,
+    source_type: str,
+    contract_id: int,
+    is_admin_user: bool = False,
+    company: str = "",
+    property_id: int = 0,
+    project_id: int = 0,
+) -> str:
+    link_items = ""
+    for attachment in attachments or []:
+        safe_name = escape(attachment["file_name"] or "ملف مرفق")
+        link_items += (
+            f'<div><span>{safe_name}</span> '
+            f'<a href="/contract-attachments/{attachment["id"]}" class="action-btn">عرض / تنزيل</a></div>'
+        )
+
+    if not link_items:
+        link_items = '<div class="inventory-note" style="margin:0;">لا توجد مرفقات</div>'
+
+    upload_form = ""
+    if is_admin_user:
+        upload_form = f"""
+        <form action="/upload-contract-attachment" method="post" enctype="multipart/form-data" style="margin-top:10px;">
+            <input type="hidden" name="source_type" value="{source_type}">
+            <input type="hidden" name="contract_id" value="{contract_id}">
+            <input type="hidden" name="company" value="{escape(company)}">
+            <input type="hidden" name="property_id" value="{property_id}">
+            <input type="hidden" name="project_id" value="{project_id}">
+            <input type="file" name="attachment_file" required>
+            <button type="submit" class="action-btn">إرفاق ملف</button>
+        </form>
+        """
+
+    return f'<div style="display:flex;flex-direction:column;gap:8px;">{link_items}{upload_form}</div>'
+
+
+def get_contract_attachment_context(conn, source_type: str, contract_id: int):
+    if source_type == CONTRACT_ATTACHMENT_SOURCE_WORKS:
+        contract = conn.execute(
+            "SELECT id, company FROM contracts WHERE id = ?",
+            (contract_id,),
+        ).fetchone()
+        if not contract:
+            return None
+        return {
+            "source_type": source_type,
+            "contract_id": contract_id,
+            "company": contract["company"] or "",
+            "property_id": 0,
+            "project_id": 0,
+        }
+    if source_type == CONTRACT_ATTACHMENT_SOURCE_PROPERTY:
+        contract = conn.execute(
+            "SELECT id, property_id FROM property_rent_contracts WHERE id = ?",
+            (contract_id,),
+        ).fetchone()
+        if not contract:
+            return None
+        return {
+            "source_type": source_type,
+            "contract_id": contract_id,
+            "company": "",
+            "property_id": contract["property_id"] or 0,
+            "project_id": 0,
+        }
+    if source_type == CONTRACT_ATTACHMENT_SOURCE_INVESTMENT:
+        contract = conn.execute(
+            """
+            SELECT investment_contracts.id, investment_units.project_id
+            FROM investment_contracts
+            JOIN investment_units ON investment_units.id = investment_contracts.unit_id
+            WHERE investment_contracts.id = ?
+            """,
+            (contract_id,),
+        ).fetchone()
+        if not contract:
+            return None
+        return {
+            "source_type": source_type,
+            "contract_id": contract_id,
+            "company": "",
+            "property_id": 0,
+            "project_id": contract["project_id"] or 0,
+        }
+    return None
+
+
+def ensure_contract_attachment_access(
+    request: Request,
+    source_type: str,
+    contract_id: int,
+    require_admin: bool = False,
+):
+    conn = get_db()
+    try:
+        context = get_contract_attachment_context(conn, source_type, contract_id)
+    finally:
+        conn.close()
+
+    if not context:
+        return None, HTMLResponse("<h2>العقد غير موجود</h2>", status_code=404)
+
+    if source_type == CONTRACT_ATTACHMENT_SOURCE_WORKS:
+        access_result = ensure_company_access(request, context["company"])
+    elif source_type == CONTRACT_ATTACHMENT_SOURCE_PROPERTY:
+        access_result = ensure_realestate_property_management_access(request, context["property_id"])
+    elif source_type == CONTRACT_ATTACHMENT_SOURCE_INVESTMENT:
+        access_result = ensure_investment_project_access(request, context["project_id"])
+    else:
+        return context, HTMLResponse("<h2>نوع المرفق غير مدعوم</h2>", status_code=400)
+
+    if not isinstance(access_result, sqlite3.Row):
+        return context, access_result
+
+    if require_admin and not is_admin(access_result):
+        return context, access_denied_response(
+            "رفع المرفقات متاح للمشرف فقط",
+            back_url=get_contract_attachment_back_url(
+                source_type,
+                company=context["company"],
+                property_id=context["property_id"],
+                project_id=context["project_id"],
+            ),
+        )
+
+    return context, access_result
 
 
 def get_works_expenses_landing_url() -> str:
@@ -3626,12 +3818,110 @@ def convert_to_contract(request: Request, quote_id: int, company: str = ""):
 # العقود
 # ======================
 
+@app.post("/upload-contract-attachment")
+def upload_contract_attachment(
+    request: Request,
+    source_type: str = Form(...),
+    contract_id: int = Form(...),
+    company: str = Form(""),
+    property_id: int = Form(0),
+    project_id: int = Form(0),
+    attachment_file: UploadFile = File(...),
+):
+    context, access_result = ensure_contract_attachment_access(
+        request,
+        source_type=source_type,
+        contract_id=contract_id,
+        require_admin=True,
+    )
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+
+    back_url = get_contract_attachment_back_url(
+        source_type,
+        company=context["company"] or company,
+        property_id=context["property_id"] or property_id,
+        project_id=context["project_id"] or project_id,
+    )
+
+    original_name = os.path.basename(attachment_file.filename or "").strip()
+    if not original_name:
+        return RedirectResponse(
+            url=build_redirect_url(back_url, error="يرجى اختيار ملف مرفق"),
+            status_code=303,
+        )
+
+    _, extension = os.path.splitext(original_name)
+    unique_name = f"{uuid.uuid4().hex}{extension}"
+    os.makedirs(CONTRACT_ATTACHMENT_UPLOAD_DIR, exist_ok=True)
+    saved_path = os.path.join(CONTRACT_ATTACHMENT_UPLOAD_DIR, unique_name)
+
+    try:
+        with open(saved_path, "wb") as output_file:
+            shutil.copyfileobj(attachment_file.file, output_file)
+    finally:
+        attachment_file.file.close()
+
+    conn = get_db()
+    conn.execute(
+        """
+        INSERT INTO contract_attachments (contract_id, source_type, file_path, file_name, uploaded_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            contract_id,
+            source_type,
+            saved_path,
+            original_name,
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse(
+        url=build_redirect_url(back_url, message="تم رفع المرفق بنجاح"),
+        status_code=303,
+    )
+
+
+@app.get("/contract-attachments/{attachment_id}")
+def download_contract_attachment(request: Request, attachment_id: int):
+    conn = get_db()
+    attachment = conn.execute(
+        "SELECT * FROM contract_attachments WHERE id = ?",
+        (attachment_id,),
+    ).fetchone()
+    conn.close()
+
+    if not attachment:
+        return HTMLResponse("<h2>المرفق غير موجود</h2>", status_code=404)
+
+    _, access_result = ensure_contract_attachment_access(
+        request,
+        source_type=attachment["source_type"],
+        contract_id=attachment["contract_id"],
+        require_admin=False,
+    )
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+
+    file_path = attachment["file_path"] or ""
+    if not file_path or not os.path.exists(file_path):
+        return HTMLResponse("<h2>الملف غير موجود</h2>", status_code=404)
+
+    return FileResponse(
+        path=file_path,
+        filename=attachment["file_name"] or os.path.basename(file_path),
+    )
+
 @app.get("/contracts", response_class=HTMLResponse)
 def contracts_page(request: Request, company: str = ""):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
     is_read_only_works_partner = is_works_partner_user(access_result, company)
+    is_admin_user = is_admin(access_result)
 
     conn = get_db()
     data = conn.execute("""
@@ -3640,6 +3930,11 @@ def contracts_page(request: Request, company: str = ""):
         JOIN quotes ON contracts.quote_id = quotes.id
         WHERE contracts.company = ?
     """, (company,)).fetchall()
+    attachments_map = get_contract_attachment_rows(
+        conn,
+        CONTRACT_ATTACHMENT_SOURCE_WORKS,
+        [row["id"] for row in data],
+    )
     conn.close()
 
     rows = ""
@@ -3650,6 +3945,13 @@ def contracts_page(request: Request, company: str = ""):
                 f'<a href="/edit-contract/{c["id"]}?company={company}" class="action-btn">تعديل</a>'
                 f'<a href="/delete-company-contract/{c["id"]}?company={company}" class="action-btn delete-btn" onclick="return confirm(\'هل تريد حذف هذا العقد؟\')">حذف</a>'
             )
+        attachments_html = render_contract_attachments_html(
+            attachments_map.get(c["id"], []),
+            CONTRACT_ATTACHMENT_SOURCE_WORKS,
+            c["id"],
+            is_admin_user=is_admin_user,
+            company=company,
+        )
         rows += f"""
         <tr>
             <td>
@@ -3659,6 +3961,7 @@ def contracts_page(request: Request, company: str = ""):
             </td>
             <td>{c['client']}</td>
             <td>{c['status']}</td>
+            <td>{attachments_html}</td>
             <td>{manage_html}</td>
         </tr>
         """
@@ -3678,9 +3981,10 @@ def contracts_page(request: Request, company: str = ""):
             <th>رقم العقد</th>
             <th>العميل</th>
             <th>الحالة</th>
+            <th>المرفقات</th>
             <th>الإدارة</th>
         </tr>
-        {rows if rows else "<tr><td colspan='4'>لا توجد عقود</td></tr>"}
+        {rows if rows else "<tr><td colspan='5'>لا توجد عقود</td></tr>"}
     </table>
 
     <br>
@@ -3694,6 +3998,7 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
     if not isinstance(access_result, sqlite3.Row):
         return access_result
     is_read_only_works_partner = is_works_partner_user(access_result, company)
+    is_admin_user = is_admin(access_result)
     conn = get_db()
 
 
@@ -3727,6 +4032,11 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
         "SELECT * FROM quote_payments WHERE quote_id = ?",
         (quote["id"],)
     ).fetchall()
+    attachment_rows = get_contract_attachment_rows(
+        conn,
+        CONTRACT_ATTACHMENT_SOURCE_WORKS,
+        [contract_id],
+    ).get(contract_id, [])
 
     conn.close()
 
@@ -3757,6 +4067,14 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
         </tr>
         """
 
+    attachments_html = render_contract_attachments_html(
+        attachment_rows,
+        CONTRACT_ATTACHMENT_SOURCE_WORKS,
+        contract_id,
+        is_admin_user=is_admin_user,
+        company=company,
+    )
+
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
@@ -3768,6 +4086,11 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
 
 <h2 style="text-align:center">عقد مقاولات</h2>
 {"<div class='inventory-note' style='margin:20px 0;text-align:center;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else f'''<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:20px 0;"><a href="/edit-contract/{contract_id}?company={company}" class="action-btn">تعديل</a><a href="/delete-company-contract/{contract_id}?company={company}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا العقد؟')">حذف</a></div>'''}
+
+<div class="inventory-panel inventory-table-panel" style="margin:20px 0;">
+<h3>المرفقات</h3>
+{attachments_html}
+</div>
 
 <p style="text-align:left">
 رقم العقد: {contract_id}<br>
@@ -7423,6 +7746,7 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
 
     category_labels = property_expense_category_labels()
     feedback_html = render_page_feedback(message, error)
+    is_owner_view_only = realestate_owner_read_only(access_result)
     total_revenue = sum(safe_amount(contract["rent"]) for contract in contracts)
 
     maintenance_total = 0.0
@@ -7485,6 +7809,14 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
                 unit_breakdown[item["unit_id"]]["operational_total"] += amount
                 unit_breakdown[item["unit_id"]]["overall_total"] += amount
 
+        actions_cell = ""
+        if not is_owner_view_only:
+            actions_cell = f"""
+            <td>
+                <a href="/edit-property-expense/{item['id']}?property_id={property_id}" class="action-btn">تعديل</a>
+                <a href="/delete-property-expense/{item['id']}?property_id={property_id}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا المصروف؟')">حذف</a>
+            </td>
+            """
         manual_rows += f"""
         <tr>
             <td>{category_labels.get(category_key, category_key or '-')}</td>
@@ -7493,10 +7825,7 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
             <td>{item['expense_date'] or '-'}</td>
             <td>{item['vendor_or_payee'] or '-'}</td>
             <td>{item['notes'] or '-'}</td>
-            <td>
-                <a href="/edit-property-expense/{item['id']}?property_id={property_id}" class="action-btn">تعديل</a>
-                <a href="/delete-property-expense/{item['id']}?property_id={property_id}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا المصروف؟')">حذف</a>
-            </td>
+            {actions_cell}
         </tr>
         """
 
@@ -7692,6 +8021,47 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
     for key in ["salary", "electricity", "water", "cleaning", "security", "event_preparation", "marketing", "government_fees", "furniture", "hospitality", "emergency", "other"]:
         category_options += f'<option value="{key}">{category_labels[key]}</option>'
 
+    add_expense_section = ""
+    if not is_owner_view_only:
+        add_expense_section = f"""
+    <div class="inventory-panel inventory-table-panel">
+        <h3>إضافة مصروف تشغيلي</h3>
+        <form action="/save-property-expense" method="post">
+            <input type="hidden" name="property_id" value="{property_id}">
+
+            <label>نوع المصروف</label>
+            <select name="expense_type">
+                <option value="operational">تشغيلي</option>
+            </select>
+
+            <label>التصنيف</label>
+            <select name="category" required>
+                {category_options}
+            </select>
+
+            <label>الوحدة</label>
+            <select name="unit_id">{unit_options}</select>
+
+            <label>المبلغ</label>
+            <input type="number" step="0.01" name="amount" required>
+
+            <label>تاريخ المصروف</label>
+            <input type="date" name="expense_date" value="{date.today().isoformat()}">
+
+            <label>المستفيد / المورد</label>
+            <input type="text" name="vendor_or_payee">
+
+            <label>ملاحظات</label>
+            <textarea name="notes" rows="3"></textarea>
+
+            <button type="submit" class="glass-btn gold-text">حفظ المصروف</button>
+        </form>
+    </div>
+        """
+
+    manual_actions_header = "<th>الإدارة</th>" if not is_owner_view_only else ""
+    manual_empty_colspan = "7" if not is_owner_view_only else "6"
+
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
@@ -7766,39 +8136,7 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
         </div>
     </div>
 
-    <div class="inventory-panel inventory-table-panel">
-        <h3>إضافة مصروف تشغيلي</h3>
-        <form action="/save-property-expense" method="post">
-            <input type="hidden" name="property_id" value="{property_id}">
-
-            <label>نوع المصروف</label>
-            <select name="expense_type">
-                <option value="operational">تشغيلي</option>
-            </select>
-
-            <label>التصنيف</label>
-            <select name="category" required>
-                {category_options}
-            </select>
-
-            <label>الوحدة</label>
-            <select name="unit_id">{unit_options}</select>
-
-            <label>المبلغ</label>
-            <input type="number" step="0.01" name="amount" required>
-
-            <label>تاريخ المصروف</label>
-            <input type="date" name="expense_date" value="{date.today().isoformat()}">
-
-            <label>المستفيد / المورد</label>
-            <input type="text" name="vendor_or_payee">
-
-            <label>ملاحظات</label>
-            <textarea name="notes" rows="3"></textarea>
-
-            <button type="submit" class="glass-btn gold-text">حفظ المصروف</button>
-        </form>
-    </div>
+    {add_expense_section}
 
     <div class="finance-chart-grid">
         <div class="inventory-panel finance-chart-card">
@@ -7890,9 +8228,9 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
                     <th>التاريخ</th>
                     <th>المستفيد/المورد</th>
                     <th>الملاحظات</th>
-                    <th>الإدارة</th>
+                    {manual_actions_header}
                 </tr>
-                {manual_rows if manual_rows else "<tr><td colspan='7'>لا توجد مصروفات تشغيلية مسجلة</td></tr>"}
+                {manual_rows if manual_rows else f"<tr><td colspan='{manual_empty_colspan}'>لا توجد مصروفات تشغيلية مسجلة</td></tr>"}
             </table>
         </div>
     </div>
@@ -8300,9 +8638,14 @@ def property_units_page(request: Request, property_id: int = 0, message: str = "
         company_result = ensure_realestate_property_management_access(request)
         if not isinstance(company_result, sqlite3.Row):
             return company_result
+        access_result = company_result
     conn = get_db()
     current_property = None
     properties = conn.execute("SELECT * FROM property_properties ORDER BY name").fetchall()
+    is_owner_view_only = realestate_owner_read_only(access_result)
+    owner_property_ids = get_owner_accessible_property_set(access_result)
+    if is_owner_view_only:
+        properties = filter_rows_by_property_scope(properties, owner_property_ids, "id")
     if property_id:
         current_property = conn.execute(
             "SELECT * FROM property_properties WHERE id = ?",
@@ -8328,6 +8671,8 @@ def property_units_page(request: Request, property_id: int = 0, message: str = "
             ORDER BY property_units.id DESC
             """
         ).fetchall()
+    if is_owner_view_only:
+        units = filter_rows_by_property_scope(units, owner_property_ids)
     conn.close()
 
     property_selector = ""
@@ -8350,6 +8695,14 @@ def property_units_page(request: Request, property_id: int = 0, message: str = "
 
     rows = ""
     for unit in units:
+        actions_cell = ""
+        if not is_owner_view_only:
+            actions_cell = f"""
+            <td>
+                <a href="/edit-property-unit/{unit['id']}?property_id={unit['property_id'] or property_id}" class="action-btn">تعديل</a>
+                <a href="/delete-property-unit/{unit['id']}?property_id={unit['property_id'] or property_id}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذه الوحدة؟')">حذف</a>
+            </td>
+            """
         rows += f"""
         <tr>
             <td>{unit['property_name'] or '-'}</td>
@@ -8357,23 +8710,13 @@ def property_units_page(request: Request, property_id: int = 0, message: str = "
             <td>{unit['type'] or '-'}</td>
             <td>{unit['rent'] or 0}</td>
             <td>{unit['status'] or '-'}</td>
-            <td>
-                <a href="/edit-property-unit/{unit['id']}?property_id={unit['property_id'] or property_id}" class="action-btn">تعديل</a>
-                <a href="/delete-property-unit/{unit['id']}?property_id={unit['property_id'] or property_id}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذه الوحدة؟')">حذف</a>
-            </td>
+            {actions_cell}
         </tr>
         """
 
-    return f"""
-<meta charset="UTF-8">
-<link rel="stylesheet" href="/static/style.css">
-<body class="system-dark">
-{HOME_BUTTON}
-<div class="dashboard">
-    <h1>الوحدات</h1>
-    <p>{f"إدارة وحدات الملك: {current_property['name']}" if current_property else "إدارة جميع وحدات الأملاك"}</p>
-    {feedback_html}
-
+    add_unit_section = ""
+    if not is_owner_view_only:
+        add_unit_section = f"""
     <div class="inventory-panel inventory-table-panel">
         <h3>إضافة وحدة</h3>
         <form action="/save-property-unit" method="post">
@@ -8398,6 +8741,22 @@ def property_units_page(request: Request, property_id: int = 0, message: str = "
             <button type="submit" class="glass-btn gold-text">حفظ الوحدة</button>
         </form>
     </div>
+        """
+
+    actions_header = "<th>الإدارة</th>" if not is_owner_view_only else ""
+    empty_colspan = "6" if not is_owner_view_only else "5"
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>الوحدات</h1>
+    <p>{f"إدارة وحدات الملك: {current_property['name']}" if current_property else "إدارة جميع وحدات الأملاك"}</p>
+    {feedback_html}
+
+    {add_unit_section}
 
     <div class="inventory-panel inventory-table-panel">
         <table border="1" style="background:white;margin:auto;width:100%;">
@@ -8407,9 +8766,9 @@ def property_units_page(request: Request, property_id: int = 0, message: str = "
                 <th>النوع</th>
                 <th>الإيجار</th>
                 <th>الحالة</th>
-                <th>الإدارة</th>
+                {actions_header}
             </tr>
-            {rows if rows else "<tr><td colspan='6'>لا توجد وحدات</td></tr>"}
+            {rows if rows else f"<tr><td colspan='{empty_colspan}'>لا توجد وحدات</td></tr>"}
         </table>
     </div>
 
@@ -8594,9 +8953,14 @@ def property_tenants_page(request: Request, property_id: int = 0, message: str =
         company_result = ensure_realestate_property_management_access(request)
         if not isinstance(company_result, sqlite3.Row):
             return company_result
+        access_result = company_result
     conn = get_db()
     current_property = None
     properties = conn.execute("SELECT * FROM property_properties ORDER BY name").fetchall()
+    is_owner_view_only = realestate_owner_read_only(access_result)
+    owner_property_ids = get_owner_accessible_property_set(access_result)
+    if is_owner_view_only:
+        properties = filter_rows_by_property_scope(properties, owner_property_ids, "id")
     if property_id:
         current_property = conn.execute(
             "SELECT * FROM property_properties WHERE id = ?",
@@ -8608,6 +8972,8 @@ def property_tenants_page(request: Request, property_id: int = 0, message: str =
         ).fetchall()
     else:
         units = conn.execute("SELECT * FROM property_units ORDER BY name").fetchall()
+    if is_owner_view_only:
+        units = filter_rows_by_property_scope(units, owner_property_ids)
     if property_id:
         tenants = conn.execute(
             """
@@ -8630,6 +8996,8 @@ def property_tenants_page(request: Request, property_id: int = 0, message: str =
             ORDER BY property_tenants.id DESC
             """
         ).fetchall()
+    if is_owner_view_only:
+        tenants = filter_rows_by_property_scope(tenants, owner_property_ids)
     conn.close()
 
     property_selector = ""
@@ -8656,6 +9024,14 @@ def property_tenants_page(request: Request, property_id: int = 0, message: str =
 
     rows = ""
     for tenant in tenants:
+        actions_cell = ""
+        if not is_owner_view_only:
+            actions_cell = f"""
+            <td>
+                <a href="/edit-property-tenant/{tenant['id']}?property_id={tenant['property_id'] or property_id}" class="action-btn">تعديل</a>
+                <a href="/delete-property-tenant/{tenant['id']}?property_id={tenant['property_id'] or property_id}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا المستأجر؟')">حذف</a>
+            </td>
+            """
         rows += f"""
         <tr>
             <td>{tenant['name']}</td>
@@ -8663,23 +9039,13 @@ def property_tenants_page(request: Request, property_id: int = 0, message: str =
             <td>{tenant['unit_name'] or '-'}</td>
             <td>{tenant['phone'] or '-'}</td>
             <td>{tenant['id_number'] or '-'}</td>
-            <td>
-                <a href="/edit-property-tenant/{tenant['id']}?property_id={tenant['property_id'] or property_id}" class="action-btn">تعديل</a>
-                <a href="/delete-property-tenant/{tenant['id']}?property_id={tenant['property_id'] or property_id}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا المستأجر؟')">حذف</a>
-            </td>
+            {actions_cell}
         </tr>
         """
 
-    return f"""
-<meta charset="UTF-8">
-<link rel="stylesheet" href="/static/style.css">
-<body class="system-dark">
-{HOME_BUTTON}
-<div class="dashboard">
-    <h1>المستأجرين</h1>
-    <p>{f"إدارة مستأجري الملك: {current_property['name']}" if current_property else "إدارة جميع المستأجرين"}</p>
-    {feedback_html}
-
+    add_tenant_section = ""
+    if not is_owner_view_only:
+        add_tenant_section = f"""
     <div class="inventory-panel inventory-table-panel">
         <h3>إضافة مستأجر</h3>
         <form action="/save-property-tenant" method="post">
@@ -8700,6 +9066,22 @@ def property_tenants_page(request: Request, property_id: int = 0, message: str =
             <button type="submit" class="glass-btn gold-text">حفظ المستأجر</button>
         </form>
     </div>
+        """
+
+    actions_header = "<th>الإدارة</th>" if not is_owner_view_only else ""
+    empty_colspan = "6" if not is_owner_view_only else "5"
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>المستأجرين</h1>
+    <p>{f"إدارة مستأجري الملك: {current_property['name']}" if current_property else "إدارة جميع المستأجرين"}</p>
+    {feedback_html}
+
+    {add_tenant_section}
 
     <div class="inventory-panel inventory-table-panel">
         <table border="1" style="background:white;margin:auto;width:100%;">
@@ -8709,9 +9091,9 @@ def property_tenants_page(request: Request, property_id: int = 0, message: str =
                 <th>الوحدة</th>
                 <th>الهاتف</th>
                 <th>رقم الهوية</th>
-                <th>الإدارة</th>
+                {actions_header}
             </tr>
-            {rows if rows else "<tr><td colspan='6'>لا يوجد مستأجرون</td></tr>"}
+            {rows if rows else f"<tr><td colspan='{empty_colspan}'>لا يوجد مستأجرون</td></tr>"}
         </table>
     </div>
 
@@ -8897,9 +9279,15 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
         company_result = ensure_realestate_property_management_access(request)
         if not isinstance(company_result, sqlite3.Row):
             return company_result
+        access_result = company_result
     conn = get_db()
     current_property = None
     properties = conn.execute("SELECT * FROM property_properties ORDER BY name").fetchall()
+    is_owner_view_only = realestate_owner_read_only(access_result)
+    owner_property_ids = get_owner_accessible_property_set(access_result)
+    is_admin_user = is_admin(access_result)
+    if is_owner_view_only:
+        properties = filter_rows_by_property_scope(properties, owner_property_ids, "id")
     if property_id:
         current_property = conn.execute(
             "SELECT * FROM property_properties WHERE id = ?",
@@ -8916,6 +9304,9 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
     else:
         units = conn.execute("SELECT * FROM property_units ORDER BY name").fetchall()
         tenants = conn.execute("SELECT * FROM property_tenants ORDER BY name").fetchall()
+    if is_owner_view_only:
+        units = filter_rows_by_property_scope(units, owner_property_ids)
+        tenants = filter_rows_by_property_scope(tenants, owner_property_ids)
     if property_id:
         contracts = conn.execute(
             """
@@ -8942,6 +9333,13 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
             ORDER BY property_rent_contracts.id DESC
             """
         ).fetchall()
+    if is_owner_view_only:
+        contracts = filter_rows_by_property_scope(contracts, owner_property_ids)
+    attachments_map = get_contract_attachment_rows(
+        conn,
+        CONTRACT_ATTACHMENT_SOURCE_PROPERTY,
+        [row["id"] for row in contracts],
+    )
     conn.close()
 
     property_selector = ""
@@ -8972,6 +9370,21 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
 
     rows = ""
     for contract in contracts:
+        attachments_html = render_contract_attachments_html(
+            attachments_map.get(contract["id"], []),
+            CONTRACT_ATTACHMENT_SOURCE_PROPERTY,
+            contract["id"],
+            is_admin_user=is_admin_user,
+            property_id=contract["property_id"] or property_id,
+        )
+        actions_cell = ""
+        if not is_owner_view_only:
+            actions_cell = f"""
+            <td>
+                <a href="/edit-property-rental-contract/{contract['id']}?property_id={contract['property_id'] or property_id}" class="action-btn">تعديل</a>
+                <a href="/delete-property-rental-contract/{contract['id']}?property_id={contract['property_id'] or property_id}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا العقد؟')">حذف</a>
+            </td>
+            """
         rows += f"""
         <tr>
             <td>{contract['property_name'] or '-'}</td>
@@ -8981,23 +9394,14 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
             <td>{contract['start_date'] or '-'}</td>
             <td>{contract['end_date'] or '-'}</td>
             <td>{contract['status'] or '-'}</td>
-            <td>
-                <a href="/edit-property-rental-contract/{contract['id']}?property_id={contract['property_id'] or property_id}" class="action-btn">تعديل</a>
-                <a href="/delete-property-rental-contract/{contract['id']}?property_id={contract['property_id'] or property_id}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا العقد؟')">حذف</a>
-            </td>
+            <td>{attachments_html}</td>
+            {actions_cell}
         </tr>
         """
 
-    return f"""
-<meta charset="UTF-8">
-<link rel="stylesheet" href="/static/style.css">
-<body class="system-dark">
-{HOME_BUTTON}
-<div class="dashboard">
-    <h1>عقود الإيجار</h1>
-    <p>{f"إدارة عقود الملك: {current_property['name']}" if current_property else "إدارة جميع العقود الإيجارية"}</p>
-    {feedback_html}
-
+    add_contract_section = ""
+    if not is_owner_view_only:
+        add_contract_section = f"""
     <div class="inventory-panel inventory-table-panel">
         <h3>إضافة عقد إيجار</h3>
         <form action="/save-property-rental-contract" method="post">
@@ -9028,6 +9432,22 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
             <button type="submit" class="glass-btn gold-text">حفظ العقد</button>
         </form>
     </div>
+        """
+
+    actions_header = "<th>الإدارة</th>" if not is_owner_view_only else ""
+    empty_colspan = "9" if not is_owner_view_only else "8"
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>عقود الإيجار</h1>
+    <p>{f"إدارة عقود الملك: {current_property['name']}" if current_property else "إدارة جميع العقود الإيجارية"}</p>
+    {feedback_html}
+
+    {add_contract_section}
 
     <div class="inventory-panel inventory-table-panel">
         <table border="1" style="background:white;margin:auto;width:100%;">
@@ -9039,9 +9459,10 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
                 <th>البداية</th>
                 <th>النهاية</th>
                 <th>الحالة</th>
-                <th>الإدارة</th>
+                <th>المرفقات</th>
+                {actions_header}
             </tr>
-            {rows if rows else "<tr><td colspan='8'>لا توجد عقود إيجار</td></tr>"}
+            {rows if rows else f"<tr><td colspan='{empty_colspan}'>لا توجد عقود إيجار</td></tr>"}
         </table>
     </div>
 
@@ -9238,9 +9659,14 @@ def property_maintenance_page(request: Request, property_id: int = 0, message: s
         company_result = ensure_realestate_maintenance_access(request)
         if not isinstance(company_result, sqlite3.Row):
             return company_result
+        access_result = company_result
     conn = get_db()
     current_property = None
     properties = conn.execute("SELECT * FROM property_properties ORDER BY name").fetchall()
+    is_owner_view_only = realestate_owner_read_only(access_result)
+    owner_property_ids = get_owner_accessible_property_set(access_result)
+    if is_owner_view_only:
+        properties = filter_rows_by_property_scope(properties, owner_property_ids, "id")
     if property_id:
         current_property = conn.execute(
             "SELECT * FROM property_properties WHERE id = ?",
@@ -9257,6 +9683,9 @@ def property_maintenance_page(request: Request, property_id: int = 0, message: s
     else:
         units = conn.execute("SELECT * FROM property_units ORDER BY name").fetchall()
         supervisors = conn.execute("SELECT * FROM property_supervisors ORDER BY supervisor_name").fetchall()
+    if is_owner_view_only:
+        units = filter_rows_by_property_scope(units, owner_property_ids)
+        supervisors = filter_rows_by_property_scope(supervisors, owner_property_ids)
     if property_id:
         maintenance_items = conn.execute(
             """
@@ -9283,6 +9712,8 @@ def property_maintenance_page(request: Request, property_id: int = 0, message: s
             ORDER BY maintenance_requests.id DESC
             """
         ).fetchall()
+    if is_owner_view_only:
+        maintenance_items = filter_rows_by_property_scope(maintenance_items, owner_property_ids)
     conn.close()
 
     property_selector = ""
@@ -9324,6 +9755,17 @@ def property_maintenance_page(request: Request, property_id: int = 0, message: s
 
     rows = ""
     for item in maintenance_items:
+        actions_cell = ""
+        if not is_owner_view_only:
+            actions_cell = f"""
+            <td>
+                <a href="/edit-property-maintenance/{item['id']}?property_id={item['property_id'] or property_id}" class="action-btn">تعديل</a>
+                <a href="/update-property-maintenance-status/{item['id']}?status=reviewing&property_id={property_id}" class="action-btn">مراجعة</a>
+                <a href="/update-property-maintenance-status/{item['id']}?status=in_progress&property_id={property_id}" class="action-btn">جاري</a>
+                <a href="/update-property-maintenance-status/{item['id']}?status=completed&property_id={property_id}" class="action-btn">مكتمل</a>
+                <a href="/delete-property-maintenance/{item['id']}?property_id={item['property_id'] or property_id}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف سجل الصيانة هذا؟')">حذف</a>
+            </td>
+            """
         rows += f"""
         <tr>
             <td>{item['property_name'] or '-'}</td>
@@ -9334,26 +9776,13 @@ def property_maintenance_page(request: Request, property_id: int = 0, message: s
             <td>{item['estimated_cost'] or 0}</td>
             <td>{status_labels.get(item['status'], item['status'] or '-')}</td>
             <td>{item['created_at'] or '-'}</td>
-            <td>
-                <a href="/edit-property-maintenance/{item['id']}?property_id={item['property_id'] or property_id}" class="action-btn">تعديل</a>
-                <a href="/update-property-maintenance-status/{item['id']}?status=reviewing&property_id={property_id}" class="action-btn">مراجعة</a>
-                <a href="/update-property-maintenance-status/{item['id']}?status=in_progress&property_id={property_id}" class="action-btn">جاري</a>
-                <a href="/update-property-maintenance-status/{item['id']}?status=completed&property_id={property_id}" class="action-btn">مكتمل</a>
-                <a href="/delete-property-maintenance/{item['id']}?property_id={item['property_id'] or property_id}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف سجل الصيانة هذا؟')">حذف</a>
-            </td>
+            {actions_cell}
         </tr>
         """
 
-    return f"""
-<meta charset="UTF-8">
-<link rel="stylesheet" href="/static/style.css">
-<body class="system-dark">
-{HOME_BUTTON}
-<div class="dashboard">
-    <h1>الصيانة</h1>
-    <p>{f"إدارة صيانة الملك: {current_property['name']}" if current_property else "إدارة جميع طلبات الصيانة"}</p>
-    {feedback_html}
-
+    add_maintenance_section = ""
+    if not is_owner_view_only:
+        add_maintenance_section = f"""
     <div class="inventory-panel inventory-table-panel">
         <h3>إضافة طلب صيانة</h3>
         <form action="/save-property-maintenance" method="post">
@@ -9398,6 +9827,22 @@ def property_maintenance_page(request: Request, property_id: int = 0, message: s
             <button type="submit" class="glass-btn gold-text">حفظ طلب الصيانة</button>
         </form>
     </div>
+        """
+
+    actions_header = "<th>الإدارة</th>" if not is_owner_view_only else ""
+    empty_colspan = "9" if not is_owner_view_only else "8"
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>الصيانة</h1>
+    <p>{f"إدارة صيانة الملك: {current_property['name']}" if current_property else "إدارة جميع طلبات الصيانة"}</p>
+    {feedback_html}
+
+    {add_maintenance_section}
 
     <div class="inventory-panel inventory-table-panel">
         <table border="1" style="background:white;margin:auto;width:100%;">
@@ -9410,9 +9855,9 @@ def property_maintenance_page(request: Request, property_id: int = 0, message: s
                 <th>التكلفة التقديرية</th>
                 <th>الحالة</th>
                 <th>التاريخ</th>
-                <th>الإدارة</th>
+                {actions_header}
             </tr>
-            {rows if rows else "<tr><td colspan='9'>لا توجد طلبات صيانة</td></tr>"}
+            {rows if rows else f"<tr><td colspan='{empty_colspan}'>لا توجد طلبات صيانة</td></tr>"}
         </table>
     </div>
 
@@ -11232,6 +11677,7 @@ def investment_contracts(request: Request, project_id: int):
     access_result = ensure_investment_project_access(request, project_id)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    is_admin_user = is_admin(access_result)
 
     conn = get_db()
 
@@ -11246,6 +11692,11 @@ def investment_contracts(request: Request, project_id: int):
         ON investment_contracts.unit_id = investment_units.id
         WHERE investment_units.project_id = ?
     """, (project_id,)).fetchall()
+    attachments_map = get_contract_attachment_rows(
+        conn,
+        CONTRACT_ATTACHMENT_SOURCE_INVESTMENT,
+        [row["id"] for row in contracts],
+    )
 
     tenants = conn.execute(
         """
@@ -11268,6 +11719,13 @@ def investment_contracts(request: Request, project_id: int):
     rows = ""
 
     for c in contracts:
+        attachments_html = render_contract_attachments_html(
+            attachments_map.get(c["id"], []),
+            CONTRACT_ATTACHMENT_SOURCE_INVESTMENT,
+            c["id"],
+            is_admin_user=is_admin_user,
+            project_id=project_id,
+        )
         rows += f"""
 <tr>
 
@@ -11277,6 +11735,7 @@ def investment_contracts(request: Request, project_id: int):
 <td>{c['payment_type']}</td>
 <td>{c['start_date']}</td>
 <td>{c['end_date']}</td>
+<td>{attachments_html}</td>
 
 <td>
 
@@ -11366,10 +11825,11 @@ onclick="return confirm('حذف العقد؟')" class="action-btn">
 <th>طريقة الدفع</th>
 <th>بداية العقد</th>
 <th>نهاية العقد</th>
+<th>المرفقات</th>
 <th>إدارة</th>
 </tr>
 
-{rows if rows else "<tr><td colspan='6'>لا توجد عقود</td></tr>"}
+{rows if rows else "<tr><td colspan='8'>لا توجد عقود</td></tr>"}
 
 </table>
 
