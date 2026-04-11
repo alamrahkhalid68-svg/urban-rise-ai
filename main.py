@@ -35,7 +35,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 AUTH_ROLES = {"admin", "partner", "employee", "project_manager", "owner", "tenant"}
 PROTECTED_ROUTE_PREFIXES = (
-    "/",
+    "/portal",
     "/company",
     "/inventory",
     "/projects",
@@ -2126,7 +2126,7 @@ def get_role_landing_url(user) -> str:
         return "/login"
 
     if is_admin(user):
-        return "/"
+        return "/portal"
 
     if is_tenant(user):
         return "/client-maintenance"
@@ -2167,7 +2167,7 @@ def get_role_landing_url(user) -> str:
     if is_partner(user) and user_has_company_access(user["id"], "works"):
         return "/company/works"
 
-    return "/"
+    return "/portal"
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -2279,13 +2279,7 @@ def logout(request: Request):
     return RedirectResponse(url="/login", status_code=303)
 
 
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    user = getattr(request.state, "current_user", None) or get_current_user(request)
-    if user:
-        landing_url = get_role_landing_url(user)
-        if landing_url != "/":
-            return RedirectResponse(url=landing_url, status_code=303)
+def render_internal_portal(user) -> HTMLResponse:
     admin_users_button = ""
     if is_admin(user):
         admin_users_button = '<div style="margin:20px 0 28px;"><a href="/admin/users" class="glass-btn gold-text">تسجيل مستخدم جديد</a></div>'
@@ -2318,6 +2312,29 @@ def home(request: Request):
 """,
         media_type="text/html; charset=utf-8",
     )
+
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    user = getattr(request.state, "current_user", None) or get_current_user(request)
+    if user:
+        landing_url = get_role_landing_url(user)
+        return RedirectResponse(url=landing_url, status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "public_home.html",
+        {
+            "request": request,
+        },
+    )
+
+
+@app.get("/portal", response_class=HTMLResponse)
+def internal_portal(request: Request):
+    user = getattr(request.state, "current_user", None) or get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=303)
+    return render_internal_portal(user)
 
 
 def inventory_company_label(company: str) -> str:
