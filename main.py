@@ -462,7 +462,9 @@ CREATE TABLE IF NOT EXISTS contracts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     company TEXT,
     quote_id INTEGER,
-    status TEXT
+    status TEXT,
+    source_type TEXT,
+    manual_project_id INTEGER
 )
 """)
 
@@ -491,7 +493,8 @@ CREATE TABLE IF NOT EXISTS projects (
     project_type TEXT,
     work_type TEXT,
     finish_level TEXT,
-    area REAL
+    area REAL,
+    contract_value REAL
 )
 """)
 
@@ -736,7 +739,10 @@ for statement in [
     "ALTER TABLE projects ADD COLUMN work_type TEXT",
     "ALTER TABLE projects ADD COLUMN finish_level TEXT",
     "ALTER TABLE projects ADD COLUMN area REAL",
+    "ALTER TABLE projects ADD COLUMN contract_value REAL",
     "ALTER TABLE projects ADD COLUMN assigned_user_id INTEGER",
+    "ALTER TABLE contracts ADD COLUMN source_type TEXT",
+    "ALTER TABLE contracts ADD COLUMN manual_project_id INTEGER",
     "ALTER TABLE investment_projects ADD COLUMN assigned_user_id INTEGER",
     "ALTER TABLE maintenance_requests ADD COLUMN request_source TEXT",
     "ALTER TABLE maintenance_requests ADD COLUMN maintenance_type TEXT",
@@ -1163,6 +1169,8 @@ def build_project_financial_snapshot(conn, project_row):
     ).fetchall()
 
     contract_value = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
+    if contract_value <= 0 and "contract_value" in project_row.keys():
+        contract_value = safe_float(project_row["contract_value"])
     total_expenses = sum(safe_float(expense["amount"]) for expense in expenses)
     profit = contract_value - total_expenses
     profit_percentage = (profit / contract_value * 100) if contract_value > 0 else 0.0
@@ -1827,7 +1835,17 @@ def filter_rows_by_property_scope(rows, property_ids: set[int], field_name: str 
 CONTRACT_ATTACHMENT_SOURCE_WORKS = "works_contract"
 CONTRACT_ATTACHMENT_SOURCE_PROPERTY = "property_contract"
 CONTRACT_ATTACHMENT_SOURCE_INVESTMENT = "investment_contract"
+CONTRACT_RECORD_SOURCE_QUOTE = "quote_conversion"
+CONTRACT_RECORD_SOURCE_MANUAL_PROJECT = "manual_project"
 CONTRACT_ATTACHMENT_UPLOAD_DIR = os.path.join("static", "uploads", "contracts")
+
+
+def get_contract_record_source(contract_row: sqlite3.Row | None) -> str:
+    if not contract_row:
+        return CONTRACT_RECORD_SOURCE_QUOTE
+    if "source_type" in contract_row.keys():
+        return (contract_row["source_type"] or "").strip() or CONTRACT_RECORD_SOURCE_QUOTE
+    return CONTRACT_RECORD_SOURCE_QUOTE
 
 
 def get_contract_attachment_back_url(source_type: str, company: str = "", property_id: int = 0, project_id: int = 0) -> str:
@@ -1892,7 +1910,7 @@ def render_contract_attachments_html(
             <input type="hidden" name="property_id" value="{property_id}">
             <input type="hidden" name="project_id" value="{project_id}">
             <input type="file" name="attachment_file" required>
-            <button type="submit" class="action-btn">إرفاق ملف</button>
+            <button type="submit" class="action-btn">إضافة مرفق</button>
         </form>
         """
 
@@ -2996,7 +3014,7 @@ def new_project_form(request: Request, company: str = ""):
             <option value="منتهي">منتهي</option>
         </select>
 
-        {"<br><br>نوع المشروع:<select name='project_type'><option value=''>اختر نوع المشروع</option><option value='فيلا'>فيلا</option><option value='شقة'>شقة</option><option value='ترميم'>ترميم</option><option value='مبنى تجاري'>مبنى تجاري</option></select><br><br>نوع العمل:<select name='work_type'><option value=''>اختر نوع العمل</option><option value='عظم'>عظم</option><option value='تشطيب'>تشطيب</option><option value='ترميم'>ترميم</option><option value='صيانة'>صيانة</option></select><br><br>مستوى التشطيب:<select name='finish_level'><option value=''>اختر مستوى التشطيب</option><option value='اقتصادي'>اقتصادي</option><option value='متوسط'>متوسط</option><option value='فاخر'>فاخر</option></select><br><br>المساحة (متر مربع):<input type='number' step='0.01' min='0' name='area'><br><br>" if company == 'works' else ""}
+        {"<br><br>نوع المشروع:<select name='project_type'><option value=''>اختر نوع المشروع</option><option value='فيلا'>فيلا</option><option value='شقة'>شقة</option><option value='ترميم'>ترميم</option><option value='مبنى تجاري'>مبنى تجاري</option></select><br><br>نوع العمل:<select name='work_type'><option value=''>اختر نوع العمل</option><option value='عظم'>عظم</option><option value='تشطيب'>تشطيب</option><option value='ترميم'>ترميم</option><option value='صيانة'>صيانة</option></select><br><br>مستوى التشطيب:<select name='finish_level'><option value=''>اختر مستوى التشطيب</option><option value='اقتصادي'>اقتصادي</option><option value='متوسط'>متوسط</option><option value='فاخر'>فاخر</option></select><br><br>المساحة (متر مربع):<input type='number' step='0.01' min='0' name='area'><br><br>قيمة العقد:<input type='number' step='0.01' min='0' name='contract_value'><br><br>" if company == 'works' else ""}
 
         <br><br>
         <button type="submit" class="glass-btn gold-text">حفظ</button>
@@ -3019,7 +3037,8 @@ def save_project(
     project_type: str = Form(""),
     work_type: str = Form(""),
     finish_level: str = Form(""),
-    area: str = Form("")
+    area: str = Form(""),
+    contract_value: str = Form("")
 ):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
@@ -3033,14 +3052,16 @@ def save_project(
     structured_work_type = work_type.strip() if company == "works" else ""
     structured_finish_level = finish_level.strip() if company == "works" else ""
     structured_area = safe_float(area) if company == "works" and str(area).strip() else None
+    structured_contract_value = safe_float(contract_value) if company == "works" and str(contract_value).strip() else None
     conn = get_db()
-    conn.execute(
+    cur = conn.cursor()
+    cur.execute(
         """
         INSERT INTO projects (
             company, name, client, start_date, end_date, status,
-            project_type, work_type, finish_level, area
+            project_type, work_type, finish_level, area, contract_value
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             company,
@@ -3053,8 +3074,29 @@ def save_project(
             structured_work_type,
             structured_finish_level,
             structured_area,
+            structured_contract_value,
         )
     )
+    project_id = cur.lastrowid
+    if company == "works":
+        contract_cur = conn.cursor()
+        contract_cur.execute(
+            """
+            INSERT INTO contracts (company, quote_id, status, source_type, manual_project_id)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                company,
+                None,
+                status,
+                CONTRACT_RECORD_SOURCE_MANUAL_PROJECT,
+                project_id,
+            )
+        )
+        conn.execute(
+            "UPDATE projects SET contract_id = ? WHERE id = ? AND company = ?",
+            (contract_cur.lastrowid, project_id, company),
+        )
     conn.commit()
     conn.close()
 
@@ -3069,6 +3111,7 @@ def render_project_structured_fields(company: str, project: sqlite3.Row | None =
     work_type_value = (project["work_type"] or "") if project else ""
     finish_level_value = (project["finish_level"] or "") if project else ""
     area_value = project["area"] if project and project["area"] not in (None, "") else ""
+    contract_value_value = project["contract_value"] if project and "contract_value" in project.keys() and project["contract_value"] not in (None, "") else ""
 
     def build_options(options: list[str], selected_value: str, placeholder: str) -> str:
         html = f"<option value=''>{placeholder}</option>"
@@ -3099,6 +3142,10 @@ def render_project_structured_fields(company: str, project: sqlite3.Row | None =
         <br><br>
         المساحة (متر مربع):
         <input type="number" step="0.01" min="0" name="area" value="{area_value}">
+
+        <br><br>
+        قيمة العقد:
+        <input type="number" step="0.01" min="0" name="contract_value" value="{contract_value_value}">
     """
 
 
@@ -3177,7 +3224,8 @@ def update_project(
     project_type: str = Form(""),
     work_type: str = Form(""),
     finish_level: str = Form(""),
-    area: str = Form("")
+    area: str = Form(""),
+    contract_value: str = Form("")
 ):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
@@ -3191,12 +3239,13 @@ def update_project(
     structured_work_type = work_type.strip() if company == "works" else ""
     structured_finish_level = finish_level.strip() if company == "works" else ""
     structured_area = safe_float(area) if company == "works" and str(area).strip() else None
+    structured_contract_value = safe_float(contract_value) if company == "works" and str(contract_value).strip() else None
     conn = get_db()
     conn.execute(
         """
         UPDATE projects
         SET name = ?, client = ?, start_date = ?, end_date = ?, status = ?,
-            project_type = ?, work_type = ?, finish_level = ?, area = ?
+            project_type = ?, work_type = ?, finish_level = ?, area = ?, contract_value = ?
         WHERE id = ? AND company = ?
         """,
         (
@@ -3209,10 +3258,26 @@ def update_project(
             structured_work_type,
             structured_finish_level,
             structured_area,
+            structured_contract_value,
             project_id,
             company,
         )
     )
+    if company == "works":
+        conn.execute(
+            """
+            UPDATE contracts
+            SET status = ?
+            WHERE company = ? AND manual_project_id = ? AND COALESCE(NULLIF(TRIM(source_type), ''), ?) = ?
+            """,
+            (
+                status,
+                company,
+                project_id,
+                CONTRACT_RECORD_SOURCE_QUOTE,
+                CONTRACT_RECORD_SOURCE_MANUAL_PROJECT,
+            )
+        )
     conn.commit()
     conn.close()
     return RedirectResponse(url=f"/projects?company={company}", status_code=303)
@@ -3771,8 +3836,8 @@ def convert_to_contract(request: Request, quote_id: int, company: str = ""):
         if not contract_id:
             cur = conn.cursor()
             cur.execute(
-                "INSERT INTO contracts (company, quote_id, status) VALUES (?, ?, ?)",
-                (company, quote_id, "ساري")
+                "INSERT INTO contracts (company, quote_id, status, source_type, manual_project_id) VALUES (?, ?, ?, ?, ?)",
+                (company, quote_id, "ساري", CONTRACT_RECORD_SOURCE_QUOTE, None)
             )
             contract_id = cur.lastrowid
 
@@ -3942,10 +4007,20 @@ def contracts_page(request: Request, company: str = ""):
 
     conn = get_db()
     data = conn.execute("""
-        SELECT contracts.id, contracts.status, quotes.client
+        SELECT
+            contracts.id,
+            contracts.status,
+            contracts.quote_id,
+            contracts.source_type,
+            contracts.manual_project_id,
+            quotes.client AS quote_client,
+            projects.name AS project_name,
+            projects.client AS project_client
         FROM contracts
-        JOIN quotes ON contracts.quote_id = quotes.id
+        LEFT JOIN quotes ON contracts.quote_id = quotes.id
+        LEFT JOIN projects ON projects.id = contracts.manual_project_id
         WHERE contracts.company = ?
+        ORDER BY contracts.id DESC
     """, (company,)).fetchall()
     attachments_map = get_contract_attachment_rows(
         conn,
@@ -3956,8 +4031,10 @@ def contracts_page(request: Request, company: str = ""):
 
     rows = ""
     for c in data:
+        contract_source = get_contract_record_source(c)
+        is_manual_project_contract = contract_source == CONTRACT_RECORD_SOURCE_MANUAL_PROJECT
         manage_html = "-"
-        if not is_read_only_works_partner:
+        if not is_read_only_works_partner and not is_manual_project_contract:
             manage_html = (
                 f'<a href="/edit-contract/{c["id"]}?company={company}" class="action-btn">تعديل</a>'
                 f'<a href="/delete-company-contract/{c["id"]}?company={company}" class="action-btn delete-btn" onclick="return confirm(\'هل تريد حذف هذا العقد؟\')">حذف</a>'
@@ -3969,14 +4046,23 @@ def contracts_page(request: Request, company: str = ""):
             is_admin_user=is_admin_user,
             company=company,
         )
+        contract_label = c["project_name"] if is_manual_project_contract else c["id"]
+        if contract_label in (None, ""):
+            contract_label = f"عقد رقم {c['id']}"
+        client_label = c["project_client"] if is_manual_project_contract else c["quote_client"]
+        if client_label in (None, ""):
+            client_label = "-"
+        contract_entry_html = (
+            f'<span>{escape(str(contract_label))}</span>'
+            if is_manual_project_contract
+            else f'<a href="/contract/{c["id"]}?company={company}">{c["id"]}</a>'
+        )
         rows += f"""
         <tr>
             <td>
-<a href="/contract/{c['id']}?company={company}">
-                    {c['id']}
-                </a>
+                {contract_entry_html}
             </td>
-            <td>{c['client']}</td>
+            <td>{escape(str(client_label))}</td>
             <td>{c['status']}</td>
             <td>{attachments_html}</td>
             <td>{manage_html}</td>
@@ -4031,6 +4117,24 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
     if not contract:
         conn.close()
         return "<h2>العقد غير موجود</h2>"
+
+    if get_contract_record_source(contract) == CONTRACT_RECORD_SOURCE_MANUAL_PROJECT:
+        conn.close()
+        return HTMLResponse(
+            f"""
+            <meta charset="UTF-8">
+            <link rel="stylesheet" href="/static/style.css">
+            <body class="system-dark">
+            {HOME_BUTTON}
+            <div class="dashboard">
+                <div class="inventory-note" style="margin:20px 0;">
+                    هذا الإدخال تم إنشاؤه من صفحة المشاريع اليدوية، ولا يملك صفحة عقد مستقلة.
+                </div>
+                <a href="/contracts?company={company}" class="glass-btn back-btn">⬅ رجوع</a>
+            </div>
+            """,
+            status_code=400,
+        )
 
     # نجيب عرض السعر المرتبط
     quote = conn.execute(
@@ -4637,6 +4741,8 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
     conn.close()
 
     contract_total = sum(safe_float(i["qty"]) * safe_float(i["unit_price"]) for i in items)
+    if contract_total <= 0 and "contract_value" in project.keys():
+        contract_total = safe_float(project["contract_value"])
     expenses_total = sum(safe_float(e["amount"]) for e in expenses)
     profit = contract_total - expenses_total
     works_structured_details = ""
@@ -6503,6 +6609,23 @@ def edit_contract_form(request: Request, contract_id: int, company: str = ""):
     if not contract:
         return "<h2>العقد غير موجود</h2>"
 
+    if get_contract_record_source(contract) == CONTRACT_RECORD_SOURCE_MANUAL_PROJECT:
+        return HTMLResponse(
+            f"""
+            <meta charset="UTF-8">
+            <link rel="stylesheet" href="/static/style.css">
+            <body class="system-dark">
+            {HOME_BUTTON}
+            <div class="dashboard">
+                <div class="inventory-note" style="margin:20px 0;">
+                    هذا الإدخال اليدوي يتم تعديله من صفحة المشروع وليس من صفحة العقود.
+                </div>
+                <a href="/projects?company={company}" class="glass-btn back-btn">⬅ رجوع</a>
+            </div>
+            """,
+            status_code=400,
+        )
+
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
@@ -6539,6 +6662,16 @@ def update_contract(request: Request, contract_id: int, company: str = Form(...)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
     conn = get_db()
+    contract = conn.execute(
+        "SELECT * FROM contracts WHERE id = ? AND company = ?",
+        (contract_id, company),
+    ).fetchone()
+    if not contract:
+        conn.close()
+        return "<h2>العقد غير موجود</h2>"
+    if get_contract_record_source(contract) == CONTRACT_RECORD_SOURCE_MANUAL_PROJECT:
+        conn.close()
+        return RedirectResponse(url=f"/projects?company={company}", status_code=303)
     conn.execute(
         "UPDATE contracts SET status = ? WHERE id = ? AND company = ?",
         (status, contract_id, company)
@@ -6557,6 +6690,16 @@ def delete_company_contract(request: Request, contract_id: int, company: str = "
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
     conn = get_db()
+    contract = conn.execute(
+        "SELECT * FROM contracts WHERE id = ? AND company = ?",
+        (contract_id, company),
+    ).fetchone()
+    if not contract:
+        conn.close()
+        return "<h2>العقد غير موجود</h2>"
+    if get_contract_record_source(contract) == CONTRACT_RECORD_SOURCE_MANUAL_PROJECT:
+        conn.close()
+        return RedirectResponse(url=f"/projects?company={company}", status_code=303)
     conn.execute(
         "UPDATE projects SET contract_id = NULL WHERE contract_id = ? AND company = ?",
         (contract_id, company)
