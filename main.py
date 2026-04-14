@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.templating import Jinja2Templates
@@ -4197,7 +4197,7 @@ def quotes_page(request: Request, company: str = ""):
     if not is_read_only_works_partner:
         create_card = f"""
         <a href="/new-quote?company={company}" class="company-card {company}">
-            <h2>➕ عرض سعر جديد</h2>
+            <h2>&#10133; عرض سعر جديد</h2>
         </a>
 """
 
@@ -4551,7 +4551,7 @@ URBAN RISE<br>WORKS
 سعر الوحدة:
 <input type="number" step="0.01" name="unit_price" required>
 
-<button type="submit" class="glass-btn gold-text">➕ إضافة بند</button>
+<button type="submit" class="glass-btn gold-text">&#10133; إضافة بند</button>
 </form>
 """}
 
@@ -5327,7 +5327,7 @@ def employees_page(request: Request, company: str = ""):
     if not is_read_only_works_partner:
         create_card = f"""
     <a href="/new-employee?company={company}" class="company-card {company}">
-        <h2>➕ إضافة موظف</h2>
+        <h2>&#10133; إضافة موظف</h2>
     </a>
 """
 
@@ -7477,7 +7477,7 @@ def realestate_development():
 <p>Urban Rise - إدارة مشاريع التطوير العقاري</p>
 
 <a href="/new-development-project" class="company-card realestate" style="display:inline-block;margin:20px 0 30px 0;padding:15px;text-align:center;text-decoration:none;color:inherit;">
-    <h3>➕ مشروع جديد</h3>
+    <h3>&#10133; مشروع جديد</h3>
 </a>
 
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;margin:20px 0;">
@@ -12789,7 +12789,7 @@ def investment_projects(request: Request):
         if not is_active_projects_project_manager(user):
             create_button = """
 <a href="/new-investment-project" class="company-card realestate">
-<h2>➕ إضافة مشروع</h2>
+<h2>&#10133; إضافة مشروع</h2>
 </a>
 """
         else:
@@ -14224,7 +14224,7 @@ def equipment_list(company: str = ""):
 <h1>معدات اللوجستيات</h1>
 
 <a href="/new-equipment?company={company}" class="company-card {company}">
-<h2>➕ معدة جديدة</h2>
+<h2>&#10133; معدة جديدة</h2>
 </a>
 
 <br><br>
