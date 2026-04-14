@@ -3784,7 +3784,7 @@ def projects_page(request: Request, company: str = ""):
 
 {"" if is_read_only_works_partner or is_works_expenses_scope_user or is_works_daily_scope_user else f"""
 <a href="/new-project?company={company}" class="company-card {company}">
-<h2>➕ مشروع جديد</h2>
+<h2>مشروع جديد</h2>
 </a>
 """}
 
