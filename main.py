@@ -18,9 +18,20 @@ import sqlite3
 import urllib.error
 import urllib.request
 import uuid
+from decimal import Decimal, ROUND_HALF_UP
 from datetime import date, datetime, time, timedelta
 from starlette.middleware.sessions import SessionMiddleware
 from urllib.parse import quote
+import arabic_reshaper
+from bidi.algorithm import get_display
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_RIGHT
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 app = FastAPI()
 app.include_router(admin_users_router)
@@ -765,6 +776,21 @@ for statement in [
     except sqlite3.OperationalError:
         pass
 
+for statement in [
+    "ALTER TABLE project_expenses ADD COLUMN category TEXT",
+    "ALTER TABLE project_expenses ADD COLUMN other_type TEXT",
+    "ALTER TABLE project_expenses ADD COLUMN vendor TEXT",
+    "ALTER TABLE project_expenses ADD COLUMN payment_method TEXT",
+    "ALTER TABLE project_expenses ADD COLUMN payment_status TEXT",
+    "ALTER TABLE project_expenses ADD COLUMN invoice_reference TEXT",
+    "ALTER TABLE project_expenses ADD COLUMN attachment_path TEXT",
+    "ALTER TABLE project_expenses ADD COLUMN notes TEXT",
+]:
+    try:
+        conn.execute(statement)
+    except sqlite3.OperationalError:
+        pass
+
 # تطوير عقاري (مرحلة 1)
 conn.execute("""
 CREATE TABLE IF NOT EXISTS development_projects (
@@ -999,6 +1025,58 @@ def normalize_arabic_digits(value: str) -> str:
 
 UPLOADS_DIR = os.path.join("static", "uploads")
 
+PROJECT_EXPENSE_CATEGORIES = [
+    "مواد",
+    "أجور",
+    "مقاول باطن",
+    "نقل",
+    "معدات",
+    "وقود",
+    "صيانة",
+    "مصروف إداري",
+    "أخرى",
+]
+
+PROJECT_EXPENSE_PAYMENT_METHODS = ["نقد", "تحويل", "عهدة"]
+PROJECT_EXPENSE_PAYMENT_STATUSES = ["مدفوع", "غير مدفوع"]
+PROJECT_EXPENSE_NAME_SUGGESTIONS = {
+    "مواد": ["اسمنت", "حديد", "بلاط", "دهان"],
+    "أجور": ["عامل", "مشرف", "مهندس", "فني"],
+    "مقاول باطن": ["مقاول عظم", "مقاول تشطيب", "مقاول كهرباء", "مقاول سباكة"],
+    "نقل": ["نقل مواد", "تحميل", "تفريغ", "مشوار توريد"],
+    "معدات": ["إيجار معدة", "صيانة معدة", "قطع غيار", "تشغيل معدة"],
+    "وقود": ["ديزل", "بنزين", "تعبئة معدة", "تعبئة مركبة"],
+    "صيانة": ["صيانة معدة", "صيانة موقع", "إصلاح أعطال", "تبديل قطعة"],
+    "مصروف إداري": ["قرطاسية", "اتصالات", "رسوم", "ضيافة"],
+    "أخرى": ["مصروف متنوع", "خدمة طارئة", "احتياج خاص"],
+}
+PROJECT_EXPENSE_CATEGORY_THEMES = {
+    "مواد": "materials",
+    "أجور": "labor",
+    "مقاول باطن": "subcontractor",
+    "نقل": "transport",
+    "معدات": "equipment",
+    "وقود": "fuel",
+    "صيانة": "maintenance",
+    "مصروف إداري": "admin",
+    "أخرى": "other",
+}
+PDF_REPORT_FONT_NAME = "UrbanRiseArabic"
+PDF_REPORT_FONT_CANDIDATES = [
+    r"C:\Windows\Fonts\arial.ttf",
+    r"C:\Windows\Fonts\tahoma.ttf",
+    r"C:\Windows\Fonts\trado.ttf",
+]
+WORKS_COMPANY_PROFILE = {
+    "name": "أوربان رايز ووركس",
+    "commercial_register": "1009136954",
+    "mobile": "0576080955",
+    "city": "الرياض",
+    "address": "طريق أبو بكر الصديق - النرجس - الرياض",
+    "representative": "م. فهد بن عبدالله آل عمره",
+    "national_number": "7040109964",
+}
+
 
 def save_project_daily_attachment(attachment: UploadFile | None) -> str:
     if not attachment or not getattr(attachment, "filename", ""):
@@ -1012,6 +1090,33 @@ def save_project_daily_attachment(attachment: UploadFile | None) -> str:
     safe_ext = re.sub(r"[^a-zA-Z0-9.]", "", ext)[:10]
     safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", os.path.splitext(original_name)[0]).strip("_") or "attachment"
     unique_name = f"project_daily_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{safe_ext}"
+
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    file_path = os.path.join(UPLOADS_DIR, unique_name)
+
+    attachment.file.seek(0)
+    file_bytes = attachment.file.read()
+    if not file_bytes:
+        return ""
+
+    with open(file_path, "wb") as output_file:
+        output_file.write(file_bytes)
+
+    return f"/static/uploads/{unique_name}"
+
+
+def save_project_expense_attachment(attachment: UploadFile | None) -> str:
+    if not attachment or not getattr(attachment, "filename", ""):
+        return ""
+
+    original_name = os.path.basename(str(attachment.filename or "")).strip()
+    if not original_name:
+        return ""
+
+    _, ext = os.path.splitext(original_name)
+    safe_ext = re.sub(r"[^a-zA-Z0-9.]", "", ext)[:10]
+    safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", os.path.splitext(original_name)[0]).strip("_") or "expense"
+    unique_name = f"project_expense_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{safe_ext}"
 
     os.makedirs(UPLOADS_DIR, exist_ok=True)
     file_path = os.path.join(UPLOADS_DIR, unique_name)
@@ -1047,6 +1152,765 @@ def delete_project_daily_attachment_file(attachment_path: str) -> None:
             os.remove(local_path)
         except OSError:
             pass
+
+
+def build_project_expense_category_options(selected_value: str = "") -> str:
+    options = ['<option value="">اختر التصنيف</option>']
+    for category in PROJECT_EXPENSE_CATEGORIES:
+        selected = "selected" if selected_value == category else ""
+        options.append(f'<option value="{escape(category)}" {selected}>{escape(category)}</option>')
+    return "".join(options)
+
+
+def project_expense_category_theme(category: str) -> str:
+    return PROJECT_EXPENSE_CATEGORY_THEMES.get((category or "").strip(), "other")
+
+
+def build_project_expense_category_selector(selected_value: str = "") -> str:
+    chips = []
+    for category in PROJECT_EXPENSE_CATEGORIES:
+        is_selected = selected_value == category
+        theme = project_expense_category_theme(category)
+        chips.append(
+            f"""
+            <button
+                type="button"
+                class="expense-category-chip{' is-selected' if is_selected else ''}"
+                data-category-value="{escape(category)}"
+                data-theme="{escape(theme)}"
+                aria-pressed="{str(is_selected).lower()}"
+            >
+                {escape(category)}
+            </button>
+            """
+        )
+    return f"""
+    <div class="expense-category-selector" id="expense-category-selector">
+        {''.join(chips)}
+    </div>
+    """
+
+
+def build_project_expense_name_suggestion_buttons() -> str:
+    buttons = []
+    for category, suggestions in PROJECT_EXPENSE_NAME_SUGGESTIONS.items():
+        buttons_html = "".join(
+            f'<button type="button" class="expense-suggestion-chip" data-suggestion="{escape(item)}">{escape(item)}</button>'
+            for item in suggestions
+        )
+        buttons.append(
+            f'<div class="expense-suggestion-group" data-category="{escape(category)}" hidden>{buttons_html}</div>'
+        )
+    return "".join(buttons)
+
+
+def build_project_supplier_datalist(suppliers) -> str:
+    names = []
+    seen = set()
+    for supplier in suppliers:
+        name = (supplier["name"] or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(f'<option value="{escape(name)}"></option>')
+    return "".join(names)
+
+
+def project_expense_category_label(expense) -> str:
+    category = (expense["category"] or "").strip() if "category" in expense.keys() else ""
+    other_type = (expense["other_type"] or "").strip() if "other_type" in expense.keys() else ""
+    if category == "أخرى" and other_type:
+        return f"أخرى - {other_type}"
+    return category or "-"
+
+
+def build_project_expense_category_badge(expense) -> str:
+    category = (expense["category"] or "").strip() if "category" in expense.keys() else ""
+    label = project_expense_category_label(expense)
+    theme = project_expense_category_theme(category)
+    return f'<span class="expense-badge expense-badge-category" data-theme="{escape(theme)}">{escape(label)}</span>' if label != "-" else "-"
+
+
+def build_project_expense_payment_status_badge(status: str) -> str:
+    cleaned_status = (status or "").strip()
+    if not cleaned_status:
+        return "-"
+    theme = "paid" if cleaned_status == "مدفوع" else "unpaid"
+    return f'<span class="expense-badge expense-badge-status" data-status="{escape(theme)}">{escape(cleaned_status)}</span>'
+
+
+def get_pdf_report_font_name() -> str:
+    try:
+        pdfmetrics.getFont(PDF_REPORT_FONT_NAME)
+        return PDF_REPORT_FONT_NAME
+    except KeyError:
+        pass
+
+    for font_path in PDF_REPORT_FONT_CANDIDATES:
+        if os.path.exists(font_path):
+            pdfmetrics.registerFont(TTFont(PDF_REPORT_FONT_NAME, font_path))
+            return PDF_REPORT_FONT_NAME
+    return "Helvetica"
+
+
+def format_arabic_pdf_text(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    reshaped = arabic_reshaper.reshape(text)
+    return get_display(reshaped)
+
+
+def decimal_from_value(value) -> Decimal:
+    try:
+        return Decimal(str(value or 0))
+    except Exception:
+        return Decimal("0")
+
+
+def format_percentage_display(value) -> str:
+    amount = decimal_from_value(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    integral_amount = amount.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    if amount == integral_amount:
+        return f"{integral_amount}%"
+    normalized = format(amount.normalize(), "f").rstrip("0").rstrip(".")
+    return f"{normalized}%"
+
+
+def calculate_percentage_amount(total, percentage) -> Decimal:
+    total_decimal = decimal_from_value(total)
+    percentage_decimal = decimal_from_value(percentage)
+    return (total_decimal * percentage_decimal / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def build_simple_arabic_table(data, col_widths, header_background="#dfeaf3", body_row_backgrounds=None):
+    table = Table(data, colWidths=col_widths, repeatRows=1, hAlign="RIGHT")
+    style_commands = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(header_background)),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]
+    if body_row_backgrounds:
+        style_commands.append(("ROWBACKGROUNDS", (0, 1), (-1, -1), body_row_backgrounds))
+    table.setStyle(TableStyle(style_commands))
+    return table
+
+
+def draw_works_contract_pdf_frame(canvas, doc):
+    canvas.saveState()
+    canvas.setFont(get_pdf_report_font_name(), 10)
+    canvas.setFillColor(colors.HexColor("#44576b"))
+    canvas.setStrokeColor(colors.HexColor("#d7dee7"))
+    footer_y = 12 * mm
+    line_y = footer_y + 7 * mm
+    canvas.line(doc.leftMargin, line_y, doc.pagesize[0] - doc.rightMargin, line_y)
+    canvas.setFont(get_pdf_report_font_name(), 8.5)
+    canvas.drawCentredString(
+        doc.pagesize[0] / 2,
+        footer_y,
+        format_arabic_pdf_text(
+            f"الرقم الوطني الموحد {WORKS_COMPANY_PROFILE['national_number']} / {WORKS_COMPANY_PROFILE['address']} / جوال {WORKS_COMPANY_PROFILE['mobile']}"
+        ),
+    )
+    canvas.restoreState()
+
+
+def build_project_expenses_report_pdf(project, expenses, contract_total: float, company: str = "") -> tuple[str, str]:
+    os.makedirs("pdfs", exist_ok=True)
+    file_name = f"project_expenses_report_{project['id']}.pdf"
+    file_path = os.path.join("pdfs", file_name)
+    font_name = get_pdf_report_font_name()
+
+    total_expenses = sum(safe_float(expense["amount"]) for expense in expenses)
+    remaining = contract_total - total_expenses
+    spend_ratio = (total_expenses / contract_total * 100) if contract_total > 0 else 0.0
+    total_paid = sum(
+        safe_float(expense["amount"])
+        for expense in expenses
+        if (expense["payment_status"] or "").strip() == "مدفوع"
+    )
+    total_unpaid = sum(
+        safe_float(expense["amount"])
+        for expense in expenses
+        if (expense["payment_status"] or "").strip() == "غير مدفوع"
+    )
+    notes_list = [
+        (expense["notes"] or "").strip()
+        for expense in expenses
+        if "notes" in expense.keys() and (expense["notes"] or "").strip()
+    ]
+    general_notes = " | ".join(notes_list[:4])
+    report_company_name = "أوربان رايز ووركس" if normalize_access_value(company) == "works" else "مجموعة أوربان رايز"
+
+    doc = SimpleDocTemplate(
+        file_path,
+        pagesize=landscape(A4),
+        rightMargin=16 * mm,
+        leftMargin=16 * mm,
+        topMargin=16 * mm,
+        bottomMargin=14 * mm,
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "ExpenseReportTitle",
+        parent=styles["Heading1"],
+        fontName=font_name,
+        fontSize=18,
+        leading=24,
+        alignment=TA_RIGHT,
+        textColor=colors.HexColor("#0f2940"),
+        spaceAfter=6,
+    )
+    subtitle_style = ParagraphStyle(
+        "ExpenseReportSubtitle",
+        parent=styles["Normal"],
+        fontName=font_name,
+        fontSize=10,
+        leading=14,
+        alignment=TA_RIGHT,
+        textColor=colors.HexColor("#4b5f73"),
+    )
+    section_style = ParagraphStyle(
+        "ExpenseReportSection",
+        parent=styles["Heading2"],
+        fontName=font_name,
+        fontSize=13,
+        leading=18,
+        alignment=TA_RIGHT,
+        textColor=colors.HexColor("#11466b"),
+        spaceAfter=8,
+        spaceBefore=8,
+    )
+    body_style = ParagraphStyle(
+        "ExpenseReportBody",
+        parent=styles["Normal"],
+        fontName=font_name,
+        fontSize=10,
+        leading=14,
+        alignment=TA_RIGHT,
+        textColor=colors.HexColor("#1e293b"),
+    )
+
+    story = [
+        Paragraph(format_arabic_pdf_text(report_company_name), title_style),
+        Paragraph(
+            format_arabic_pdf_text(
+                f"تقرير مصروفات المشروع | اسم المشروع: {project['name'] or f'مشروع رقم {project['id']}'} | تاريخ الإصدار: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            ),
+            subtitle_style,
+        ),
+        Spacer(1, 8),
+        Paragraph(format_arabic_pdf_text("الملخص المالي"), section_style),
+    ]
+
+    summary_data = [
+        [
+            Paragraph(format_arabic_pdf_text("نسبة الصرف"), body_style),
+            Paragraph(format_arabic_pdf_text("المتبقي"), body_style),
+            Paragraph(format_arabic_pdf_text("إجمالي المصروفات"), body_style),
+            Paragraph(format_arabic_pdf_text("قيمة العقد"), body_style),
+        ],
+        [
+            Paragraph(format_arabic_pdf_text(f"{spend_ratio:.1f}%"), body_style),
+            Paragraph(format_arabic_pdf_text(f"{format_currency(remaining)} ريال"), body_style),
+            Paragraph(format_arabic_pdf_text(f"{format_currency(total_expenses)} ريال"), body_style),
+            Paragraph(format_arabic_pdf_text(f"{format_currency(contract_total)} ريال"), body_style),
+        ],
+    ]
+    summary_table = Table(summary_data, colWidths=[55 * mm, 60 * mm, 65 * mm, 60 * mm], hAlign="RIGHT")
+    summary_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eaf1f7")),
+        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#f8fafc")),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d7dee7")),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.extend([summary_table, Spacer(1, 10), Paragraph(format_arabic_pdf_text("تفاصيل المصروفات"), section_style)])
+
+    table_rows = [[
+        Paragraph(format_arabic_pdf_text("التاريخ"), body_style),
+        Paragraph(format_arabic_pdf_text("البيان"), body_style),
+        Paragraph(format_arabic_pdf_text("التصنيف"), body_style),
+        Paragraph(format_arabic_pdf_text("المورد"), body_style),
+        Paragraph(format_arabic_pdf_text("طريقة الدفع"), body_style),
+        Paragraph(format_arabic_pdf_text("حالة السداد"), body_style),
+        Paragraph(format_arabic_pdf_text("المبلغ"), body_style),
+    ]]
+
+    for expense in expenses:
+        table_rows.append([
+            Paragraph(format_arabic_pdf_text(expense["date"] or "-"), body_style),
+            Paragraph(format_arabic_pdf_text(expense["title"] or "-"), body_style),
+            Paragraph(format_arabic_pdf_text(project_expense_category_label(expense)), body_style),
+            Paragraph(format_arabic_pdf_text(expense["vendor"] or "-"), body_style),
+            Paragraph(format_arabic_pdf_text(expense["payment_method"] or "-"), body_style),
+            Paragraph(format_arabic_pdf_text(expense["payment_status"] or "-"), body_style),
+            Paragraph(format_arabic_pdf_text(f"{format_currency(safe_float(expense['amount']))} ريال"), body_style),
+        ])
+
+    if len(table_rows) == 1:
+        table_rows.append([
+            Paragraph(format_arabic_pdf_text("-"), body_style),
+            Paragraph(format_arabic_pdf_text("لا توجد مصروفات مسجلة"), body_style),
+            Paragraph(format_arabic_pdf_text("-"), body_style),
+            Paragraph(format_arabic_pdf_text("-"), body_style),
+            Paragraph(format_arabic_pdf_text("-"), body_style),
+            Paragraph(format_arabic_pdf_text("-"), body_style),
+            Paragraph(format_arabic_pdf_text("0 ريال"), body_style),
+        ])
+
+    expenses_table = Table(
+        table_rows,
+        colWidths=[30 * mm, 58 * mm, 42 * mm, 42 * mm, 35 * mm, 32 * mm, 33 * mm],
+        repeatRows=1,
+        hAlign="RIGHT",
+    )
+    expenses_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf3")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#14344f")),
+        ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    story.extend([expenses_table, Spacer(1, 10), Paragraph(format_arabic_pdf_text("مؤشرات إضافية"), section_style)])
+
+    extra_notes_lines = [
+        f"عدد القيود: {len(expenses)}",
+        f"إجمالي المدفوع: {format_currency(total_paid)} ريال",
+        f"إجمالي غير المدفوع: {format_currency(total_unpaid)} ريال",
+    ]
+    if general_notes:
+        extra_notes_lines.append(f"ملاحظات عامة: {general_notes}")
+    else:
+        extra_notes_lines.append("ملاحظات عامة: لا توجد ملاحظات إضافية")
+
+    for line in extra_notes_lines:
+        story.append(Paragraph(format_arabic_pdf_text(line), body_style))
+        story.append(Spacer(1, 3))
+
+    doc.build(story)
+    return file_path, file_name
+
+
+def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[str, str]:
+    os.makedirs("pdfs", exist_ok=True)
+    file_name = f"quote_report_{quote['id']}.pdf"
+    file_path = os.path.join("pdfs", file_name)
+    font_name = get_pdf_report_font_name()
+    report_company_name = "أوربان رايز ووركس" if normalize_access_value(company) == "works" else "مجموعة أوربان رايز"
+
+    total = 0.0
+    for item in items:
+        total += safe_float(item["qty"]) * safe_float(item["unit_price"])
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("QuoteReportTitle", parent=styles["Heading1"], fontName=font_name, fontSize=18, leading=24, alignment=TA_RIGHT, textColor=colors.HexColor("#0f2940"))
+    subtitle_style = ParagraphStyle("QuoteReportSubtitle", parent=styles["Normal"], fontName=font_name, fontSize=10, leading=14, alignment=TA_RIGHT, textColor=colors.HexColor("#4b5f73"))
+    section_style = ParagraphStyle("QuoteReportSection", parent=styles["Heading2"], fontName=font_name, fontSize=13, leading=18, alignment=TA_RIGHT, textColor=colors.HexColor("#11466b"), spaceAfter=6, spaceBefore=6)
+    body_style = ParagraphStyle("QuoteReportBody", parent=styles["Normal"], fontName=font_name, fontSize=10, leading=16, alignment=TA_RIGHT, textColor=colors.HexColor("#1e293b"))
+    centered_style = ParagraphStyle("QuoteReportCentered", parent=body_style, alignment=1, fontSize=15, leading=20, textColor=colors.HexColor("#102235"))
+    intro_text = "السلام عليكم ورحمة الله وبركاته، نفيدكم بتقديم عرض السعر التالي حسب البيانات والبنود الموضحة أدناه."
+    footer_text = "هذا العرض صالح للاعتماد وفق البنود والأسعار الموضحة أعلاه، ويسعدنا خدمتكم والإجابة عن أي استفسار."
+
+    story = [
+        Paragraph(format_arabic_pdf_text(report_company_name), title_style),
+        Paragraph(
+            format_arabic_pdf_text(
+                f"عرض سعر | رقم العرض: {quote['id']} | تاريخ الإصدار: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            ),
+            subtitle_style,
+        ),
+        Spacer(1, 8),
+        Paragraph(format_arabic_pdf_text("عرض سعر"), centered_style),
+        Spacer(1, 5),
+        Paragraph(format_arabic_pdf_text(intro_text), body_style),
+        Spacer(1, 8),
+        Paragraph(format_arabic_pdf_text("بيانات العميل والمشروع"), section_style),
+    ]
+
+    summary_table = Table([
+        [
+            Paragraph(format_arabic_pdf_text("تاريخ العرض"), body_style),
+            Paragraph(format_arabic_pdf_text("مدة التنفيذ"), body_style),
+            Paragraph(format_arabic_pdf_text("موقع المشروع"), body_style),
+            Paragraph(format_arabic_pdf_text("اسم العميل"), body_style),
+        ],
+        [
+            Paragraph(format_arabic_pdf_text(datetime.now().strftime("%Y-%m-%d")), body_style),
+            Paragraph(format_arabic_pdf_text(quote["duration"] or "-"), body_style),
+            Paragraph(format_arabic_pdf_text(quote["project_location"] or "-"), body_style),
+            Paragraph(format_arabic_pdf_text(quote["client"] or "-"), body_style),
+        ],
+    ], colWidths=[45 * mm, 45 * mm, 85 * mm, 65 * mm], hAlign="RIGHT")
+    summary_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eaf1f7")),
+        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#f8fafc")),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d7dee7")),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+    ]))
+    story.extend([summary_table, Spacer(1, 10), Paragraph(format_arabic_pdf_text("بنود عرض السعر"), section_style)])
+
+    items_rows = [[
+        Paragraph(format_arabic_pdf_text("الإجمالي"), body_style),
+        Paragraph(format_arabic_pdf_text("سعر الوحدة"), body_style),
+        Paragraph(format_arabic_pdf_text("الكمية"), body_style),
+        Paragraph(format_arabic_pdf_text("الوصف"), body_style),
+    ]]
+    for item in items:
+        line_total = safe_float(item["qty"]) * safe_float(item["unit_price"])
+        items_rows.append([
+            Paragraph(format_arabic_pdf_text(f"{format_currency(line_total)} ريال"), body_style),
+            Paragraph(format_arabic_pdf_text(f"{format_currency(safe_float(item['unit_price']))} ريال"), body_style),
+            Paragraph(format_arabic_pdf_text(format_currency(safe_float(item["qty"]))), body_style),
+            Paragraph(format_arabic_pdf_text(item["description"] or "-"), body_style),
+        ])
+    if len(items_rows) == 1:
+        items_rows.append([
+            Paragraph(format_arabic_pdf_text("0 ريال"), body_style),
+            Paragraph(format_arabic_pdf_text("-"), body_style),
+            Paragraph(format_arabic_pdf_text("-"), body_style),
+            Paragraph(format_arabic_pdf_text("لا توجد بنود"), body_style),
+        ])
+    items_rows.append([
+        Paragraph(format_arabic_pdf_text(f"{format_currency(total)} ريال"), body_style),
+        Paragraph(format_arabic_pdf_text(""), body_style),
+        Paragraph(format_arabic_pdf_text(""), body_style),
+        Paragraph(format_arabic_pdf_text("الإجمالي"), body_style),
+    ])
+    items_table = Table(items_rows, colWidths=[45 * mm, 45 * mm, 35 * mm, 115 * mm], repeatRows=1, hAlign="RIGHT")
+    items_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf3")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f8fafc")]),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eef4f8")),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.extend([items_table, Spacer(1, 10), Paragraph(format_arabic_pdf_text("جدول الدفعات"), section_style)])
+
+    payment_rows = [[
+        Paragraph(format_arabic_pdf_text("المبلغ"), body_style),
+        Paragraph(format_arabic_pdf_text("النسبة"), body_style),
+        Paragraph(format_arabic_pdf_text("اسم الدفعة"), body_style),
+    ]]
+    for payment in payments:
+        amount = calculate_percentage_amount(total, payment["percentage"])
+        payment_rows.append([
+            Paragraph(format_arabic_pdf_text(f"{format_currency(float(amount))} ريال"), body_style),
+            Paragraph(format_arabic_pdf_text(format_percentage_display(payment["percentage"])), body_style),
+            Paragraph(format_arabic_pdf_text(payment["title"] or "-"), body_style),
+        ])
+    if len(payment_rows) == 1:
+        payment_rows.append([
+            Paragraph(format_arabic_pdf_text("-"), body_style),
+            Paragraph(format_arabic_pdf_text("-"), body_style),
+            Paragraph(format_arabic_pdf_text("لا توجد دفعات"), body_style),
+        ])
+    payments_table = Table(payment_rows, colWidths=[55 * mm, 45 * mm, 110 * mm], repeatRows=1, hAlign="RIGHT")
+    payments_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf3")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.extend([
+        payments_table,
+        Spacer(1, 10),
+        Paragraph(format_arabic_pdf_text(footer_text), body_style),
+        Spacer(1, 8),
+        Paragraph(format_arabic_pdf_text("بيانات التواصل: 0566005668 | kalamrah505@gmail.com | الرياض - حي النرجس - طريق أبو بكر الصديق"), subtitle_style),
+    ])
+
+    doc = SimpleDocTemplate(file_path, pagesize=landscape(A4), rightMargin=16 * mm, leftMargin=16 * mm, topMargin=16 * mm, bottomMargin=14 * mm)
+    doc.build(story)
+    return file_path, file_name
+
+
+def build_contract_report_pdf(contract, quote, items, payments, company: str = "", project=None) -> tuple[str, str]:
+    os.makedirs("pdfs", exist_ok=True)
+    file_name = f"contract_report_{contract['id']}.pdf"
+    file_path = os.path.join("pdfs", file_name)
+    font_name = get_pdf_report_font_name()
+    company_profile = WORKS_COMPANY_PROFILE
+    total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
+    contract_number = f"25/{int(contract['id']):04d}"
+    issue_date = datetime.now().strftime("%d-%m-%Y")
+    project_name = ""
+    if project and "name" in project.keys():
+        project_name = (project["name"] or "").strip()
+    project_name = project_name or ""
+    project_location = (quote["project_location"] or "").strip() or ""
+    client_name = (quote["client"] or "").strip() or ""
+    client_id = (quote["client_id"] or "").strip() or ""
+    client_address = (quote["client_address"] or "").strip() or ""
+    duration_text = (quote["duration"] or "").strip() or ""
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("ContractReportTitle", parent=styles["Heading1"], fontName=font_name, fontSize=18, leading=24, alignment=TA_RIGHT, textColor=colors.HexColor("#213547"), spaceAfter=4)
+    subtitle_style = ParagraphStyle("ContractReportSubtitle", parent=styles["Normal"], fontName=font_name, fontSize=9.5, leading=14, alignment=TA_RIGHT, textColor=colors.HexColor("#6b7280"))
+    body_style = ParagraphStyle("ContractReportBody", parent=styles["Normal"], fontName=font_name, fontSize=10.5, leading=18, alignment=TA_RIGHT, textColor=colors.HexColor("#2b3440"))
+    section_style = ParagraphStyle("ContractReportSection", parent=body_style, fontSize=11.5, leading=19, textColor=colors.HexColor("#1f2937"), spaceBefore=4, spaceAfter=0)
+    centered_style = ParagraphStyle("ContractReportCentered", parent=body_style, alignment=1, fontSize=18, leading=26, textColor=colors.HexColor("#1f2d3d"))
+    small_label_style = ParagraphStyle("ContractReportSmallLabel", parent=body_style, fontSize=9.2, leading=13, textColor=colors.HexColor("#7a6851"))
+    card_value_style = ParagraphStyle("ContractReportCardValue", parent=body_style, fontSize=11, leading=17, textColor=colors.HexColor("#243445"))
+
+    scope_story = []
+    if items:
+        for index, item in enumerate(items, start=1):
+            description = (item["description"] or "").strip() or ""
+            line_total = safe_float(item["qty"]) * safe_float(item["unit_price"])
+            scope_story.append(Paragraph(format_arabic_pdf_text(f"{index}. {description}"), body_style))
+            scope_story.append(Paragraph(format_arabic_pdf_text(f"بمبلغ: {format_currency(line_total)} ريال"), body_style))
+    else:
+        scope_story.append(Paragraph(format_arabic_pdf_text("1. "), body_style))
+        scope_story.append(Paragraph(format_arabic_pdf_text("بمبلغ: "), body_style))
+
+    payment_story = []
+    if payments:
+        for payment in payments:
+            amount = calculate_percentage_amount(total, payment["percentage"])
+            title = (payment["title"] or "").strip()
+            if title:
+                payment_text = f"- {title} بنسبة ({format_percentage_display(payment['percentage'])}) بمبلغ {format_currency(float(amount))} ريال"
+            else:
+                payment_text = f"- دفعة بنسبة ({format_percentage_display(payment['percentage'])}) بمبلغ {format_currency(float(amount))} ريال"
+            payment_story.append(Paragraph(format_arabic_pdf_text(payment_text), body_style))
+    else:
+        payment_story.append(Paragraph(format_arabic_pdf_text("- "), body_style))
+
+    header_band = Table([[
+        Paragraph(format_arabic_pdf_text(company_profile["name"]), title_style),
+        Paragraph(format_arabic_pdf_text("عقد تنفيذ أعمال مقاولات عامة"), centered_style),
+    ]], colWidths=[65 * mm, 95 * mm], hAlign="RIGHT")
+    header_band.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f5efe6")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#d6c4ab")),
+        ("LINEBEFORE", (1, 0), (1, 0), 0.5, colors.HexColor("#ddcfba")),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+
+    meta_cards = Table([
+        [
+            [
+                Paragraph(format_arabic_pdf_text("رقم العقد"), small_label_style),
+                Spacer(1, 5),
+                Paragraph(format_arabic_pdf_text(contract_number), card_value_style),
+            ],
+            [
+                Paragraph(format_arabic_pdf_text("التاريخ"), small_label_style),
+                Spacer(1, 5),
+                Paragraph(format_arabic_pdf_text(issue_date), card_value_style),
+            ],
+        ]
+    ], colWidths=[78 * mm, 78 * mm], hAlign="RIGHT")
+    meta_cards.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fbf8f3")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#e2d6c5")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#ede3d6")),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+
+    def build_section_heading(text: str):
+        heading = Table([[Paragraph(format_arabic_pdf_text(text), section_style)]], colWidths=[166 * mm], hAlign="RIGHT")
+        heading.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f4eee7")),
+            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#d8c9b5")),
+            ("LINEAFTER", (0, 0), (0, 0), 3, colors.HexColor("#b79a75")),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ]))
+        return heading
+
+    parties_table = Table([
+        [
+            [
+                Paragraph(format_arabic_pdf_text("الطرف الثاني"), section_style),
+                Spacer(1, 4),
+                Paragraph(format_arabic_pdf_text(f"السيد/ {client_name}، بموجب هوية رقم {client_id}،"), body_style),
+                Paragraph(format_arabic_pdf_text(f"وعنوانه: {client_address}،"), body_style),
+                Paragraph(format_arabic_pdf_text("ويشار إليه فيما بعد بـ \"الطرف الثاني\" أو \"العميل\"."), body_style),
+                Spacer(1, 4),
+                Paragraph(format_arabic_pdf_text(f"المشروع: {project_name or ''}"), subtitle_style),
+                Paragraph(format_arabic_pdf_text(f"الموقع: {project_location or ''}"), subtitle_style),
+            ],
+            [
+                Paragraph(format_arabic_pdf_text("الطرف الأول"), section_style),
+                Spacer(1, 4),
+                Paragraph(format_arabic_pdf_text(f"شركة {company_profile['name']}، سجل تجاري رقم {company_profile['commercial_register']}،"), body_style),
+                Paragraph(format_arabic_pdf_text(f"وعنوانها: {company_profile['address']}،"), body_style),
+                Paragraph(format_arabic_pdf_text(f"ويمثلها في هذا العقد {company_profile['representative']}،"), body_style),
+                Paragraph(format_arabic_pdf_text("ويشار إليها فيما بعد بـ \"الطرف الأول\" أو \"المقاول\"."), body_style),
+                Spacer(1, 4),
+                Paragraph(format_arabic_pdf_text(f"الرقم الوطني الموحد: {company_profile['national_number']}"), subtitle_style),
+                Paragraph(format_arabic_pdf_text(f"جوال: {company_profile['mobile']}"), subtitle_style),
+            ],
+        ]
+    ], colWidths=[82 * mm, 82 * mm], hAlign="RIGHT")
+    parties_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fcfaf7")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#ddd1c0")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#ece2d7")),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+
+    contract_value_card = Table([[
+        [
+            Paragraph(format_arabic_pdf_text("القيمة الإجمالية"), small_label_style),
+            Spacer(1, 4),
+            Paragraph(format_arabic_pdf_text(f"{format_currency(total)} ريال سعودي فقط لا غير"), card_value_style),
+        ]
+    ]], colWidths=[166 * mm], hAlign="RIGHT")
+    contract_value_card.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f7f2eb")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#d8c9b5")),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+    ]))
+
+    story = [
+        header_band,
+        Spacer(1, 8),
+        meta_cards,
+        Spacer(1, 10),
+        parties_table,
+        Spacer(1, 8),
+        Paragraph(format_arabic_pdf_text("وقد قرر الطرفان وهما بكامل أهليتهما الشرعية والنظامية التعاقد وفق البنود التالية:"), body_style),
+        Spacer(1, 8),
+        build_section_heading("أولاً: التمهيد"),
+        Spacer(1, 4),
+        Paragraph(format_arabic_pdf_text("يعد هذا التمهيد جزءاً لا يتجزأ من هذا العقد ومكملاً له في جميع بنوده."), body_style),
+        Paragraph(format_arabic_pdf_text(f"وحيث أن الطرف الثاني يرغب في تنفيذ أعمال مقاولات عامة في الموقع الكائن في {project_location or ''}،"), body_style),
+        Paragraph(format_arabic_pdf_text("وحيث أن الطرف الأول يمتلك الخبرة والكفاءة لتنفيذ هذه الأعمال،"), body_style),
+        Paragraph(format_arabic_pdf_text("فقد تم الاتفاق على ما يلي:"), body_style),
+        Spacer(1, 8),
+        build_section_heading("ثانياً: نطاق العمل"),
+        Spacer(1, 4),
+    ]
+
+    story.extend(scope_story)
+    story.extend([
+        Spacer(1, 8),
+        build_section_heading("ثالثاً: مدة التنفيذ"),
+        Spacer(1, 4),
+        Paragraph(format_arabic_pdf_text(f"1. مدة تنفيذ الأعمال هي ({duration_text}) تبدأ من تاريخ استلام الموقع."), body_style),
+        Paragraph(format_arabic_pdf_text("2. في حال تأخر الطرف الثاني في تسليم الموقع أو الدفعات، تمدد المدة تلقائياً."), body_style),
+        Spacer(1, 8),
+        build_section_heading("رابعاً: قيمة العقد والدفعات"),
+        Spacer(1, 4),
+        contract_value_card,
+        Spacer(1, 6),
+        Paragraph(format_arabic_pdf_text("2. يتم السداد كالتالي:"), body_style),
+    ])
+    story.extend(payment_story)
+    story.extend([
+        Paragraph(format_arabic_pdf_text("3. يتم السداد بموجب تحويل بنكي إلى حساب الطرف الأول لدى بنك الإنماء رقم (SA5405000068207285292000)."), body_style),
+        Spacer(1, 8),
+        build_section_heading("خامساً: الشروط العامة"),
+        Spacer(1, 4),
+        Paragraph(format_arabic_pdf_text("1. تنفيذ الأعمال وفق المتطلبات المتفق عليها."), body_style),
+        Paragraph(format_arabic_pdf_text("2. مسؤولية سلامة العاملين على الطرف الأول."), body_style),
+        Paragraph(format_arabic_pdf_text("3. يحق للمقاول وضع لوحة تعريفية في الموقع."), body_style),
+        Spacer(1, 8),
+        build_section_heading("سادساً: مسؤوليات الطرفين"),
+        Spacer(1, 4),
+        Paragraph(format_arabic_pdf_text("مسؤوليات الطرف الأول (المقاول):"), body_style),
+        Paragraph(format_arabic_pdf_text("1. توفير العمالة والمعدات اللازمة."), body_style),
+        Paragraph(format_arabic_pdf_text("2. المحافظة على نظافة الموقع."), body_style),
+        Paragraph(format_arabic_pdf_text("3. تسليم الأعمال في الوقت المحدد."), body_style),
+        Spacer(1, 4),
+        Paragraph(format_arabic_pdf_text("مسؤوليات الطرف الثاني (العميل):"), body_style),
+        Paragraph(format_arabic_pdf_text("1. تسليم الموقع جاهز للعمل."), body_style),
+        Paragraph(format_arabic_pdf_text("2. سداد الدفعات في وقتها."), body_style),
+        Spacer(1, 8),
+        build_section_heading("سابعاً: الاستلام"),
+        Spacer(1, 4),
+        Paragraph(format_arabic_pdf_text("1. يتم إشعار العميل بموعد التسليم."), body_style),
+        Paragraph(format_arabic_pdf_text("2. يجب الاستلام خلال 3 أيام من الإشعار."), body_style),
+        Paragraph(format_arabic_pdf_text("3. في حال عدم الحضور يعتبر المشروع مستلماً حكماً."), body_style),
+        Paragraph(format_arabic_pdf_text("4. يحق للمقاول توثيق التسليم."), body_style),
+        Spacer(1, 8),
+        build_section_heading("ثامناً: الأحكام العامة"),
+        Spacer(1, 4),
+        Paragraph(format_arabic_pdf_text("1. يخضع العقد لأنظمة المملكة العربية السعودية."), body_style),
+        Paragraph(format_arabic_pdf_text(f"2. في حال النزاع يتم حله ودياً، وإن تعذر يحال للمحكمة التجارية ب{company_profile['city']}."), body_style),
+        Paragraph(format_arabic_pdf_text("3. حرر العقد من نسختين لكل طرف نسخة."), body_style),
+        Spacer(1, 10),
+        Paragraph(format_arabic_pdf_text("والله ولي التوفيق"), centered_style),
+        Spacer(1, 10),
+        Paragraph(format_arabic_pdf_text(f"حرر في مدينة {company_profile['city']} بتاريخ: ........ الموافق .... / .... / .... هـ"), body_style),
+        Spacer(1, 18),
+    ])
+
+    signature_table = Table([
+        [
+            [
+                Paragraph(format_arabic_pdf_text("الطرف الثاني"), section_style),
+                Spacer(1, 10),
+                Paragraph(format_arabic_pdf_text("الاسم:"), body_style),
+                Spacer(1, 18),
+                Paragraph(format_arabic_pdf_text("التوقيع:"), body_style),
+            ],
+            [
+                Paragraph(format_arabic_pdf_text("الطرف الأول"), section_style),
+                Spacer(1, 10),
+                Paragraph(format_arabic_pdf_text(company_profile["name"]), body_style),
+                Paragraph(format_arabic_pdf_text(f"الاسم: {company_profile['representative']}"), body_style),
+                Spacer(1, 10),
+                Paragraph(format_arabic_pdf_text("التوقيع:"), body_style),
+            ],
+        ]
+    ], colWidths=[80 * mm, 80 * mm], hAlign="CENTER")
+    signature_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fcfaf7")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#ddd1c0")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#ece2d7")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+    ]))
+    story.extend([signature_table])
+
+    doc = SimpleDocTemplate(file_path, pagesize=A4, rightMargin=22 * mm, leftMargin=22 * mm, topMargin=24 * mm, bottomMargin=18 * mm)
+    doc.build(story, onFirstPage=draw_works_contract_pdf_frame, onLaterPages=draw_works_contract_pdf_frame)
+    return file_path, file_name
 
 
 def save_maintenance_image(image: UploadFile | None) -> str:
@@ -3668,6 +4532,8 @@ URBAN RISE<br>WORKS
 
 <h2 style="text-align:center">عرض سعر</h2>
 
+{f"<div style='display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin:18px 0;'><a href='/quote-pdf/{quote_id}?company={company}' class='glass-btn expense-primary-btn'>تحميل عرض السعر PDF</a></div>" if normalize_access_value(company) == "works" else ""}
+
 <hr>
 
 <p>{intro_text}</p>
@@ -3748,10 +4614,40 @@ URBAN RISE<br>WORKS
 
 <br>
 
-{"" if is_read_only_works_partner else f'<a href="/convert-to-contract/{quote_id}?company={company}" class="glass-btn">تحويل لعقد</a>'}
+    {"" if is_read_only_works_partner else f'<a href="/convert-to-contract/{quote_id}?company={company}" class="action-btn">تحويل لعقد</a>'}
 
 </div>
 """
+
+@app.get("/quote-pdf/{quote_id}")
+@app.get("/quote-report/{quote_id}")
+def quote_report(request: Request, quote_id: int, company: str = ""):
+    access_result = ensure_company_access(request, company)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    if normalize_access_value(company) != "works":
+        return HTMLResponse("<h2>هذه الميزة متاحة لشركة المقاولات فقط</h2>", status_code=403)
+
+    conn = get_db()
+    quote = conn.execute(
+        "SELECT * FROM quotes WHERE id = ? AND company = ?",
+        (quote_id, company)
+    ).fetchone()
+    if not quote:
+        conn.close()
+        return HTMLResponse("<h2>عرض السعر غير موجود</h2>", status_code=404)
+    items = conn.execute(
+        "SELECT description, qty, unit_price FROM quote_items WHERE quote_id = ?",
+        (quote_id,)
+    ).fetchall()
+    payments = conn.execute(
+        "SELECT * FROM quote_payments WHERE quote_id = ?",
+        (quote_id,)
+    ).fetchall()
+    conn.close()
+
+    file_path, file_name = build_quote_report_pdf(quote, items, payments, company=company)
+    return FileResponse(path=file_path, filename=file_name, media_type="application/pdf")
 
 @app.post("/add-item/{quote_id}", response_class=HTMLResponse)
 def add_item(
@@ -4207,6 +5103,7 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
 
 <h2 style="text-align:center">عقد مقاولات</h2>
 {"<div class='inventory-note' style='margin:20px 0;text-align:center;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else f'''<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:20px 0;"><a href="/edit-contract/{contract_id}?company={company}" class="action-btn">تعديل</a><a href="/delete-company-contract/{contract_id}?company={company}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا العقد؟')">حذف</a></div>'''}
+{f"<div style='display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin:12px 0 22px;'><a href='/contract-pdf/{contract_id}?company={company}' class='glass-btn expense-primary-btn'>تحميل العقد PDF</a></div>" if normalize_access_value(company) == "works" else ""}
 
 <div class="inventory-panel inventory-table-panel" style="margin:20px 0;">
 <h3>المرفقات</h3>
@@ -4342,6 +5239,52 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
 
 </div>
 """
+
+
+@app.get("/contract-pdf/{contract_id}")
+@app.get("/contract-report/{contract_id}")
+def contract_report(request: Request, contract_id: int, company: str = ""):
+    access_result = ensure_company_access(request, company)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    if normalize_access_value(company) != "works":
+        return HTMLResponse("<h2>هذه الميزة متاحة لشركة المقاولات فقط</h2>", status_code=403)
+
+    conn = get_db()
+    contract = conn.execute(
+        "SELECT * FROM contracts WHERE id = ? AND company = ?",
+        (contract_id, company)
+    ).fetchone()
+    if not contract:
+        conn.close()
+        return HTMLResponse("<h2>العقد غير موجود</h2>", status_code=404)
+    if get_contract_record_source(contract) == CONTRACT_RECORD_SOURCE_MANUAL_PROJECT:
+        conn.close()
+        return HTMLResponse("<h2>لا يوجد تقرير عقد مستقل لهذا الإدخال</h2>", status_code=400)
+
+    quote = conn.execute(
+        "SELECT * FROM quotes WHERE id = ?",
+        (contract["quote_id"],)
+    ).fetchone()
+    if not quote:
+        conn.close()
+        return HTMLResponse("<h2>عرض السعر المرتبط غير موجود</h2>", status_code=404)
+    project = conn.execute(
+        "SELECT * FROM projects WHERE contract_id = ? AND company = ? LIMIT 1",
+        (contract_id, company)
+    ).fetchone()
+    items = conn.execute(
+        "SELECT description, qty, unit_price FROM quote_items WHERE quote_id = ?",
+        (quote["id"],)
+    ).fetchall()
+    payments = conn.execute(
+        "SELECT * FROM quote_payments WHERE quote_id = ?",
+        (quote["id"],)
+    ).fetchall()
+    conn.close()
+
+    file_path, file_name = build_contract_report_pdf(contract, quote, items, payments, company=company, project=project)
+    return FileResponse(path=file_path, filename=file_name, media_type="application/pdf")
 
 
 
@@ -4887,25 +5830,93 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
             back_label = "⬅ رجوع للمشاريع"
 
     conn = get_db()
+    project = conn.execute(
+        "SELECT * FROM projects WHERE id = ?",
+        (project_id,)
+    ).fetchone()
+    suppliers = conn.execute(
+        "SELECT * FROM project_suppliers WHERE project_id = ? ORDER BY name COLLATE NOCASE ASC, id DESC",
+        (project_id,)
+    ).fetchall()
+    items = []
+    if project and project["contract_id"]:
+        contract = conn.execute(
+            "SELECT * FROM contracts WHERE id = ?",
+            (project["contract_id"],)
+        ).fetchone()
+        if contract and contract["quote_id"]:
+            items = conn.execute(
+                "SELECT qty, unit_price FROM quote_items WHERE quote_id = ?",
+                (contract["quote_id"],)
+            ).fetchall()
 
     expenses = conn.execute(
-        "SELECT * FROM project_expenses WHERE project_id = ?",
+        "SELECT * FROM project_expenses WHERE project_id = ? ORDER BY date DESC, id DESC",
         (project_id,)
     ).fetchall()
 
     conn.close()
 
     rows = ""
-    total = 0
+    total = 0.0
+    contract_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
+    if contract_total <= 0 and project and "contract_value" in project.keys():
+        contract_total = safe_float(project["contract_value"])
+    remaining = contract_total - sum(safe_float(e["amount"]) for e in expenses)
+    spend_ratio = (sum(safe_float(e["amount"]) for e in expenses) / contract_total * 100) if contract_total > 0 else 0.0
+    feedback_html = render_page_feedback(
+        request.query_params.get("message", ""),
+        request.query_params.get("error", ""),
+    )
+    category_options = build_project_expense_category_options()
+    category_selector = build_project_expense_category_selector()
+    payment_method_options = "".join(
+        f'<option value="{escape(item)}">{escape(item)}</option>'
+        for item in PROJECT_EXPENSE_PAYMENT_METHODS
+    )
+    payment_status_options = "".join(
+        f'<option value="{escape(item)}">{escape(item)}</option>'
+        for item in PROJECT_EXPENSE_PAYMENT_STATUSES
+    )
+    supplier_datalist = build_project_supplier_datalist(suppliers)
+    supplier_hint = (
+        "<div style='color:rgba(255,255,255,0.78);font-size:13px;'>يمكن اختيار اسم مورد موجود أو كتابة اسم جديد.</div>"
+        if supplier_datalist else
+        "<div style='color:rgba(255,255,255,0.78);font-size:13px;'>لا يوجد موردون مسجلون بعد، يمكنك كتابة الاسم مباشرة.</div>"
+    )
+    project_name = escape(project["name"] or f"مشروع رقم {project_id}") if project else f"مشروع رقم {project_id}"
+    summary_remaining_class = "finance-card-positive" if remaining >= 0 else "finance-card-negative"
+    show_actions = not is_read_only_works_partner
 
     for e in expenses:
-        total += e["amount"]
+        amount = safe_float(e["amount"])
+        total += amount
+        attachment_html = (
+            f'<a href="{escape(e["attachment_path"])}" target="_blank" class="expense-table-btn expense-table-btn-attachment">عرض المرفق</a>'
+            if ("attachment_path" in e.keys() and e["attachment_path"]) else
+            "-"
+        )
+        actions_html = "-"
+        if show_actions:
+            actions_html = (
+                f'''<div class="expense-table-actions"><a href="/edit-project-expense/{e['id']}?project_id={project_id}&company={company}" class="expense-table-btn">تعديل</a>'''
+                f'''<a href="/delete-project-expense/{e['id']}?project_id={project_id}&company={company}" class="expense-table-btn expense-table-btn-danger" onclick="return confirm('هل تريد حذف هذا المصروف؟')">حذف</a></div>'''
+            )
         rows += f"""
-        <tr>
-            <td>{e['title']}</td>
-            <td>{e['amount']} ريال</td>
-            <td>{e['date']}</td>
-            <td>{"-" if is_read_only_works_partner else f'''<a href="/edit-project-expense/{e['id']}?project_id={project_id}&company={company}" class="action-btn">تعديل</a><a href="/delete-project-expense/{e['id']}?project_id={project_id}&company={company}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا المصروف؟')">حذف</a>'''}</td>
+        <tr class="expense-table-row">
+            <td class="expense-cell-date">{escape(e['date'] or '-')}</td>
+            <td class="expense-cell-title">
+                <strong>{escape(e['title'] or '-')}</strong>
+                {f"<br><span class='expense-cell-meta'>مرجع: {escape(e['invoice_reference'])}</span>" if ('invoice_reference' in e.keys() and e['invoice_reference']) else ""}
+                {f"<br><span class='expense-cell-meta'>{escape(e['notes'])}</span>" if ('notes' in e.keys() and e['notes']) else ""}
+            </td>
+            <td>{build_project_expense_category_badge(e)}</td>
+            <td>{escape((e['vendor'] or '-')) if 'vendor' in e.keys() else '-'}</td>
+            <td>{escape((e['payment_method'] or '-')) if 'payment_method' in e.keys() else '-'}</td>
+            <td>{build_project_expense_payment_status_badge(e['payment_status'] if 'payment_status' in e.keys() else '')}</td>
+            <td class="expense-cell-amount">{format_currency(amount)} ريال</td>
+            <td>{attachment_html}</td>
+            <td>{actions_html}</td>
         </tr>
         """
 
@@ -4915,58 +5926,246 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
 <body class="system-dark">
 {HOME_BUTTON}
 
-<div class="dashboard">
+<div class="dashboard expense-page">
+    <div class="finance-page-header">
+        <div>
+            <h1>مصروفات المشروع</h1>
+            <p>{project_name}</p>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <a href="/project-expenses-report?project_id={project_id}&company={company}" class="glass-btn expense-primary-btn">تحميل تقرير PDF</a>
+            <a href="{back_url}" class="glass-btn back-btn expense-page-back-btn">{back_label}</a>
+        </div>
+    </div>
 
-<h1>مصروفات المشروع</h1>
+    {feedback_html}
 
-{"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
+    {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
 
-{"" if is_read_only_works_partner else f"""
-<form action="/save-expense" method="post">
+    <div class="finance-summary-grid expense-summary-grid">
+        <div class="finance-card expense-summary-card expense-summary-card-contract">
+            <span>قيمة العقد</span>
+            <strong>{format_currency(contract_total)} ريال</strong>
+        </div>
+        <div class="finance-card finance-card-expense expense-summary-card expense-summary-card-expense">
+            <span>إجمالي المصروفات</span>
+            <strong>{format_currency(total)} ريال</strong>
+        </div>
+        <div class="finance-card {summary_remaining_class} expense-summary-card expense-summary-card-remaining">
+            <span>المتبقي</span>
+            <strong>{format_currency(remaining)} ريال</strong>
+        </div>
+        <div class="finance-card expense-summary-card expense-summary-card-ratio">
+            <span>نسبة الصرف</span>
+            <strong>{spend_ratio:.1f}%</strong>
+        </div>
+    </div>
 
-<input type="hidden" name="project_id" value="{project_id}">
-<input type="hidden" name="company" value="{company}">
+    {"" if is_read_only_works_partner else f"""
+    <div class="inventory-panel inventory-table-panel expense-form-panel">
+        <div class="expense-panel-head">
+            <div>
+                <h3>إضافة مصروف</h3>
+                <p>تنسيق ذكي وسريع يساعد المحاسب على إدخال بيانات أوضح وبأقل كتابة ممكنة.</p>
+            </div>
+        </div>
+        <form action="/save-expense" method="post" enctype="multipart/form-data" id="project-expense-form" class="expense-form">
+            <input type="hidden" name="project_id" value="{project_id}">
+            <input type="hidden" name="company" value="{company}">
 
-اسم المصروف:
-<input type="text" name="title" required>
+            <div class="expense-form-grid">
+                <div class="expense-form-wide expense-category-field">
+                    <label>تصنيف المصروف</label>
+                    {category_selector}
+                    <select name="category" id="expense-category" class="expense-category-native-select" required>
+                        {category_options}
+                    </select>
+                </div>
+                <div id="other-type-wrapper" class="expense-other-type-card" hidden>
+                    <label>نوع الأخرى</label>
+                    <input type="text" name="other_type" id="expense-other-type" placeholder="اكتب نوع المصروف">
+                </div>
+                <div>
+                    <label>بيان/اسم المصروف</label>
+                    <input type="text" name="title" id="expense-title" list="expense-name-suggestions" placeholder="مثال: شراء اسمنت" required>
+                    <datalist id="expense-name-suggestions"></datalist>
+                </div>
+                <div>
+                    <label>المبلغ</label>
+                    <input type="number" step="0.01" min="0" name="amount" required>
+                </div>
+                <div>
+                    <label>التاريخ</label>
+                    <input type="date" name="expense_date" value="{date.today().isoformat()}" required>
+                </div>
+                <div>
+                    <label>المورد</label>
+                    <input type="text" name="vendor" list="project-suppliers-list" placeholder="اسم المورد">
+                    <datalist id="project-suppliers-list">{supplier_datalist}</datalist>
+                    {supplier_hint}
+                </div>
+                <div>
+                    <label>طريقة الدفع</label>
+                    <select name="payment_method">
+                        <option value="">اختر طريقة الدفع</option>
+                        {payment_method_options}
+                    </select>
+                </div>
+                <div>
+                    <label>حالة السداد</label>
+                    <select name="payment_status">
+                        <option value="">اختر حالة السداد</option>
+                        {payment_status_options}
+                    </select>
+                </div>
+                <div>
+                    <label>رقم الفاتورة / المرجع</label>
+                    <input type="text" name="invoice_reference" placeholder="مثال: INV-1042">
+                </div>
+                <div>
+                    <label>مرفق</label>
+                    <input type="file" name="attachment" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx">
+                </div>
+                <div class="expense-form-wide">
+                    <label>اقتراحات سريعة لاسم المصروف</label>
+                    <div id="expense-suggestion-groups" class="expense-suggestion-shell">
+                        <div class="expense-suggestion-empty">اختر التصنيف لتظهر أمثلة سريعة تساعد على سرعة الإدخال.</div>
+                        {build_project_expense_name_suggestion_buttons()}
+                    </div>
+                </div>
+                <div class="expense-form-wide">
+                    <label>ملاحظات</label>
+                    <textarea name="notes" rows="3" placeholder="أي تفاصيل إضافية للمحاسب أو للإرجاع لاحقًا"></textarea>
+                </div>
+            </div>
 
-<br><br>
+            <div class="expense-form-actions">
+                <button type="submit" class="glass-btn gold-text expense-primary-btn">حفظ المصروف</button>
+            </div>
+        </form>
+    </div>
+    """}
 
-المبلغ:
-<input type="number" step="0.01" name="amount" required>
+    <div class="inventory-table-panel expense-table-panel">
+        <div class="inventory-table-head expense-table-head">
+            <h3 style="margin:0;color:#ffffff;">سجل المصروفات</h3>
+            <div class="expense-table-count">عدد السجلات: {len(expenses)}</div>
+        </div>
 
-<br><br>
+        <div class="expense-table-scroll">
+            <table class="finance-table expense-table">
+                <tr>
+                    <th>التاريخ</th>
+                    <th>البيان</th>
+                    <th>التصنيف</th>
+                    <th>المورد</th>
+                    <th>طريقة الدفع</th>
+                    <th>حالة السداد</th>
+                    <th>المبلغ</th>
+                    <th>المرفق</th>
+                    <th>الإدارة</th>
+                </tr>
 
-<button type="submit" class="glass-btn gold-text">حفظ المصروف</button>
+                {rows if rows else "<tr><td colspan='9'>لا توجد مصروفات مسجلة حتى الآن</td></tr>"}
 
-</form>
-"""}
-
-<br><br>
-
-<table border="1" style="background:white;margin:auto;width:70%;">
-
-<tr>
-<th>المصروف</th>
-<th>المبلغ</th>
-<th>التاريخ</th>
-<th>الإدارة</th>
-</tr>
-
-{rows if rows else "<tr><td colspan='4'>لا توجد مصروفات</td></tr>"}
-
-<tr>
-<td><strong>الإجمالي</strong></td>
-<td colspan="3"><strong>{total} ريال</strong></td>
-</tr>
-
-</table>
-
-<br>
-
-<a href="{back_url}" class="glass-btn back-btn">{back_label}</a>
-
+                <tr class="expense-table-total-row">
+                    <td colspan="6"><strong>الإجمالي</strong></td>
+                    <td><strong>{format_currency(total)} ريال</strong></td>
+                    <td colspan="2"></td>
+                </tr>
+            </table>
+        </div>
+    </div>
 </div>
+<script>
+(function () {{
+    const categoryField = document.getElementById("expense-category");
+    const categorySelector = document.getElementById("expense-category-selector");
+    const titleField = document.getElementById("expense-title");
+    const datalist = document.getElementById("expense-name-suggestions");
+    const groupsContainer = document.getElementById("expense-suggestion-groups");
+    const emptyState = groupsContainer ? groupsContainer.querySelector(".expense-suggestion-empty") : null;
+    const otherTypeWrapper = document.getElementById("other-type-wrapper");
+    const otherTypeField = document.getElementById("expense-other-type");
+    const suggestionMap = {json.dumps(PROJECT_EXPENSE_NAME_SUGGESTIONS, ensure_ascii=False)};
+
+    function updateOtherType() {{
+        const isOther = categoryField && categoryField.value === "أخرى";
+        if (!otherTypeWrapper || !otherTypeField) {{
+            return;
+        }}
+        otherTypeWrapper.hidden = !isOther;
+        otherTypeWrapper.classList.toggle("is-visible", !!isOther);
+        otherTypeField.required = !!isOther;
+        if (!isOther) {{
+            otherTypeField.value = "";
+        }}
+    }}
+
+    function updateCategoryChips() {{
+        if (!categorySelector || !categoryField) {{
+            return;
+        }}
+        categorySelector.querySelectorAll(".expense-category-chip").forEach((chip) => {{
+            const isSelected = chip.dataset.categoryValue === categoryField.value;
+            chip.classList.toggle("is-selected", isSelected);
+            chip.setAttribute("aria-pressed", isSelected ? "true" : "false");
+        }});
+    }}
+
+    function updateSuggestions() {{
+        if (!categoryField || !datalist || !groupsContainer) {{
+            return;
+        }}
+        const category = categoryField.value || "";
+        const suggestions = suggestionMap[category] || [];
+        datalist.innerHTML = suggestions.map((item) => '<option value="' + item.replace(/"/g, '&quot;') + '"></option>').join("");
+
+        groupsContainer.querySelectorAll(".expense-suggestion-group").forEach((group) => {{
+            group.hidden = group.dataset.category !== category;
+        }});
+
+        if (emptyState) {{
+            emptyState.style.display = suggestions.length ? "none" : "block";
+        }}
+    }}
+
+    if (groupsContainer) {{
+        groupsContainer.addEventListener("click", function (event) {{
+            const button = event.target.closest(".expense-suggestion-chip");
+            if (!button || !titleField) {{
+                return;
+            }}
+            titleField.value = button.dataset.suggestion || "";
+            titleField.focus();
+        }});
+    }}
+
+    if (categorySelector && categoryField) {{
+        categorySelector.addEventListener("click", function (event) {{
+            const chip = event.target.closest(".expense-category-chip");
+            if (!chip) {{
+                return;
+            }}
+            categoryField.value = chip.dataset.categoryValue || "";
+            updateCategoryChips();
+            updateOtherType();
+            updateSuggestions();
+        }});
+    }}
+
+    if (categoryField) {{
+        categoryField.addEventListener("change", function () {{
+            updateCategoryChips();
+            updateOtherType();
+            updateSuggestions();
+        }});
+        updateCategoryChips();
+        updateOtherType();
+        updateSuggestions();
+    }}
+}})();
+</script>
 """
 
 @app.post("/save-expense")
@@ -4975,7 +6174,16 @@ def save_expense(
     project_id: int = Form(...),
     company: str = Form(...),
     title: str = Form(...),
-    amount: float = Form(...)
+    amount: float = Form(...),
+    category: str = Form(...),
+    other_type: str = Form(""),
+    expense_date: str = Form(""),
+    vendor: str = Form(""),
+    payment_method: str = Form(""),
+    payment_status: str = Form(""),
+    invoice_reference: str = Form(""),
+    notes: str = Form(""),
+    attachment: UploadFile = File(None),
 ):
     access_result = ensure_employee_section_access(request, company, "expenses")
     if isinstance(access_result, RedirectResponse) or isinstance(access_result, HTMLResponse):
@@ -4983,19 +6191,128 @@ def save_expense(
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
+    if category not in PROJECT_EXPENSE_CATEGORIES:
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/project-expenses?project_id={project_id}&company={company}",
+                error="يرجى اختيار تصنيف صحيح للمصروف",
+            ),
+            status_code=303
+        )
+    cleaned_other_type = other_type.strip()
+    cleaned_title = title.strip()
+    if not cleaned_title:
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/project-expenses?project_id={project_id}&company={company}",
+                error="بيان/اسم المصروف مطلوب",
+            ),
+            status_code=303
+        )
+    if payment_method.strip() and payment_method.strip() not in PROJECT_EXPENSE_PAYMENT_METHODS:
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/project-expenses?project_id={project_id}&company={company}",
+                error="طريقة الدفع المحددة غير صحيحة",
+            ),
+            status_code=303
+        )
+    if payment_status.strip() and payment_status.strip() not in PROJECT_EXPENSE_PAYMENT_STATUSES:
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/project-expenses?project_id={project_id}&company={company}",
+                error="حالة السداد المحددة غير صحيحة",
+            ),
+            status_code=303
+        )
+    if category == "أخرى" and not cleaned_other_type:
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/project-expenses?project_id={project_id}&company={company}",
+                error="حقل نوع الأخرى مطلوب عند اختيار التصنيف أخرى",
+            ),
+            status_code=303
+        )
     conn = get_db()
+    attachment_path = save_project_expense_attachment(attachment)
 
     conn.execute(
-        "INSERT INTO project_expenses (project_id, title, amount, date) VALUES (?, ?, ?, DATE('now'))",
-        (project_id, title, amount)
+        """
+        INSERT INTO project_expenses (
+            project_id, title, amount, date, category, other_type, vendor,
+            payment_method, payment_status, invoice_reference, attachment_path, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            project_id,
+            cleaned_title,
+            amount,
+            expense_date or date.today().isoformat(),
+            category,
+            cleaned_other_type if category == "أخرى" else "",
+            vendor.strip(),
+            payment_method.strip(),
+            payment_status.strip(),
+            invoice_reference.strip(),
+            attachment_path,
+            notes.strip(),
+        )
     )
 
     conn.commit()
     conn.close()
 
     return RedirectResponse(
-        url=f"/project-expenses?project_id={project_id}&company={company}",
+        url=build_redirect_url(
+            f"/project-expenses?project_id={project_id}&company={company}",
+            message="تم حفظ المصروف بنجاح",
+        ),
         status_code=303
+    )
+
+
+@app.get("/project-expenses-report")
+def project_expenses_report(request: Request, project_id: int, company: str = ""):
+    access_result = ensure_employee_section_access(request, company, "expenses")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+
+    conn = get_db()
+    project = conn.execute(
+        "SELECT * FROM projects WHERE id = ?",
+        (project_id,)
+    ).fetchone()
+    if not project:
+        conn.close()
+        return HTMLResponse("<h2>المشروع غير موجود</h2>", status_code=404)
+
+    items = []
+    if project["contract_id"]:
+        contract = conn.execute(
+            "SELECT * FROM contracts WHERE id = ?",
+            (project["contract_id"],)
+        ).fetchone()
+        if contract and contract["quote_id"]:
+            items = conn.execute(
+                "SELECT qty, unit_price FROM quote_items WHERE quote_id = ?",
+                (contract["quote_id"],)
+            ).fetchall()
+
+    expenses = conn.execute(
+        "SELECT * FROM project_expenses WHERE project_id = ? ORDER BY date DESC, id DESC",
+        (project_id,)
+    ).fetchall()
+    conn.close()
+
+    contract_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
+    if contract_total <= 0 and "contract_value" in project.keys():
+        contract_total = safe_float(project["contract_value"])
+
+    file_path, file_name = build_project_expenses_report_pdf(project, expenses, contract_total, company=company)
+    return FileResponse(
+        path=file_path,
+        filename=file_name,
+        media_type="application/pdf",
     )
 
 
@@ -5012,38 +6329,230 @@ def edit_project_expense(request: Request, expense_id: int, project_id: int, com
         "SELECT * FROM project_expenses WHERE id = ? AND project_id = ?",
         (expense_id, project_id)
     ).fetchone()
+    suppliers = conn.execute(
+        "SELECT * FROM project_suppliers WHERE project_id = ? ORDER BY name COLLATE NOCASE ASC, id DESC",
+        (project_id,)
+    ).fetchall()
     conn.close()
 
     if not expense:
         return "<h2>المصروف غير موجود</h2>"
 
+    feedback_html = render_page_feedback(
+        request.query_params.get("message", ""),
+        request.query_params.get("error", ""),
+    )
+    supplier_datalist = build_project_supplier_datalist(suppliers)
+    category_options = build_project_expense_category_options(expense["category"] if "category" in expense.keys() else "")
+    category_selector = build_project_expense_category_selector(expense["category"] if "category" in expense.keys() else "")
+    payment_method_options = "".join(
+        f'<option value="{escape(item)}" {"selected" if (expense["payment_method"] or "") == item else ""}>{escape(item)}</option>'
+        for item in PROJECT_EXPENSE_PAYMENT_METHODS
+    )
+    payment_status_options = "".join(
+        f'<option value="{escape(item)}" {"selected" if (expense["payment_status"] or "") == item else ""}>{escape(item)}</option>'
+        for item in PROJECT_EXPENSE_PAYMENT_STATUSES
+    )
+    current_attachment_html = (
+        f'<a href="{escape(expense["attachment_path"] or "")}" target="_blank" class="expense-table-btn expense-table-btn-attachment">عرض المرفق الحالي</a>'
+        if ("attachment_path" in expense.keys() and expense["attachment_path"]) else
+        "<span class='expense-inline-hint'>لا يوجد مرفق حالي</span>"
+    )
+
     return f"""
-<meta charset="UTF-8">
-<link rel="stylesheet" href="/static/style.css">
-<body class="system-dark">
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="/static/style.css">
+  <body class="system-dark">
 {HOME_BUTTON}
-<div class="dashboard">
+<div class="dashboard expense-page expense-edit-page">
 
+<div class="finance-page-header">
+<div>
 <h1>تعديل المصروف</h1>
+<p>تحديث نفس سجل المصروف مع الحفاظ على الهيكل المحاسبي المنظم.</p>
+</div>
+<a href="/project-expenses?project_id={project_id}&company={company}" class="glass-btn back-btn expense-page-back-btn">⬅ رجوع</a>
+</div>
+{feedback_html}
 
-<form action="/update-project-expense/{expense_id}" method="post">
+<div class="inventory-panel inventory-table-panel expense-form-panel">
+<form action="/update-project-expense/{expense_id}" method="post" enctype="multipart/form-data" class="expense-form">
 <input type="hidden" name="project_id" value="{project_id}">
 <input type="hidden" name="company" value="{company}">
 
-<label>اسم المصروف</label>
-<input type="text" name="title" value="{expense['title']}" required>
+<div class="expense-form-grid">
+<div class="expense-form-wide expense-category-field">
+<label>تصنيف المصروف</label>
+{category_selector}
+<select name="category" id="expense-category" class="expense-category-native-select" required>
+{category_options}
+</select>
+</div>
 
+<div id="other-type-wrapper" class="expense-other-type-card {'is-visible' if (expense['category'] or '') == 'أخرى' else ''}" {"hidden" if (expense["category"] or "") != "أخرى" else ""}>
+<label>نوع الأخرى</label>
+<input type="text" name="other_type" id="expense-other-type" value="{escape(expense['other_type'] or '')}" {"required" if (expense['category'] or '') == 'أخرى' else ""}>
+</div>
+
+<div>
+<label>بيان/اسم المصروف</label>
+<input type="text" name="title" id="expense-title" list="expense-name-suggestions" value="{escape(expense['title'] or '')}" required>
+<datalist id="expense-name-suggestions"></datalist>
+</div>
+
+<div>
 <label>المبلغ</label>
-<input type="number" step="0.01" name="amount" value="{expense['amount']}" required>
+<input type="number" step="0.01" min="0" name="amount" value="{expense['amount'] or 0}" required>
+</div>
 
-<br><br>
-<button type="submit" class="glass-btn gold-text">حفظ التعديل</button>
+<div>
+<label>التاريخ</label>
+<input type="date" name="expense_date" value="{escape(expense['date'] or date.today().isoformat())}" required>
+</div>
+
+<div>
+<label>المورد</label>
+<input type="text" name="vendor" list="project-suppliers-list" value="{escape(expense['vendor'] or '')}">
+<datalist id="project-suppliers-list">{supplier_datalist}</datalist>
+</div>
+
+<div>
+<label>طريقة الدفع</label>
+<select name="payment_method">
+<option value="">اختر طريقة الدفع</option>
+{payment_method_options}
+</select>
+</div>
+
+<div>
+<label>حالة السداد</label>
+<select name="payment_status">
+<option value="">اختر حالة السداد</option>
+{payment_status_options}
+</select>
+</div>
+
+<div>
+<label>رقم الفاتورة / المرجع</label>
+<input type="text" name="invoice_reference" value="{escape(expense['invoice_reference'] or '')}">
+</div>
+
+<div>
+<label>مرفق جديد</label>
+<input type="file" name="attachment" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx">
+{current_attachment_html}
+</div>
+
+<div class="expense-form-wide">
+<label>اقتراحات سريعة لاسم المصروف</label>
+<div id="expense-suggestion-groups" class="expense-suggestion-shell">
+<div class="expense-suggestion-empty">اختر التصنيف لتظهر الاقتراحات السريعة.</div>
+{build_project_expense_name_suggestion_buttons()}
+</div>
+</div>
+
+<div class="expense-form-wide">
+<label>ملاحظات</label>
+<textarea name="notes" rows="3">{escape(expense['notes'] or '')}</textarea>
+</div>
+</div>
+
+<div class="expense-form-actions">
+<button type="submit" class="glass-btn gold-text expense-primary-btn">حفظ التعديل</button>
+</div>
 </form>
-
-<br>
-<a href="/project-expenses?project_id={project_id}&company={company}" class="glass-btn back-btn">⬅ رجوع</a>
+</div>
 
 </div>
+<script>
+(function () {{
+    const categoryField = document.getElementById("expense-category");
+    const categorySelector = document.getElementById("expense-category-selector");
+    const titleField = document.getElementById("expense-title");
+    const datalist = document.getElementById("expense-name-suggestions");
+    const groupsContainer = document.getElementById("expense-suggestion-groups");
+    const emptyState = groupsContainer ? groupsContainer.querySelector(".expense-suggestion-empty") : null;
+    const otherTypeWrapper = document.getElementById("other-type-wrapper");
+    const otherTypeField = document.getElementById("expense-other-type");
+    const suggestionMap = {json.dumps(PROJECT_EXPENSE_NAME_SUGGESTIONS, ensure_ascii=False)};
+
+    function updateOtherType() {{
+        const isOther = categoryField && categoryField.value === "أخرى";
+        if (!otherTypeWrapper || !otherTypeField) {{
+            return;
+        }}
+        otherTypeWrapper.hidden = !isOther;
+        otherTypeWrapper.classList.toggle("is-visible", !!isOther);
+        otherTypeField.required = !!isOther;
+        if (!isOther) {{
+            otherTypeField.value = "";
+        }}
+    }}
+
+    function updateCategoryChips() {{
+        if (!categorySelector || !categoryField) {{
+            return;
+        }}
+        categorySelector.querySelectorAll(".expense-category-chip").forEach((chip) => {{
+            const isSelected = chip.dataset.categoryValue === categoryField.value;
+            chip.classList.toggle("is-selected", isSelected);
+            chip.setAttribute("aria-pressed", isSelected ? "true" : "false");
+        }});
+    }}
+
+    function updateSuggestions() {{
+        if (!categoryField || !datalist || !groupsContainer) {{
+            return;
+        }}
+        const category = categoryField.value || "";
+        const suggestions = suggestionMap[category] || [];
+        datalist.innerHTML = suggestions.map((item) => '<option value="' + item.replace(/"/g, '&quot;') + '"></option>').join("");
+
+        groupsContainer.querySelectorAll(".expense-suggestion-group").forEach((group) => {{
+            group.hidden = group.dataset.category !== category;
+        }});
+
+        if (emptyState) {{
+            emptyState.style.display = suggestions.length ? "none" : "block";
+        }}
+    }}
+
+    if (groupsContainer) {{
+        groupsContainer.addEventListener("click", function (event) {{
+            const button = event.target.closest(".expense-suggestion-chip");
+            if (!button || !titleField) {{
+                return;
+            }}
+            titleField.value = button.dataset.suggestion || "";
+            titleField.focus();
+        }});
+    }}
+
+    if (categorySelector && categoryField) {{
+        categorySelector.addEventListener("click", function (event) {{
+            const chip = event.target.closest(".expense-category-chip");
+            if (!chip) {{
+                return;
+            }}
+            categoryField.value = chip.dataset.categoryValue || "";
+            updateCategoryChips();
+            updateOtherType();
+            updateSuggestions();
+        }});
+    }}
+
+    if (categoryField) {{
+        categoryField.addEventListener("change", function () {{
+            updateCategoryChips();
+            updateOtherType();
+            updateSuggestions();
+        }});
+        updateCategoryChips();
+        updateOtherType();
+        updateSuggestions();
+    }}
+}})();
+</script>
 """
 
 
@@ -5055,6 +6564,15 @@ def update_project_expense(
     company: str = Form(...),
     title: str = Form(...),
     amount: float = Form(...),
+    category: str = Form(...),
+    other_type: str = Form(""),
+    expense_date: str = Form(""),
+    vendor: str = Form(""),
+    payment_method: str = Form(""),
+    payment_status: str = Form(""),
+    invoice_reference: str = Form(""),
+    notes: str = Form(""),
+    attachment: UploadFile = File(None),
 ):
     access_result = ensure_employee_section_access(request, company, "expenses")
     if isinstance(access_result, RedirectResponse) or isinstance(access_result, HTMLResponse):
@@ -5063,14 +6581,92 @@ def update_project_expense(
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
     conn = get_db()
+    if category not in PROJECT_EXPENSE_CATEGORIES:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/project-expenses?project_id={project_id}&company={company}",
+                error="يرجى اختيار تصنيف صحيح للمصروف",
+            ),
+            status_code=303
+        )
+    cleaned_other_type = other_type.strip()
+    cleaned_title = title.strip()
+    if not cleaned_title:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/edit-project-expense/{expense_id}?project_id={project_id}&company={company}",
+                error="بيان/اسم المصروف مطلوب",
+            ),
+            status_code=303
+        )
+    if payment_method.strip() and payment_method.strip() not in PROJECT_EXPENSE_PAYMENT_METHODS:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/edit-project-expense/{expense_id}?project_id={project_id}&company={company}",
+                error="طريقة الدفع المحددة غير صحيحة",
+            ),
+            status_code=303
+        )
+    if payment_status.strip() and payment_status.strip() not in PROJECT_EXPENSE_PAYMENT_STATUSES:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/edit-project-expense/{expense_id}?project_id={project_id}&company={company}",
+                error="حالة السداد المحددة غير صحيحة",
+            ),
+            status_code=303
+        )
+    if category == "أخرى" and not cleaned_other_type:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/edit-project-expense/{expense_id}?project_id={project_id}&company={company}",
+                error="حقل نوع الأخرى مطلوب عند اختيار التصنيف أخرى",
+            ),
+            status_code=303
+        )
+    current_record = conn.execute(
+        "SELECT attachment_path FROM project_expenses WHERE id = ? AND project_id = ?",
+        (expense_id, project_id)
+    ).fetchone()
+    attachment_path = current_record["attachment_path"] if current_record and "attachment_path" in current_record.keys() else ""
+    new_attachment_path = save_project_expense_attachment(attachment)
+    if new_attachment_path:
+        delete_project_daily_attachment_file(attachment_path or "")
+        attachment_path = new_attachment_path
     conn.execute(
-        "UPDATE project_expenses SET title = ?, amount = ? WHERE id = ? AND project_id = ?",
-        (title, amount, expense_id, project_id)
+        """
+        UPDATE project_expenses
+        SET title = ?, amount = ?, date = ?, category = ?, other_type = ?, vendor = ?,
+            payment_method = ?, payment_status = ?, invoice_reference = ?, attachment_path = ?, notes = ?
+        WHERE id = ? AND project_id = ?
+        """,
+        (
+            cleaned_title,
+            amount,
+            expense_date or date.today().isoformat(),
+            category,
+            cleaned_other_type if category == "أخرى" else "",
+            vendor.strip(),
+            payment_method.strip(),
+            payment_status.strip(),
+            invoice_reference.strip(),
+            attachment_path,
+            notes.strip(),
+            expense_id,
+            project_id,
+        )
     )
     conn.commit()
     conn.close()
     return RedirectResponse(
-        url=f"/project-expenses?project_id={project_id}&company={company}",
+        url=build_redirect_url(
+            f"/project-expenses?project_id={project_id}&company={company}",
+            message="تم تحديث المصروف بنجاح",
+        ),
         status_code=303
     )
 
@@ -5084,14 +6680,23 @@ def delete_project_expense(request: Request, expense_id: int, project_id: int, c
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
     conn = get_db()
+    expense = conn.execute(
+        "SELECT attachment_path FROM project_expenses WHERE id = ? AND project_id = ?",
+        (expense_id, project_id)
+    ).fetchone()
     conn.execute(
         "DELETE FROM project_expenses WHERE id = ? AND project_id = ?",
         (expense_id, project_id)
     )
     conn.commit()
     conn.close()
+    if expense and "attachment_path" in expense.keys():
+        delete_project_daily_attachment_file(expense["attachment_path"] or "")
     return RedirectResponse(
-        url=f"/project-expenses?project_id={project_id}&company={company}",
+        url=build_redirect_url(
+            f"/project-expenses?project_id={project_id}&company={company}",
+            message="تم حذف المصروف بنجاح",
+        ),
         status_code=303
     )
 

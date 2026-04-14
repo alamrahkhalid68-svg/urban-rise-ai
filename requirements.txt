@@ -4,3 +4,5 @@ python-multipart
 jinja2
 itsdangerous
 Werkzeug
+arabic-reshaper
+python-bidi

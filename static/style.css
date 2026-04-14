@@ -302,6 +302,312 @@ body {
     font-family: inherit;
 }
 
+.expense-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px 18px;
+    align-items: start;
+}
+
+.expense-form-wide {
+    grid-column: 1 / -1;
+}
+
+.expense-page {
+    --expense-surface: rgba(247, 250, 252, 0.9);
+    --expense-surface-strong: rgba(255, 255, 255, 0.96);
+    --expense-border: rgba(148, 163, 184, 0.2);
+    --expense-shadow: 0 18px 38px rgba(15, 23, 42, 0.12);
+    --expense-text: #102235;
+    --expense-muted: #5f7285;
+    --expense-blue: #3f7a97;
+    --expense-teal: #1f8a8a;
+    --expense-green: #34856f;
+    --expense-amber: #b7823e;
+}
+
+.expense-page .finance-page-header {
+    align-items: flex-end;
+}
+
+.expense-page .finance-page-header h1 {
+    color: #ffffff;
+    margin-bottom: 6px;
+}
+
+.expense-page .finance-page-header p {
+    margin: 0;
+    color: rgba(255, 255, 255, 0.84);
+    font-size: 15px;
+}
+
+.expense-page-back-btn {
+    min-width: 150px;
+}
+
+.expense-summary-grid {
+    gap: 16px;
+}
+
+.expense-summary-card {
+    background: var(--expense-surface);
+    border: 1px solid var(--expense-border);
+    border-radius: 24px;
+    box-shadow: var(--expense-shadow);
+    position: relative;
+    overflow: hidden;
+}
+
+.expense-summary-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 5px;
+    border-radius: 24px;
+    background: rgba(63, 122, 151, 0.45);
+}
+
+.expense-summary-card span {
+    color: var(--expense-muted);
+    font-size: 13px;
+    letter-spacing: 0.2px;
+}
+
+.expense-summary-card strong {
+    color: var(--expense-text);
+    font-size: 31px;
+    font-weight: 800;
+}
+
+.expense-summary-card-contract::before {
+    background: rgba(63, 122, 151, 0.58);
+}
+
+.expense-summary-card-expense::before {
+    background: rgba(183, 130, 62, 0.65);
+}
+
+.expense-summary-card-remaining::before {
+    background: rgba(52, 133, 111, 0.64);
+}
+
+.expense-summary-card-ratio::before {
+    background: rgba(31, 138, 138, 0.62);
+}
+
+.expense-form-panel,
+.expense-table-panel {
+    background: rgba(247, 250, 252, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 28px;
+    box-shadow: 0 20px 48px rgba(15, 23, 42, 0.14);
+    backdrop-filter: blur(18px);
+}
+
+.expense-panel-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 18px;
+}
+
+.expense-panel-head h3 {
+    margin-bottom: 8px;
+}
+
+.expense-panel-head p {
+    margin: 0;
+    color: rgba(255, 255, 255, 0.76);
+    font-size: 14px;
+    line-height: 1.7;
+}
+
+.expense-form {
+    display: grid;
+    gap: 18px;
+}
+
+.expense-page .inventory-panel label {
+    color: rgba(255, 255, 255, 0.94);
+    font-size: 14px;
+    margin-bottom: 4px;
+}
+
+.expense-page .inventory-panel input,
+.expense-page .inventory-panel select,
+.expense-page .inventory-panel textarea {
+    border-radius: 16px;
+    border: 1px solid rgba(191, 204, 214, 0.56);
+    background: rgba(255, 255, 255, 0.97);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+    padding: 13px 15px;
+}
+
+.expense-page .inventory-panel input:focus,
+.expense-page .inventory-panel select:focus,
+.expense-page .inventory-panel textarea:focus {
+    outline: none;
+    border-color: rgba(63, 122, 151, 0.55);
+    box-shadow: 0 0 0 4px rgba(63, 122, 151, 0.12);
+}
+
+.expense-category-field {
+    display: grid;
+    gap: 12px;
+}
+
+.expense-category-native-select {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+    width: 1px !important;
+    height: 1px !important;
+}
+
+.expense-category-selector {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.expense-category-chip {
+    border: 1px solid rgba(191, 204, 214, 0.82);
+    background: rgba(255, 255, 255, 0.84);
+    color: #234154;
+    border-radius: 999px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: 0.22s ease;
+    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+    font-family: inherit;
+}
+
+.expense-category-chip:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 12px 24px rgba(15, 23, 42, 0.1);
+}
+
+.expense-category-chip.is-selected {
+    color: #0f172a;
+    border-color: transparent;
+}
+
+.expense-category-chip[data-theme="materials"].is-selected {
+    background: rgba(62, 144, 176, 0.2);
+}
+
+.expense-category-chip[data-theme="labor"].is-selected {
+    background: rgba(63, 122, 151, 0.2);
+}
+
+.expense-category-chip[data-theme="subcontractor"].is-selected {
+    background: rgba(39, 101, 136, 0.22);
+}
+
+.expense-category-chip[data-theme="transport"].is-selected {
+    background: rgba(43, 138, 133, 0.22);
+}
+
+.expense-category-chip[data-theme="equipment"].is-selected {
+    background: rgba(72, 129, 168, 0.22);
+}
+
+.expense-category-chip[data-theme="fuel"].is-selected {
+    background: rgba(183, 130, 62, 0.22);
+}
+
+.expense-category-chip[data-theme="maintenance"].is-selected {
+    background: rgba(52, 133, 111, 0.22);
+}
+
+.expense-category-chip[data-theme="admin"].is-selected {
+    background: rgba(88, 112, 130, 0.24);
+}
+
+.expense-category-chip[data-theme="other"].is-selected {
+    background: rgba(129, 140, 248, 0.18);
+}
+
+.expense-other-type-card {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px dashed rgba(255, 255, 255, 0.2);
+    border-radius: 18px;
+    padding: 14px;
+    transition: 0.2s ease;
+}
+
+.expense-other-type-card.is-visible {
+    border-color: rgba(129, 140, 248, 0.4);
+    background: rgba(129, 140, 248, 0.08);
+}
+
+.expense-suggestion-shell {
+    display: grid;
+    gap: 10px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 20px;
+    padding: 14px;
+}
+
+.expense-suggestion-empty {
+    color: rgba(255, 255, 255, 0.78);
+    font-size: 13px;
+}
+
+.expense-suggestion-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.expense-suggestion-chip {
+    border: 1px solid rgba(191, 204, 214, 0.3);
+    background: rgba(255, 255, 255, 0.14);
+    color: #ffffff;
+    border-radius: 999px;
+    padding: 9px 13px;
+    cursor: pointer;
+    transition: 0.2s ease;
+    font-family: inherit;
+}
+
+.expense-suggestion-chip:hover {
+    background: rgba(63, 122, 151, 0.2);
+    border-color: rgba(125, 211, 252, 0.44);
+}
+
+.expense-form-actions {
+    display: flex;
+    justify-content: flex-start;
+}
+
+.expense-primary-btn {
+    min-width: 170px;
+    border-radius: 16px;
+    padding: 12px 20px;
+    background: linear-gradient(135deg, rgba(37, 99, 132, 0.96), rgba(47, 124, 137, 0.96));
+    border-color: rgba(255, 255, 255, 0.14);
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    text-shadow: none !important;
+    box-shadow: 0 14px 28px rgba(15, 23, 42, 0.2);
+}
+
+.expense-primary-btn:hover {
+    background: linear-gradient(135deg, rgba(31, 85, 114, 0.98), rgba(40, 107, 118, 0.98));
+}
+
+.expense-inline-hint {
+    color: rgba(255, 255, 255, 0.78);
+    font-size: 13px;
+    display: inline-block;
+    margin-top: 8px;
+}
+
 .inventory-table-panel {
     max-width: 1100px;
     margin: 0 auto 24px auto;
@@ -313,6 +619,218 @@ body {
     justify-content: space-between;
     gap: 12px;
     margin-bottom: 16px;
+}
+
+.expense-table-head {
+    margin-bottom: 18px;
+}
+
+.expense-table-count {
+    color: rgba(255, 255, 255, 0.86);
+    font-size: 14px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+    padding: 8px 14px;
+}
+
+.expense-table-scroll {
+    overflow-x: auto;
+}
+
+.expense-table {
+    background: rgba(255, 255, 255, 0.97);
+    border-radius: 22px;
+    overflow: hidden;
+}
+
+.expense-table th,
+.expense-table td {
+    border-bottom: 1px solid rgba(226, 232, 240, 0.95);
+    padding: 15px 14px;
+    vertical-align: middle;
+}
+
+.expense-table th {
+    background: linear-gradient(180deg, rgba(241, 245, 249, 0.96), rgba(248, 250, 252, 0.96));
+    color: #30475b;
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.expense-table-row:hover td {
+    background: rgba(248, 250, 252, 0.98);
+}
+
+.expense-cell-date,
+.expense-cell-amount {
+    white-space: nowrap;
+}
+
+.expense-cell-title strong {
+    color: #102235;
+    font-size: 14px;
+}
+
+.expense-cell-meta {
+    color: #74879a;
+    font-size: 12px;
+    line-height: 1.7;
+}
+
+.expense-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    padding: 6px 11px;
+    font-size: 12px;
+    font-weight: 800;
+    border: 1px solid transparent;
+    white-space: nowrap;
+}
+
+.expense-badge-category[data-theme="materials"] {
+    background: rgba(62, 144, 176, 0.12);
+    color: #26627b;
+    border-color: rgba(62, 144, 176, 0.2);
+}
+
+.expense-badge-category[data-theme="labor"] {
+    background: rgba(63, 122, 151, 0.12);
+    color: #2d5d75;
+    border-color: rgba(63, 122, 151, 0.22);
+}
+
+.expense-badge-category[data-theme="subcontractor"] {
+    background: rgba(39, 101, 136, 0.12);
+    color: #1f4f6a;
+    border-color: rgba(39, 101, 136, 0.22);
+}
+
+.expense-badge-category[data-theme="transport"] {
+    background: rgba(43, 138, 133, 0.12);
+    color: #216965;
+    border-color: rgba(43, 138, 133, 0.22);
+}
+
+.expense-badge-category[data-theme="equipment"] {
+    background: rgba(72, 129, 168, 0.12);
+    color: #2c5f7f;
+    border-color: rgba(72, 129, 168, 0.2);
+}
+
+.expense-badge-category[data-theme="fuel"] {
+    background: rgba(183, 130, 62, 0.12);
+    color: #885e22;
+    border-color: rgba(183, 130, 62, 0.22);
+}
+
+.expense-badge-category[data-theme="maintenance"] {
+    background: rgba(52, 133, 111, 0.12);
+    color: #266453;
+    border-color: rgba(52, 133, 111, 0.22);
+}
+
+.expense-badge-category[data-theme="admin"] {
+    background: rgba(88, 112, 130, 0.12);
+    color: #415566;
+    border-color: rgba(88, 112, 130, 0.18);
+}
+
+.expense-badge-category[data-theme="other"] {
+    background: rgba(129, 140, 248, 0.12);
+    color: #4b57a9;
+    border-color: rgba(129, 140, 248, 0.2);
+}
+
+.expense-badge-status[data-status="paid"] {
+    background: rgba(74, 222, 128, 0.14);
+    color: #166534;
+    border-color: rgba(74, 222, 128, 0.24);
+}
+
+.expense-badge-status[data-status="unpaid"] {
+    background: rgba(251, 146, 60, 0.14);
+    color: #9a3412;
+    border-color: rgba(251, 146, 60, 0.24);
+}
+
+.expense-table-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+}
+
+.expense-table-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 7px 12px;
+    border-radius: 999px;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 700;
+    color: #244255;
+    background: rgba(226, 232, 240, 0.8);
+    border: 1px solid rgba(191, 204, 214, 0.9);
+}
+
+.expense-table-btn:hover {
+    background: rgba(203, 213, 225, 0.86);
+}
+
+.expense-table-btn-attachment {
+    background: rgba(59, 130, 246, 0.1);
+    color: #1d4f91;
+    border-color: rgba(59, 130, 246, 0.18);
+}
+
+.expense-table-btn-danger {
+    background: rgba(248, 113, 113, 0.12);
+    color: #9f1239;
+    border-color: rgba(248, 113, 113, 0.18);
+}
+
+.expense-table-total-row td {
+    background: rgba(248, 250, 252, 0.96);
+    font-weight: 800;
+}
+
+@media (max-width: 700px) {
+    .expense-page .finance-page-header {
+        align-items: stretch;
+    }
+
+    .expense-summary-card strong {
+        font-size: 25px;
+    }
+
+    .expense-category-selector {
+        gap: 8px;
+    }
+
+    .expense-category-chip {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .expense-table-count {
+        width: 100%;
+        text-align: center;
+    }
+
+    .expense-form-actions,
+    .expense-table-actions {
+        justify-content: stretch;
+    }
+
+    .expense-form-actions .expense-primary-btn,
+    .expense-table-actions .expense-table-btn {
+        width: 100%;
+    }
 }
 
 .inventory-note {
