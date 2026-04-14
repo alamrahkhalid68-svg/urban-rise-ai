@@ -1400,7 +1400,7 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
         Paragraph(format_arabic_pdf_text(report_company_name), title_style),
         Paragraph(
             format_arabic_pdf_text(
-                f"تقرير مصروفات المشروع | اسم المشروع: {project['name'] or f"مشروع رقم {project['id']}"} | تاريخ الإصدار: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                f"تقرير مصروفات المشروع | اسم المشروع: {project['name'] or f'مشروع رقم {project['id']}'} | تاريخ الإصدار: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             ),
             subtitle_style,
         ),
