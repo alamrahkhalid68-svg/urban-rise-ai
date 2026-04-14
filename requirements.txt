@@ -6,3 +6,4 @@ itsdangerous
 Werkzeug
 arabic-reshaper
 python-bidi
+reportlab
