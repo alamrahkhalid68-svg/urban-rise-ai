@@ -1062,10 +1062,15 @@ PROJECT_EXPENSE_CATEGORY_THEMES = {
     "أخرى": "other",
 }
 PDF_REPORT_FONT_NAME = "UrbanRiseArabic"
+PDF_REPORT_FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "fonts")
 PDF_REPORT_FONT_CANDIDATES = [
+    os.path.join(PDF_REPORT_FONT_DIR, "NotoNaskhArabic-Regular.ttf"),
+    os.path.join(PDF_REPORT_FONT_DIR, "Amiri-Regular.ttf"),
     r"C:\Windows\Fonts\arial.ttf",
     r"C:\Windows\Fonts\tahoma.ttf",
     r"C:\Windows\Fonts\trado.ttf",
+    "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 ]
 WORKS_COMPANY_PROFILE = {
     "name": "أوربان رايز ووركس",
