@@ -3771,6 +3771,14 @@ def projects_page(request: Request, company: str = ""):
         </tr>
         """
 
+    new_project_button_html = ""
+    if not (is_read_only_works_partner or is_works_expenses_scope_user or is_works_daily_scope_user):
+        new_project_button_html = f"""
+<a href="/new-project?company={company}" class="company-card {company}">
+<h2>مشروع جديد</h2>
+</a>
+"""
+
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
@@ -3782,11 +3790,7 @@ def projects_page(request: Request, company: str = ""):
 
 {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
 
-{"" if is_read_only_works_partner or is_works_expenses_scope_user or is_works_daily_scope_user else f"""
-<a href="/new-project?company={company}" class="company-card {company}">
-<h2>مشروع جديد</h2>
-</a>
-"""}
+{new_project_button_html}
 
 <br><br>
 
