@@ -4488,6 +4488,43 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
 
     footer_text = "يتم تنفيذ الأعمال وفق أعلى معايير الجودة، مع ضمان حسن التنفيذ بإذن الله."
 
+    quote_item_form_html = ""
+    if not is_read_only_works_partner:
+        quote_item_form_html = f"""
+<form action="/add-item/{quote_id}?company={company}" method="post">
+الوصف:
+<input type="text" name="description" required>
+
+الكمية:
+<input type="number" step="0.01" name="qty" required>
+
+سعر الوحدة:
+<input type="number" step="0.01" name="unit_price" required>
+
+<button type="submit" class="glass-btn gold-text">&#10133; إضافة بند</button>
+</form>
+"""
+
+    quote_payment_form_html = ""
+    if not is_read_only_works_partner:
+        quote_payment_form_html = f"""
+<form action="/add-payment/{quote_id}?company={company}" method="post">
+
+اسم الدفعة:
+<input type="text" name="title" required>
+
+النسبة:
+<input type="number" step="0.01" name="percentage" required>
+
+<button type="submit" class="glass-btn gold-text">إضافة دفعة</button>
+
+</form>
+"""
+
+    convert_to_contract_html = ""
+    if not is_read_only_works_partner:
+        convert_to_contract_html = f'<a href="/convert-to-contract/{quote_id}?company={company}" class="action-btn">تحويل لعقد</a>'
+
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
@@ -4544,20 +4581,7 @@ URBAN RISE<br>WORKS
 
 {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
 
-{"" if is_read_only_works_partner else f"""
-<form action="/add-item/{quote_id}?company={company}" method="post">
-الوصف:
-<input type="text" name="description" required>
-
-الكمية:
-<input type="number" step="0.01" name="qty" required>
-
-سعر الوحدة:
-<input type="number" step="0.01" name="unit_price" required>
-
-<button type="submit" class="glass-btn gold-text">&#10133; إضافة بند</button>
-</form>
-"""}
+{quote_item_form_html}
 
 <br><br>
 
@@ -4583,19 +4607,7 @@ URBAN RISE<br>WORKS
 
 <h3>الدفعات</h3>
 
-{"" if is_read_only_works_partner else f"""
-<form action="/add-payment/{quote_id}?company={company}" method="post">
-
-اسم الدفعة:
-<input type="text" name="title" required>
-
-النسبة:
-<input type="number" step="0.01" name="percentage" required>
-
-<button type="submit" class="glass-btn gold-text">إضافة دفعة</button>
-
-</form>
-"""}
+{quote_payment_form_html}
 
 <br>
 
@@ -4618,7 +4630,7 @@ URBAN RISE<br>WORKS
 
 <br>
 
-    {"" if is_read_only_works_partner else f'<a href="/convert-to-contract/{quote_id}?company={company}" class="action-btn">تحويل لعقد</a>'}
+    {convert_to_contract_html}
 
 </div>
 """
@@ -5719,6 +5731,9 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
 </div>'''
         )
     )
+    inventory_withdraw_html = ""
+    if normalize_access_value(company) != "works":
+        inventory_withdraw_html = f'<a href="/inventory?project_id={project_id}" class="company-card {company}"><h2>سحب من المستودع</h2></a>'
 
     return f'''
 <meta charset="UTF-8">
@@ -5768,7 +5783,7 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
 <h2>السجل اليومي</h2>
 </a>
 
-{'' if normalize_access_value(company) == 'works' else f'<a href="/inventory?project_id={project_id}" class="company-card {company}"><h2>سحب من المستودع</h2></a>'}
+{inventory_withdraw_html}
 
 </div>
 
@@ -5924,48 +5939,9 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
         </tr>
         """
 
-    return f"""
-<meta charset="UTF-8">
-<link rel="stylesheet" href="/static/style.css">
-<body class="system-dark">
-{HOME_BUTTON}
-
-<div class="dashboard expense-page">
-    <div class="finance-page-header">
-        <div>
-            <h1>مصروفات المشروع</h1>
-            <p>{project_name}</p>
-        </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-            <a href="/project-expenses-report?project_id={project_id}&company={company}" class="glass-btn expense-primary-btn">تحميل تقرير PDF</a>
-            <a href="{back_url}" class="glass-btn back-btn expense-page-back-btn">{back_label}</a>
-        </div>
-    </div>
-
-    {feedback_html}
-
-    {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
-
-    <div class="finance-summary-grid expense-summary-grid">
-        <div class="finance-card expense-summary-card expense-summary-card-contract">
-            <span>قيمة العقد</span>
-            <strong>{format_currency(contract_total)} ريال</strong>
-        </div>
-        <div class="finance-card finance-card-expense expense-summary-card expense-summary-card-expense">
-            <span>إجمالي المصروفات</span>
-            <strong>{format_currency(total)} ريال</strong>
-        </div>
-        <div class="finance-card {summary_remaining_class} expense-summary-card expense-summary-card-remaining">
-            <span>المتبقي</span>
-            <strong>{format_currency(remaining)} ريال</strong>
-        </div>
-        <div class="finance-card expense-summary-card expense-summary-card-ratio">
-            <span>نسبة الصرف</span>
-            <strong>{spend_ratio:.1f}%</strong>
-        </div>
-    </div>
-
-    {"" if is_read_only_works_partner else f"""
+    project_expense_form_html = ""
+    if not is_read_only_works_partner:
+        project_expense_form_html = f"""
     <div class="inventory-panel inventory-table-panel expense-form-panel">
         <div class="expense-panel-head">
             <div>
@@ -6048,7 +6024,50 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
             </div>
         </form>
     </div>
-    """}
+    """
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+
+<div class="dashboard expense-page">
+    <div class="finance-page-header">
+        <div>
+            <h1>مصروفات المشروع</h1>
+            <p>{project_name}</p>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <a href="/project-expenses-report?project_id={project_id}&company={company}" class="glass-btn expense-primary-btn">تحميل تقرير PDF</a>
+            <a href="{back_url}" class="glass-btn back-btn expense-page-back-btn">{back_label}</a>
+        </div>
+    </div>
+
+    {feedback_html}
+
+    {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
+
+    <div class="finance-summary-grid expense-summary-grid">
+        <div class="finance-card expense-summary-card expense-summary-card-contract">
+            <span>قيمة العقد</span>
+            <strong>{format_currency(contract_total)} ريال</strong>
+        </div>
+        <div class="finance-card finance-card-expense expense-summary-card expense-summary-card-expense">
+            <span>إجمالي المصروفات</span>
+            <strong>{format_currency(total)} ريال</strong>
+        </div>
+        <div class="finance-card {summary_remaining_class} expense-summary-card expense-summary-card-remaining">
+            <span>المتبقي</span>
+            <strong>{format_currency(remaining)} ريال</strong>
+        </div>
+        <div class="finance-card expense-summary-card expense-summary-card-ratio">
+            <span>نسبة الصرف</span>
+            <strong>{spend_ratio:.1f}%</strong>
+        </div>
+    </div>
+
+    {project_expense_form_html}
 
     <div class="inventory-table-panel expense-table-panel">
         <div class="inventory-table-head expense-table-head">
@@ -6752,19 +6771,9 @@ def project_daily(request: Request, project_id: int, company: str = ""):
         </tr>
         """
 
-    return f"""
-<meta charset="UTF-8">
-<link rel="stylesheet" href="/static/style.css">
-<body class="system-dark">
-{HOME_BUTTON}
-
-<div class="dashboard">
-
-<h1>السجل اليومي</h1>
-
-{"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
-
-{"" if is_read_only_works_partner else f"""
+    daily_form_html = ""
+    if not is_read_only_works_partner:
+        daily_form_html = f"""
 <form action="/save-daily" method="post" enctype="multipart/form-data">
 
 <input type="hidden" name="project_id" value="{project_id}">
@@ -6789,7 +6798,21 @@ def project_daily(request: Request, project_id: int, company: str = ""):
 <button type="submit" class="glass-btn gold-text">حفظ التقرير</button>
 
 </form>
-"""}
+"""
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+
+<div class="dashboard">
+
+<h1>السجل اليومي</h1>
+
+{"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
+
+{daily_form_html}
 
 <br><br>
 
@@ -7254,19 +7277,9 @@ def project_suppliers(request: Request, project_id: int, company: str = ""):
         </tr>
         """
 
-    return f"""
-<meta charset="UTF-8">
-<link rel="stylesheet" href="/static/style.css">
-<body class="system-dark">
-{HOME_BUTTON}
-
-<div class="dashboard">
-
-<h1>موردين المشروع</h1>
-
-{"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
-
-{"" if is_read_only_works_partner else f"""
+    supplier_form_html = ""
+    if not is_read_only_works_partner:
+        supplier_form_html = f"""
 <form action="/save-supplier" method="post">
 
 <input type="hidden" name="project_id" value="{project_id}">
@@ -7290,7 +7303,21 @@ def project_suppliers(request: Request, project_id: int, company: str = ""):
 <button type="submit" class="glass-btn gold-text">إضافة المورد</button>
 
 </form>
-"""}
+"""
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+
+<div class="dashboard">
+
+<h1>موردين المشروع</h1>
+
+{"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
+
+{supplier_form_html}
 
 <br><br>
 
