@@ -244,7 +244,7 @@ def build_investment_project_items(investment_projects):
             "id": project["id"],
             "name": project["name"] or f"مشروع #{project['id']}",
             "label": (
-                f"{project['name'] or f'مشروع #{project['id']}'}"
+                f"{project['name'] or ('مشروع #' + str(project['id']))}"
                 + (f" - {project['location']}" if project["location"] else "")
             ),
         }
