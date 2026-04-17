@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.templating import Jinja2Templates
@@ -116,9 +116,9 @@ PROTECTED_ROUTE_PREFIXES = (
 # زر الرئيسية العام
 # ======================
 HOME_BUTTON = """
-<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 18px 0 18px;">
+<div class="system-topbar">
     <a href="/" class="glass-btn home-button">الرئيسية</a>
-    <div id="global-auth-controls" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"></div>
+    <div id="global-auth-controls" class="system-topbar-auth"></div>
 </div>
 <script>
 (function () {
@@ -665,6 +665,18 @@ CREATE TABLE IF NOT EXISTS property_rent_contracts (
 """)
 
 conn.execute("""
+CREATE TABLE IF NOT EXISTS contract_installments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contract_id INTEGER,
+    amount REAL,
+    due_date TEXT,
+    status TEXT,
+    created_at TEXT,
+    paid_at TEXT
+)
+""")
+
+conn.execute("""
 CREATE TABLE IF NOT EXISTS property_supervisors (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     property_id INTEGER,
@@ -742,6 +754,16 @@ except sqlite3.OperationalError:
 
 try:
     conn.execute("ALTER TABLE property_tenants ADD COLUMN user_id INTEGER")
+except sqlite3.OperationalError:
+    pass
+
+try:
+    conn.execute("ALTER TABLE property_tenants ADD COLUMN tenant_type TEXT")
+except sqlite3.OperationalError:
+    pass
+
+try:
+    conn.execute("ALTER TABLE contract_installments ADD COLUMN paid_at TEXT")
 except sqlite3.OperationalError:
     pass
 
@@ -2701,6 +2723,15 @@ def filter_rows_by_property_scope(rows, property_ids: set[int], field_name: str 
     return [row for row in rows if row[field_name] in property_ids]
 
 
+def ensure_realestate_owner_dashboard_only(access_result, property_id: int = 0):
+    if realestate_owner_read_only(access_result):
+        return access_denied_response(
+            "تم دمج هذه الصفحة داخل لوحة المالك الموحدة",
+            back_url=f"/property-management/{property_id}" if property_id else "/property-management",
+        )
+    return access_result
+
+
 CONTRACT_ATTACHMENT_SOURCE_WORKS = "works_contract"
 CONTRACT_ATTACHMENT_SOURCE_PROPERTY = "property_contract"
 CONTRACT_ATTACHMENT_SOURCE_INVESTMENT = "investment_contract"
@@ -3390,7 +3421,21 @@ def inventory_page(request: Request, project_id: int = 0, item_id: int = 0, mess
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
-<body class="system-dark">
+<script>
+function toggleNewTenantFields(mode) {{
+    const select = document.getElementById(`contract-tenant-select-${{mode}}`);
+    const fields = document.getElementById(`contract-new-tenant-fields-${{mode}}`);
+    if (!select || !fields) return;
+    const isNewTenant = select.value === "__new__";
+    fields.style.display = isNewTenant ? "block" : "none";
+    fields.querySelectorAll("input, select").forEach((field) => {{
+        if (field.name === "new_tenant_name") {{
+            field.required = isNewTenant;
+        }}
+    }});
+}}
+</script>
+<body class="system-dark owner-page">
 {HOME_BUTTON}
 <div class="dashboard">
     <h1>المستودع المركزي</h1>
@@ -3695,6 +3740,20 @@ def company_page(request: Request, company: str):
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
+<script>
+function toggleNewTenantFields(mode) {{
+    const select = document.getElementById(`contract-tenant-select-${{mode}}`);
+    const fields = document.getElementById(`contract-new-tenant-fields-${{mode}}`);
+    if (!select || !fields) return;
+    const isNewTenant = select.value === "__new__";
+    fields.style.display = isNewTenant ? "block" : "none";
+    fields.querySelectorAll("input, select").forEach((field) => {{
+        if (field.name === "new_tenant_name") {{
+            field.required = isNewTenant;
+        }}
+    }});
+}}
+</script>
 <body class="system-dark">
 {HOME_BUTTON}
 <div class="dashboard">
@@ -7752,12 +7811,16 @@ def development_project_detail(project_id: int):
     }}
 
     .development-stat-card {{
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
+        border: 1px solid rgba(180, 150, 100, 0.15);
         border-radius: 24px;
         padding: 24px 20px;
         text-align: right;
-        box-shadow: 0 18px 36px rgba(0, 0, 0, 0.24);
+        box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        transition: transform 0.36s cubic-bezier(.22,1,.36,1), box-shadow 0.36s cubic-bezier(.22,1,.36,1), border-color 0.36s cubic-bezier(.22,1,.36,1), background 0.36s cubic-bezier(.22,1,.36,1);
+        isolation: isolate;
     }}
 
     .development-stat-label {{
@@ -7774,13 +7837,17 @@ def development_project_detail(project_id: int):
     }}
 
     .development-section-card {{
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
+        border: 1px solid rgba(180, 150, 100, 0.15);
         border-radius: 28px;
         padding: 28px;
-        box-shadow: 0 18px 36px rgba(0, 0, 0, 0.24);
+        box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
         margin-bottom: 24px;
         overflow: hidden;
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        transition: transform 0.36s cubic-bezier(.22,1,.36,1), box-shadow 0.36s cubic-bezier(.22,1,.36,1), border-color 0.36s cubic-bezier(.22,1,.36,1), background 0.36s cubic-bezier(.22,1,.36,1);
+        isolation: isolate;
     }}
 
     .development-section-head {{
@@ -7843,10 +7910,24 @@ def development_project_detail(project_id: int):
     }}
 
     .development-unit-card {{
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
+        border: 1px solid rgba(180, 150, 100, 0.15);
         border-radius: 22px;
         padding: 20px;
+        box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        transition: transform 0.36s cubic-bezier(.22,1,.36,1), box-shadow 0.36s cubic-bezier(.22,1,.36,1), border-color 0.36s cubic-bezier(.22,1,.36,1), background 0.36s cubic-bezier(.22,1,.36,1);
+        isolation: isolate;
+    }}
+    .development-stat-card:hover,
+    .development-section-card:hover,
+    .development-unit-card:hover {{
+        transform: translateY(-10px) scale(1.02);
+        box-shadow: 0 28px 52px rgba(0,0,0,0.14), 0 0 0 1px rgba(214, 195, 163, 0.34), inset 0 1px 0 rgba(255,255,255,0.56);
+        border-color: rgba(184, 155, 109, 0.34);
+        background: linear-gradient(180deg, rgba(255, 252, 247, 0.82), rgba(238, 226, 208, 0.74));
+        z-index: 2;
     }}
 
     .development-unit-top {{
@@ -8455,6 +8536,314 @@ def safe_median(values) -> float:
     return (cleaned_values[mid - 1] + cleaned_values[mid]) / 2
 
 
+PAYMENT_FREQUENCY_CONFIG = {
+    "yearly": {
+        "months_step": 12,
+        "installments_per_year": 1,
+        "label": "سنوي",
+    },
+    "semi-annual": {
+        "months_step": 6,
+        "installments_per_year": 2,
+        "label": "نصف سنوي",
+    },
+    "quarterly": {
+        "months_step": 3,
+        "installments_per_year": 4,
+        "label": "ربع سنوي",
+    },
+    "monthly": {
+        "months_step": 1,
+        "installments_per_year": 12,
+        "label": "شهري",
+    },
+}
+
+PROPERTY_TYPE_OPTIONS = ["سكني", "تجاري", "مكتبي", "فندقي"]
+
+
+def round_money(amount) -> float:
+    return float(Decimal(str(amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def normalize_property_type(value: str = "") -> str:
+    clean_value = (value or "").strip()
+    return clean_value
+
+
+def add_months_to_date(base_date: date, months_to_add: int) -> date:
+    total_month = (base_date.month - 1) + int(months_to_add or 0)
+    year = base_date.year + (total_month // 12)
+    month = (total_month % 12) + 1
+    if month == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month + 1, 1)
+    last_day = (next_month - timedelta(days=1)).day
+    return date(year, month, min(base_date.day, last_day))
+
+
+def build_contract_installment_rows(
+    contract_id: int,
+    annual_rent,
+    contract_duration_years,
+    payment_frequency: str,
+    contract_start_date: str = "",
+):
+    frequency_key = (payment_frequency or "").strip().lower()
+    config = PAYMENT_FREQUENCY_CONFIG.get(frequency_key)
+    if not config:
+        return []
+
+    try:
+        duration_years = int(float(contract_duration_years or 0))
+    except (TypeError, ValueError):
+        duration_years = 0
+
+    annual_amount = round_money(annual_rent)
+    if contract_id <= 0 or annual_amount <= 0 or duration_years <= 0:
+        return []
+
+    start_date_value = parse_safe_date(contract_start_date) or date.today()
+    total_months = duration_years * 12
+    months_step = config["months_step"]
+    if total_months <= 0 or months_step <= 0:
+        return []
+
+    total_installments = total_months // months_step
+    if total_installments <= 0:
+        return []
+
+    installment_amount = round_money(annual_amount / config["installments_per_year"])
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    rows = []
+    for index in range(total_installments):
+        due_date = add_months_to_date(start_date_value, index * months_step).isoformat()
+        rows.append(
+            (
+                contract_id,
+                installment_amount,
+                due_date,
+                "unpaid",
+                created_at,
+            )
+        )
+    return rows
+
+
+def get_payment_frequency_from_installments(installments) -> str:
+    rows = list(installments or [])
+    if len(rows) < 2:
+        return "yearly"
+
+    first_due = parse_safe_date(rows[0]["due_date"])
+    second_due = parse_safe_date(rows[1]["due_date"])
+    if not first_due or not second_due:
+        return "yearly"
+
+    months_diff = (second_due.year - first_due.year) * 12 + (second_due.month - first_due.month)
+    if months_diff <= 1:
+        return "monthly"
+    if months_diff <= 3:
+        return "quarterly"
+    if months_diff <= 6:
+        return "semi-annual"
+    return "yearly"
+
+
+def derive_contract_form_values(conn, contract_id: int) -> dict[str, object]:
+    installments = conn.execute(
+        """
+        SELECT *
+        FROM contract_installments
+        WHERE contract_id = ?
+        ORDER BY due_date ASC, id ASC
+        """,
+        (contract_id,),
+    ).fetchall()
+    if not installments:
+        return {
+            "annual_rent": 0.0,
+            "contract_duration_years": 1,
+            "payment_frequency": "yearly",
+        }
+
+    frequency = get_payment_frequency_from_installments(installments)
+    config = PAYMENT_FREQUENCY_CONFIG.get(frequency, PAYMENT_FREQUENCY_CONFIG["yearly"])
+    annual_rent = round_money(safe_amount(installments[0]["amount"]) * config["installments_per_year"])
+    duration_years = max(1, int(len(installments) / config["installments_per_year"]))
+    return {
+        "annual_rent": annual_rent,
+        "contract_duration_years": duration_years,
+        "payment_frequency": frequency,
+    }
+
+
+def calculate_contract_rent_value(annual_rent, contract_duration_years, payment_frequency: str) -> float:
+    frequency_key = (payment_frequency or "").strip().lower()
+    config = PAYMENT_FREQUENCY_CONFIG.get(frequency_key)
+    annual_value = round_money(annual_rent)
+    if not config or annual_value <= 0:
+        return annual_value
+    try:
+        duration_years = max(1, int(float(contract_duration_years or 1)))
+    except (TypeError, ValueError):
+        duration_years = 1
+    _ = duration_years
+    return annual_value
+
+
+def compute_contract_status(end_date_value: str = "", fallback_status: str = "") -> str:
+    end_date_obj = parse_safe_date(end_date_value)
+    if not end_date_obj:
+        return fallback_status or "ساري"
+
+    today = date.today()
+    remaining_days = (end_date_obj - today).days
+    if remaining_days < 0:
+        return "منتهي"
+    if remaining_days <= 30:
+        return "قريب ينتهي"
+    return "ساري"
+
+
+def resolve_contract_tenant_id(
+    conn,
+    *,
+    property_id: int,
+    unit_id: int,
+    tenant_id_value: str = "",
+    new_tenant_name: str = "",
+    new_tenant_phone: str = "",
+    new_tenant_id_number: str = "",
+    new_tenant_type: str = "",
+) -> int:
+    tenant_choice = (tenant_id_value or "").strip()
+    if tenant_choice and tenant_choice != "__new__":
+        try:
+            selected_tenant_id = int(tenant_choice)
+        except (TypeError, ValueError):
+            return 0
+        tenant_row = conn.execute(
+            "SELECT id FROM property_tenants WHERE id = ? AND property_id = ?",
+            (selected_tenant_id, property_id),
+        ).fetchone()
+        return tenant_row["id"] if tenant_row else 0
+
+    tenant_name = (new_tenant_name or "").strip()
+    if not tenant_name:
+        return 0
+
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO property_tenants (property_id, unit_id, name, phone, id_number, tenant_type)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            property_id,
+            unit_id if unit_id else None,
+            tenant_name,
+            (new_tenant_phone or "").strip(),
+            (new_tenant_id_number or "").strip(),
+            (new_tenant_type or "").strip(),
+        ),
+    )
+    return cursor.lastrowid
+
+
+def get_property_contract_installment_rows(conn, property_id: int):
+    return conn.execute(
+        """
+        SELECT
+            property_rent_contracts.id AS contract_id,
+            property_rent_contracts.property_id,
+            property_rent_contracts.unit_id,
+            property_rent_contracts.tenant_id,
+            property_rent_contracts.rent AS contract_rent,
+            property_rent_contracts.start_date,
+            property_rent_contracts.end_date,
+            property_rent_contracts.status AS contract_status,
+            property_units.name AS unit_name,
+            property_tenants.name AS tenant_name,
+            contract_installments.id AS installment_id,
+            contract_installments.amount AS installment_amount,
+            contract_installments.due_date,
+            contract_installments.status AS installment_status,
+            contract_installments.created_at,
+            contract_installments.paid_at
+        FROM property_rent_contracts
+        LEFT JOIN property_units ON property_units.id = property_rent_contracts.unit_id
+        LEFT JOIN property_tenants ON property_tenants.id = property_rent_contracts.tenant_id
+        LEFT JOIN contract_installments ON contract_installments.contract_id = property_rent_contracts.id
+        WHERE property_rent_contracts.property_id = ?
+        ORDER BY property_rent_contracts.id DESC, contract_installments.due_date ASC, contract_installments.id ASC
+        """,
+        (property_id,),
+    ).fetchall()
+
+
+def refresh_unit_status_from_contracts(conn, unit_id: int):
+    if not unit_id:
+        return
+
+    contracts = conn.execute(
+        """
+        SELECT start_date, end_date, status, rent
+        FROM property_rent_contracts
+        WHERE unit_id = ?
+        ORDER BY id DESC
+        """,
+        (unit_id,),
+    ).fetchall()
+    effective_status = "شاغرة"
+    effective_rent = 0
+    for contract in contracts:
+        contract_status = compute_contract_status(contract["end_date"], contract["status"] or "")
+        if contract_status in {"ساري", "قريب ينتهي"}:
+            effective_status = "مؤجرة"
+            effective_rent = safe_amount(contract["rent"])
+            break
+
+    conn.execute(
+        "UPDATE property_units SET status = ?, rent = ? WHERE id = ?",
+        (effective_status, effective_rent, unit_id),
+    )
+
+
+def sync_property_contracts_and_units(conn, property_id: int = 0):
+    params = []
+    where_clause = ""
+    if property_id:
+        where_clause = "WHERE property_id = ?"
+        params.append(property_id)
+
+    contracts = conn.execute(
+        f"""
+        SELECT unit_id, end_date, status
+        FROM property_rent_contracts
+        {where_clause}
+        ORDER BY id DESC
+        """,
+        params,
+    ).fetchall()
+
+    affected_units = set()
+    for contract in contracts:
+        if contract["unit_id"]:
+            affected_units.add(contract["unit_id"])
+
+    if property_id:
+        scoped_units = conn.execute(
+            "SELECT id FROM property_units WHERE property_id = ?",
+            (property_id,),
+        ).fetchall()
+        affected_units.update(row["id"] for row in scoped_units)
+
+    for unit_id in affected_units:
+        refresh_unit_status_from_contracts(conn, unit_id)
+
+
 def property_expense_category_labels() -> dict[str, str]:
     return {
         "salary": "رواتب",
@@ -8483,6 +8872,12 @@ def render_property_form(
     supervisor_phone: str = "",
     notes: str = "",
 ) -> str:
+    property_type_options = '<option value="">اختر نوع العقار</option>'
+    if property_type and property_type not in PROPERTY_TYPE_OPTIONS:
+        property_type_options += f'<option value="{escape(property_type)}" selected>{escape(property_type)}</option>'
+    for option in PROPERTY_TYPE_OPTIONS:
+        selected = "selected" if property_type == option else ""
+        property_type_options += f'<option value="{option}" {selected}>{option}</option>'
     return f"""
 <div class="inventory-panel inventory-table-panel">
     <form action="{escape(action_url)}" method="post">
@@ -8493,7 +8888,7 @@ def render_property_form(
         <input type="text" name="location" value="{escape(location)}">
 
         <label>نوع الملك</label>
-        <input type="text" name="property_type" value="{escape(property_type)}" placeholder="سكني / تجاري / مجمع">
+        <select name="property_type" required>{property_type_options}</select>
 
         <label>اسم المشرف</label>
         <input type="text" name="supervisor_name" value="{escape(supervisor_name)}">
@@ -8517,6 +8912,12 @@ def cascade_delete_property_records(property_id: int) -> bool:
         conn.close()
         return False
 
+    contract_ids = conn.execute(
+        "SELECT id FROM property_rent_contracts WHERE property_id = ?",
+        (property_id,),
+    ).fetchall()
+    contract_id_values = [row["id"] for row in contract_ids]
+
     tenant_ids = conn.execute(
         "SELECT id FROM property_tenants WHERE property_id = ?",
         (property_id,),
@@ -8527,6 +8928,13 @@ def cascade_delete_property_records(property_id: int) -> bool:
         conn.execute(
             f"DELETE FROM user_tenant_access WHERE tenant_id IN ({placeholders})",
             tenant_id_values,
+        )
+
+    if contract_id_values:
+        placeholders = ", ".join("?" for _ in contract_id_values)
+        conn.execute(
+            f"DELETE FROM contract_installments WHERE contract_id IN ({placeholders})",
+            contract_id_values,
         )
 
     conn.execute("DELETE FROM user_property_access WHERE property_id = ?", (property_id,))
@@ -8560,6 +8968,7 @@ def save_property(
         return access_result
     conn = get_db()
     cur = conn.cursor()
+    property_type = normalize_property_type(property_type)
     cur.execute(
         """
         INSERT INTO property_properties (name, location, property_type, status, notes)
@@ -8673,7 +9082,7 @@ def update_property(
         SET name = ?, location = ?, property_type = ?, notes = ?
         WHERE id = ?
         """,
-        (property_name, location, property_type, notes, property_id)
+        (property_name, location, normalize_property_type(property_type), notes, property_id)
     )
 
     latest_supervisor = conn.execute(
@@ -8781,12 +9190,751 @@ def delete_property(request: Request, property_id: int):
     )
 
 
+def build_realestate_owner_property_dashboard(
+    property_id: int,
+    prop,
+    units,
+    contracts,
+    maintenance_items,
+    installment_rows,
+    manual_expenses,
+    attachments_map,
+) -> str:
+    today = date.today()
+    total_units = len(units)
+    installment_status_labels = {
+        "unpaid": "غير مدفوعة",
+        "paid": "مدفوعة",
+        "late": "متأخرة",
+    }
+
+    expected_revenue = 0.0
+    collected_revenue = 0.0
+    contract_ids_with_installments = set()
+    expiring_contracts = []
+    due_soon_installments = []
+    late_installments = []
+    occupied_unit_ids = set()
+    active_contracts_count = 0
+
+    for row in installment_rows:
+        contract_ids_with_installments.add(row["contract_id"])
+        if not row["installment_id"]:
+            continue
+        amount = safe_amount(row["installment_amount"])
+        expected_revenue += amount
+        status_key = (row["installment_status"] or "").strip().lower()
+        if status_key == "paid":
+            collected_revenue += amount
+        due_date_value = parse_safe_date(row["due_date"])
+        remaining_days = (due_date_value - today).days if due_date_value else None
+        item = {
+            "unit_name": row["unit_name"] or "-",
+            "tenant_name": row["tenant_name"] or "-",
+            "amount": amount,
+            "due_date": row["due_date"] or "-",
+            "remaining_days": remaining_days,
+            "status": installment_status_labels.get(status_key, row["installment_status"] or "-"),
+        }
+        if due_date_value and remaining_days is not None and 0 <= remaining_days <= 14 and status_key != "paid":
+            due_soon_installments.append(item)
+        if due_date_value and remaining_days is not None and remaining_days < 0 and status_key != "paid":
+            late_installments.append(item)
+
+    for contract in contracts:
+        contract_status = compute_contract_status(contract["end_date"], contract["status"] or "-")
+        if contract_status in {"ساري", "قريب ينتهي"}:
+            active_contracts_count += 1
+            if contract["unit_id"]:
+                occupied_unit_ids.add(contract["unit_id"])
+        if contract["id"] not in contract_ids_with_installments:
+            expected_revenue += safe_amount(contract["rent"])
+        end_date_value = parse_safe_date(contract["end_date"])
+        if end_date_value:
+            remaining_days = (end_date_value - today).days
+            if 0 <= remaining_days <= 60:
+                expiring_contracts.append({
+                    "unit_name": contract["unit_name"] or "-",
+                    "tenant_name": contract["tenant_name"] or "-",
+                    "end_date": contract["end_date"] or "-",
+                    "remaining_days": remaining_days,
+                    "status": contract_status,
+                })
+
+    maintenance_total = 0.0
+    open_important_maintenance = []
+    for item in maintenance_items:
+        amount = safe_amount(item["actual_cost"]) if safe_amount(item["actual_cost"]) > 0 else safe_amount(item["estimated_cost"])
+        maintenance_total += amount
+        item_keys = item.keys()
+        status_value = (item["status"] if "status" in item_keys else "") or ""
+        status_key = status_value.strip().lower()
+        priority_value = (item["priority"] if "priority" in item_keys else "") or ""
+        priority_key = priority_value.strip().lower()
+        is_open = status_key not in {"completed", "مكتمل", "closed", "منتهي"}
+        is_important = priority_key in {"high", "urgent", "critical", "عالية", "عالي", "حرجة"}
+        if is_open and is_important:
+            open_important_maintenance.append({
+                "title": item["maintenance_type"] if "maintenance_type" in item_keys and item["maintenance_type"] else (item["title"] if "title" in item_keys and item["title"] else "-"),
+                "unit_name": item["unit_name"] if "unit_name" in item_keys and item["unit_name"] else "-",
+                "status": status_value or "-",
+                "priority": priority_value or "-",
+                "updated_at": (item["updated_at"] if "updated_at" in item_keys and item["updated_at"] else "") or (item["created_at"] if "created_at" in item_keys and item["created_at"] else "-"),
+            })
+
+    operational_total = sum(safe_amount(item["amount"]) for item in manual_expenses)
+    total_expenses = maintenance_total + operational_total
+    outstanding_revenue = max(expected_revenue - collected_revenue, 0.0)
+    net_after_expenses = collected_revenue - total_expenses
+    vacant_units_count = max(total_units - len(occupied_unit_ids), 0)
+    occupancy_rate = (len(occupied_unit_ids) / total_units * 100) if total_units else 0.0
+
+    summary_cards = f"""
+    <section class="owner-kpi-section owner-reveal-group">
+        <div class="owner-kpi-grid container-cards">
+            <article class="owner-kpi-card owner-kpi-card-soft owner-reveal card" style="--owner-delay: 0.02s;">
+                <span>عدد الوحدات</span>
+                <strong data-count="{total_units}">{total_units}</strong>
+            </article>
+            <article class="owner-kpi-card owner-kpi-card-soft owner-reveal card" style="--owner-delay: 0.08s;">
+                <span>نسبة الإشغال</span>
+                <strong data-count="{occupancy_rate:.1f}" data-suffix="%">{occupancy_rate:,.1f}%</strong>
+            </article>
+            <article class="owner-kpi-card owner-kpi-card-gold owner-reveal card" style="--owner-delay: 0.14s;">
+                <span>الإيراد المتوقع</span>
+                <strong data-count="{expected_revenue:.2f}" data-suffix=" ريال">{expected_revenue:,.0f} ريال</strong>
+            </article>
+            <article class="owner-kpi-card owner-kpi-card-emerald owner-reveal card" style="--owner-delay: 0.20s;">
+                <span>الإيراد المحصل</span>
+                <strong data-count="{collected_revenue:.2f}" data-suffix=" ريال">{collected_revenue:,.0f} ريال</strong>
+            </article>
+        </div>
+        <div class="row-bottom">
+            <article class="owner-kpi-card owner-kpi-card-ruby owner-reveal card" style="--owner-delay: 0.26s;">
+                <span>إجمالي المصروفات</span>
+                <strong data-count="{total_expenses:.2f}" data-suffix=" ريال">{total_expenses:,.0f} ريال</strong>
+            </article>
+            <article class="owner-kpi-card {'owner-kpi-card-emerald' if net_after_expenses >= 0 else 'owner-kpi-card-ruby'} owner-reveal card" style="--owner-delay: 0.32s;">
+                <span>الصافي بعد المصروفات</span>
+                <strong data-count="{net_after_expenses:.2f}" data-suffix=" ريال">{net_after_expenses:,.0f} ريال</strong>
+            </article>
+            <article class="owner-kpi-card owner-kpi-card-soft owner-reveal card" style="--owner-delay: 0.38s;">
+                <span>العقود النشطة</span>
+                <strong data-count="{active_contracts_count}">{active_contracts_count}</strong>
+            </article>
+        </div>
+    </section>
+    """
+
+    expiring_contracts_rows = "".join(
+        f"""
+        <tr>
+            <td>{item['unit_name']}</td>
+            <td>{item['tenant_name']}</td>
+            <td>{item['end_date']}</td>
+            <td>{item['remaining_days']} يوم</td>
+            <td>{item['status']}</td>
+        </tr>
+        """
+        for item in expiring_contracts
+    )
+    due_installment_rows = "".join(
+        f"""
+        <tr>
+            <td>{item['unit_name']}</td>
+            <td>{item['tenant_name']}</td>
+            <td>{item['amount']:,.0f} ريال</td>
+            <td>{item['due_date']}</td>
+            <td>{item['remaining_days']} يوم</td>
+            <td>{item['status']}</td>
+        </tr>
+        """
+        for item in due_soon_installments
+    )
+    late_installment_rows = "".join(
+        f"""
+        <tr>
+            <td>{item['unit_name']}</td>
+            <td>{item['tenant_name']}</td>
+            <td>{item['amount']:,.0f} ريال</td>
+            <td>{item['due_date']}</td>
+            <td>{abs(item['remaining_days'])} يوم</td>
+            <td>{item['status']}</td>
+        </tr>
+        """
+        for item in late_installments
+    )
+    maintenance_rows = "".join(
+        f"""
+        <tr>
+            <td>{item['title']}</td>
+            <td>{item['unit_name']}</td>
+            <td>{item['status']}</td>
+            <td>{item['priority']}</td>
+            <td>{item['updated_at']}</td>
+        </tr>
+        """
+        for item in open_important_maintenance
+    )
+    vacant_units_rows = "".join(
+        f"""
+        <tr>
+            <td>{unit['name'] or '-'}</td>
+            <td>{unit['type'] or '-'}</td>
+            <td>{safe_amount(unit['rent']):,.0f} ريال</td>
+            <td>{unit['status'] or 'شاغرة'}</td>
+        </tr>
+        """
+        for unit in units
+        if unit["id"] not in occupied_unit_ids or (unit["status"] or "").strip() == "شاغرة"
+    )
+
+    documents_rows = ""
+    for contract in contracts:
+        for attachment in attachments_map.get(contract["id"], []):
+            file_name = escape(attachment["file_name"] or "ملف مرفق")
+            documents_rows += f"""
+            <tr>
+                <td>{contract['unit_name'] or '-'}</td>
+                <td>{contract['tenant_name'] or '-'}</td>
+                <td>{file_name}</td>
+                <td><a href="/contract-attachments/{attachment['id']}" class="action-btn">عرض / تنزيل</a></td>
+            </tr>
+            """
+
+    expense_distribution_labels = []
+    expense_distribution_values = []
+    if maintenance_total > 0:
+        expense_distribution_labels.append("الصيانة")
+        expense_distribution_values.append(round(maintenance_total, 2))
+    if operational_total > 0:
+        expense_distribution_labels.append("التشغيل")
+        expense_distribution_values.append(round(operational_total, 2))
+
+    revenue_chart_config = json.dumps({
+        "labels": ["الإيراد المتوقع", "الإيراد المحصل", "المتبقي للتحصيل"],
+        "values": [
+            round(expected_revenue, 2),
+            round(collected_revenue, 2),
+            round(outstanding_revenue, 2),
+        ],
+    }, ensure_ascii=False)
+    occupancy_chart_config = json.dumps({
+        "labels": ["الوحدات المؤجرة", "الوحدات الشاغرة"],
+        "values": [len(occupied_unit_ids), vacant_units_count],
+    }, ensure_ascii=False)
+    expense_chart_config = json.dumps({
+        "labels": expense_distribution_labels,
+        "values": expense_distribution_values,
+    }, ensure_ascii=False)
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+.owner-page {{ }}
+.owner-dashboard {{ position: relative; padding: 30px 0 56px; }}
+.owner-dashboard::before {{ content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at 12% 0%, rgba(245, 235, 218, 0.26), transparent 28%), radial-gradient(circle at 88% 0%, rgba(228, 214, 194, 0.22), transparent 24%), linear-gradient(180deg, rgba(70, 55, 38, 0.10), rgba(70, 55, 38, 0)); }}
+.owner-shell {{ position: relative; display: grid; gap: 24px; }}
+.owner-hero {{ position: relative; overflow: hidden; border-radius: 30px; padding: 32px; border: 1px solid rgba(240, 225, 204, 0.30); background: linear-gradient(135deg, rgba(255,255,255,0.18), rgba(187, 169, 145, 0.18)), radial-gradient(circle at top left, rgba(248, 239, 225, 0.24), transparent 36%); box-shadow: 0 18px 42px rgba(181, 153, 120, 0.12), 0 34px 70px rgba(138, 112, 83, 0.10); }}
+.owner-hero::after {{ content: ""; position: absolute; left: -40px; bottom: -90px; width: 260px; height: 260px; border-radius: 999px; background: radial-gradient(circle, rgba(255, 248, 239, 0.28), transparent 68%); }}
+.owner-hero-top {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; margin-bottom: 24px; }}
+.owner-hero-copy h1 {{ margin: 0 0 10px; font-size: clamp(2.1rem, 4vw, 3.2rem); line-height: 1.02; letter-spacing: -0.04em; }}
+.owner-hero-copy p {{ margin: 0; color: rgba(102, 84, 65, 0.88); }}
+.owner-page .owner-dashboard h1 {{ color: #5f4b32 !important; }}
+.owner-page .owner-dashboard h2,
+.owner-page .owner-dashboard h3,
+.owner-page .owner-dashboard h4,
+.owner-page .owner-dashboard th,
+.owner-page .owner-dashboard .owner-section-pill,
+.owner-page .owner-dashboard .owner-badge,
+.owner-page .owner-dashboard .owner-kpi-card span,
+.owner-page .owner-dashboard .finance-chart-card h3,
+.owner-page .owner-dashboard .inventory-panel h3 {{ color: #7a6447 !important; }}
+.owner-page .owner-dashboard p,
+.owner-page .owner-dashboard small,
+.owner-page .owner-dashboard .finance-chart-note,
+.owner-page .owner-dashboard .section-subtitle,
+.owner-page .owner-dashboard .glass-note,
+.owner-page .owner-dashboard .inventory-note,
+.owner-page .owner-dashboard .owner-section-header p,
+.owner-page .owner-dashboard .owner-hero-copy p,
+.owner-page .owner-dashboard .empty-state {{ color: #8f7a5c !important; }}
+.owner-page .owner-dashboard td,
+.owner-page .owner-dashboard span,
+.owner-page .owner-dashboard label,
+.owner-page .owner-dashboard li,
+.owner-page .owner-dashboard .owner-status-badge,
+.owner-page .owner-dashboard .owner-table td,
+.owner-page .owner-dashboard .owner-table-wrap *,
+.owner-page .owner-dashboard .owner-badge strong,
+.owner-page .owner-dashboard .inventory-note strong {{ color: #6b573d; }}
+.owner-hero-badges {{ display: flex; flex-wrap: wrap; gap: 12px; }}
+.owner-badge {{ display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px; border: 1px solid rgba(235, 220, 198, 0.34); background: linear-gradient(180deg, rgba(255,255,255,0.22), rgba(216, 198, 173, 0.16)); color: #5e4b39; box-shadow: inset 0 1px 0 rgba(255,255,255,0.46), 0 10px 24px rgba(180, 151, 116, 0.10); }}
+.owner-badge strong {{ color: #7b644d; }}
+.owner-kpi-section {{ margin-top: 30px; display: grid; gap: 20px; }}
+.owner-kpi-grid, .container-cards {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }}
+.row-bottom {{ display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }}
+.row-bottom .owner-kpi-card, .row-bottom .card {{ width: 250px; max-width: 100%; }}
+.owner-kpi-card, .card {{ position: relative; overflow: hidden; min-height: 120px; padding: 25px; border-radius: 20px; border: 1px solid rgba(180, 150, 100, 0.15); background: rgba(245, 240, 230, 0.68); box-shadow: 0 10px 25px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.4); display: flex; flex-direction: column; justify-content: space-between; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }}
+.owner-kpi-card:hover, .card:hover {{ transform: translateY(-10px) scale(1.02); box-shadow: 0 28px 52px rgba(0,0,0,0.14), 0 0 0 1px rgba(214, 195, 163, 0.34), inset 0 1px 0 rgba(255,255,255,0.56); border-color: rgba(184, 155, 109, 0.34); background: rgba(248, 243, 234, 0.82); z-index: 2; }}
+.owner-kpi-card::after {{ content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(to right, #d6c3a3, #b89b6d); border-radius: 20px 20px 0 0; opacity: 0.6; pointer-events: none; }}
+.owner-kpi-card::before {{ content: ""; position: absolute; inset: 0 auto auto 0; width: 100%; height: 4px; opacity: 0.85; box-shadow: 0 0 18px rgba(231, 214, 188, 0.24); }}
+.owner-kpi-card span {{ position: relative; z-index: 1; color: #8c7a5a; font-size: 0.94rem; }}
+.owner-kpi-card strong {{ position: relative; z-index: 1; color: #4e3f2a; text-shadow: 0 1px 12px rgba(255, 255, 255, 0.22); font-size: clamp(1.55rem, 2.7vw, 2.3rem); line-height: 1.06; letter-spacing: -0.04em; }}
+.owner-kpi-card-soft::before {{ background: linear-gradient(90deg, #eadcca, #c8b091); }}
+.owner-kpi-card-soft {{ background: rgba(245, 240, 230, 0.68); }}
+.owner-kpi-card-gold::before {{ background: linear-gradient(90deg, #e7d7bf, #c7a982); }}
+.owner-kpi-card-gold {{ background: rgba(245, 240, 230, 0.68); }}
+.owner-kpi-card-emerald::before {{ background: linear-gradient(90deg, #ddd7c2, #b4ac8f); }}
+.owner-kpi-card-emerald {{ background: rgba(245, 240, 230, 0.68); }}
+.owner-kpi-card-ruby::before {{ background: linear-gradient(90deg, #e5d1bf, #c6a38b); }}
+.owner-kpi-card-ruby {{ background: rgba(245, 240, 230, 0.68); }}
+.system-topbar {{ z-index: 24; }}
+.owner-section {{ border-radius: 28px; padding: 24px; border: 1px solid rgba(236, 220, 201, 0.30); background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(234, 223, 206, 0.66)); box-shadow: 0 18px 44px rgba(176, 146, 112, 0.10), 0 1px 0 rgba(255,255,255,0.72) inset; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }}
+.owner-section:hover {{ transform: translateY(-10px) scale(1.02); box-shadow: 0 28px 52px rgba(0,0,0,0.14), 0 0 0 1px rgba(214, 195, 163, 0.30), 0 1px 0 rgba(255,255,255,0.72) inset; border-color: rgba(184, 155, 109, 0.32); transition: transform 0.36s cubic-bezier(.22,1,.36,1), box-shadow 0.36s cubic-bezier(.22,1,.36,1), border-color 0.36s cubic-bezier(.22,1,.36,1); z-index: 2; }}
+.owner-section-header {{ display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 18px; }}
+.owner-section-header h3 {{ margin: 0; font-size: 1.28rem; color: #7a6447; }}
+.owner-section-header p {{ margin: 6px 0 0; color: #8f7a5c; }}
+.owner-section-pill {{ padding: 9px 14px; border-radius: 999px; background: rgba(255,255,255,0.16); border: 1px solid rgba(233, 216, 196, 0.26); color: #7a6447; font-weight: 700; white-space: nowrap; }}
+.owner-chart-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }}
+.owner-chart-card {{ min-height: 360px; border: 1px solid rgba(236, 220, 199, 0.28) !important; background: linear-gradient(180deg, rgba(255,255,255,0.76), rgba(236, 223, 205, 0.68)) !important; box-shadow: 0 18px 40px rgba(176, 146, 112, 0.10), 0 1px 0 rgba(255,255,255,0.68) inset !important; }}
+.owner-chart-card:hover {{ transform: translateY(-10px) scale(1.02); box-shadow: 0 28px 52px rgba(0,0,0,0.14), 0 0 0 1px rgba(214, 195, 163, 0.34), 0 1px 0 rgba(255,255,255,0.68) inset !important; border-color: rgba(184, 155, 109, 0.34) !important; z-index: 2; }}
+.owner-table-wrap {{ overflow-x: auto; border-radius: 22px; border: 1px solid rgba(236, 220, 201, 0.28); background: linear-gradient(180deg, rgba(255,255,255,0.78), rgba(238, 227, 210, 0.72)); box-shadow: 0 16px 34px rgba(176, 146, 112, 0.10), 0 1px 0 rgba(255,255,255,0.68) inset; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }}
+.owner-table {{ width: 100%; border-collapse: collapse; }}
+.owner-table th {{ text-align: right; padding: 14px 16px; background: linear-gradient(180deg, rgba(255, 251, 246, 0.82), rgba(241, 232, 217, 0.64)); color: #7a6447; border-bottom: 1px solid rgba(230, 212, 191, 0.24); box-shadow: 0 -1px 0 rgba(255,255,255,0.38) inset; }}
+.owner-table td {{ padding: 14px 16px; color: #6b573d; border-bottom: 1px solid rgba(228, 212, 191, 0.12); background: rgba(252, 248, 242, 0.76); }}
+.owner-table tr:nth-child(even) td {{ background: rgba(245, 238, 228, 0.66); }}
+.owner-table tr:hover td {{ background: rgba(239, 229, 214, 0.82); }}
+.owner-status-badge {{ display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(230, 213, 191, 0.22); background: rgba(255,255,255,0.72); font-size: 0.88rem; }}
+.owner-status-badge-warning {{ color: #6b573d; }}
+.owner-status-badge-danger {{ color: #6b573d; }}
+.owner-status-badge-info {{ color: #6b573d; }}
+.owner-dashboard .finance-chart-note {{ color: #8f7a5c; }}
+.owner-dashboard .inventory-note {{ color: #8f7a5c; border-color: rgba(231, 214, 191, 0.28); background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(239, 229, 214, 0.68)); box-shadow: 0 10px 24px rgba(175, 147, 116, 0.08); }}
+.owner-dashboard .action-btn, .owner-dashboard .glass-btn {{ background: linear-gradient(180deg, rgba(255,255,255,0.22), rgba(231, 216, 196, 0.20)) !important; color: #5b4838 !important; border: 1px solid rgba(232, 214, 191, 0.28) !important; box-shadow: 0 10px 20px rgba(178, 149, 116, 0.08), inset 0 1px 0 rgba(255,255,255,0.62); }}
+.owner-dashboard .action-btn:hover, .owner-dashboard .glass-btn:hover {{ background: linear-gradient(180deg, rgba(255,255,255,0.30), rgba(236, 222, 202, 0.24)) !important; color: #4c3b2d !important; }}
+.owner-reveal {{ opacity: 1; transform: translateY(0); animation: premium-fade-up 0.75s cubic-bezier(.22,1,.36,1) both; animation-delay: var(--owner-delay, 0s); will-change: opacity, transform; }}
+.owner-reveal.is-visible {{ opacity: 1; transform: translateY(0); }}
+@media (max-width: 960px) {{ .owner-kpi-grid, .container-cards {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+@media (max-width: 720px) {{ .owner-hero {{ padding: 24px; }} .owner-hero-top, .owner-section-header {{ flex-direction: column; align-items: flex-start; }} .owner-kpi-grid, .container-cards {{ grid-template-columns: 1fr; }} .row-bottom .owner-kpi-card, .row-bottom .card {{ width: 100%; }} }}
+</style>
+<body class="system-dark owner-page">
+{HOME_BUTTON}
+<div class="dashboard owner-dashboard">
+    <div class="owner-shell">
+        <section class="owner-hero owner-reveal">
+            <div class="owner-hero-top">
+                <div class="owner-hero-copy">
+                    <h1>{prop['name']}</h1>
+                    <p>{prop['location'] or 'بدون موقع محدد'} | النوع: {prop['property_type'] or '-'} | الحالة: {prop['status'] or '-'}</p>
+                </div>
+                <a href="/property-management" class="glass-btn back-btn">⬅ رجوع</a>
+            </div>
+            <div class="owner-hero-badges">
+                <div class="owner-badge">المتبقي للتحصيل <strong>{outstanding_revenue:,.0f} ريال</strong></div>
+                <div class="owner-badge">عقود تنتهي قريبًا <strong>{len(expiring_contracts)}</strong></div>
+                <div class="owner-badge">دفعات متأخرة <strong>{len(late_installments)}</strong></div>
+                <div class="owner-badge">الصيانة المفتوحة المهمة <strong>{len(open_important_maintenance)}</strong></div>
+            </div>
+        </section>
+
+        {summary_cards}
+
+        <section class="owner-section owner-reveal">
+            <div class="owner-section-header">
+                <div>
+                    <h3>المؤشرات البصرية</h3>
+                    <p>لوحة مالك أنيقة تركز على التحصيل والإشغال والمصروفات بشكل واضح ومريح.</p>
+                </div>
+                <div class="owner-section-pill">عرض استثماري</div>
+            </div>
+            <div class="owner-chart-grid">
+                <div class="inventory-panel finance-chart-card owner-chart-card owner-reveal" style="--owner-delay: 0.04s;">
+            <h3>ملخص الإيرادات والتحصيل</h3>
+            <p class="finance-chart-note">مقارنة مباشرة بين المتوقع والمحصل والمتبقي للتحصيل.</p>
+            <div class="finance-line-stage">
+                <canvas id="ownerRevenueOverviewChart"></canvas>
+            </div>
+        </div>
+
+        <div class="inventory-panel finance-chart-card owner-chart-card owner-reveal" style="--owner-delay: 0.10s;">
+            <h3>حالة الإشغال</h3>
+            <p class="finance-chart-note">توزيع الوحدات بين المؤجر والشاغر بشكل بصري واضح.</p>
+            <div class="finance-pie-shell">
+                <div class="finance-pie-stage">
+                    <canvas id="ownerOccupancyChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="inventory-panel finance-chart-card owner-chart-card owner-reveal" style="--owner-delay: 0.16s;">
+            <h3>توزيع المصروفات</h3>
+            <p class="finance-chart-note">عرض مبسط لتوزيع الصيانة مقابل التشغيل.</p>
+            <div class="finance-pie-shell">
+                <div class="finance-pie-stage">
+                    <canvas id="ownerExpenseDistributionChart"></canvas>
+                </div>
+            </div>
+            {'<div class="inventory-note">لا توجد مصروفات مسجلة بعد</div>' if not expense_distribution_values else ''}
+        </div>
+    </div>
+        </section>
+
+        <section class="owner-section owner-reveal">
+            <div class="owner-section-header">
+                <div>
+                    <h3>العقود التي تنتهي قريبًا</h3>
+                    <p>العقود التي تستحق متابعة مبكرة للحفاظ على استمرارية الإشغال.</p>
+                </div>
+                <div class="owner-section-pill">{len(expiring_contracts)} عقد</div>
+            </div>
+            <div class="owner-table-wrap">
+                <table class="owner-table">
+                <tr>
+                    <th>الوحدة</th>
+                    <th>المستأجر</th>
+                    <th>تاريخ النهاية</th>
+                    <th>الأيام المتبقية</th>
+                    <th>الحالة</th>
+                </tr>
+                {expiring_contracts_rows if expiring_contracts_rows else "<tr><td colspan='5'>لا توجد عقود تنتهي قريبًا</td></tr>"}
+                </table>
+            </div>
+        </section>
+
+        <section class="owner-section owner-reveal">
+            <div class="owner-section-header">
+                <div>
+                    <h3>الدفعات المستحقة قريبًا</h3>
+                    <p>دفعات التحصيل القادمة خلال الفترة القريبة، مع تركيز على الوضوح والجاهزية.</p>
+                </div>
+                <div class="owner-section-pill">{len(due_soon_installments)} دفعة</div>
+            </div>
+            <div class="owner-table-wrap">
+                <table class="owner-table">
+                <tr>
+                    <th>الوحدة</th>
+                    <th>المستأجر</th>
+                    <th>المبلغ</th>
+                    <th>تاريخ الاستحقاق</th>
+                    <th>الأيام المتبقية</th>
+                    <th>الحالة</th>
+                </tr>
+                {due_installment_rows if due_installment_rows else "<tr><td colspan='6'>لا توجد دفعات مستحقة قريبًا</td></tr>"}
+                </table>
+            </div>
+        </section>
+
+        <section class="owner-section owner-reveal">
+            <div class="owner-section-header">
+                <div>
+                    <h3>الدفعات المتأخرة</h3>
+                    <p>حالات التحصيل المتأخرة التي قد تتطلب متابعة مباشرة أو مراجعة سريعة.</p>
+                </div>
+                <div class="owner-section-pill">{len(late_installments)} حالة</div>
+            </div>
+            <div class="owner-table-wrap">
+                <table class="owner-table">
+                <tr>
+                    <th>الوحدة</th>
+                    <th>المستأجر</th>
+                    <th>المبلغ</th>
+                    <th>تاريخ الاستحقاق</th>
+                    <th>أيام التأخير</th>
+                    <th>الحالة</th>
+                </tr>
+                {late_installment_rows if late_installment_rows else "<tr><td colspan='6'>لا توجد دفعات متأخرة</td></tr>"}
+                </table>
+            </div>
+        </section>
+
+        <section class="owner-section owner-reveal">
+            <div class="owner-section-header">
+                <div>
+                    <h3>الوحدات الشاغرة</h3>
+                    <p>الوحدات غير المؤجرة حاليًا وفقًا لحالة الإشغال الحالية في العقار.</p>
+                </div>
+                <div class="owner-section-pill">{vacant_units_count} وحدة</div>
+            </div>
+            <div class="owner-table-wrap">
+                <table class="owner-table">
+                    <tr>
+                        <th>الوحدة</th>
+                        <th>النوع</th>
+                        <th>الإيجار</th>
+                        <th>الحالة</th>
+                    </tr>
+                    {vacant_units_rows if vacant_units_rows else "<tr><td colspan='4'>لا توجد وحدات شاغرة</td></tr>"}
+                </table>
+            </div>
+        </section>
+
+        <section class="owner-section owner-reveal">
+            <div class="owner-section-header">
+                <div>
+                    <h3>المستندات والمرفقات</h3>
+                    <p>الوصول السريع إلى مستندات العقود والمرفقات المتاحة حاليًا للعرض والتنزيل.</p>
+                </div>
+                <div class="owner-section-pill">مرفقات العقود</div>
+            </div>
+            <div class="owner-table-wrap">
+                <table class="owner-table">
+                <tr>
+                    <th>الوحدة</th>
+                    <th>المستأجر</th>
+                    <th>اسم الملف</th>
+                    <th>الإجراء</th>
+                </tr>
+                {documents_rows if documents_rows else "<tr><td colspan='4'>لا توجد مستندات مرفوعة بعد</td></tr>"}
+                </table>
+            </div>
+        </section>
+
+        <section class="owner-section owner-reveal">
+            <div class="owner-section-header">
+                <div>
+                    <h3>الصيانة المفتوحة المهمة</h3>
+                    <p>الطلبات ذات الأولوية الأعلى فقط، مع عرض بسيط وواضح دون تفاصيل تشغيلية زائدة.</p>
+                </div>
+                <div class="owner-section-pill">{len(open_important_maintenance)} طلب</div>
+            </div>
+            <div class="owner-table-wrap">
+                <table class="owner-table">
+                <tr>
+                    <th>النوع</th>
+                    <th>الوحدة</th>
+                    <th>الحالة</th>
+                    <th>الأولوية</th>
+                    <th>آخر تحديث</th>
+                </tr>
+                {maintenance_rows if maintenance_rows else "<tr><td colspan='5'>لا توجد طلبات صيانة مهمة مفتوحة</td></tr>"}
+                </table>
+            </div>
+        </section>
+
+        <a href="/property-management" class="glass-btn back-btn owner-reveal">⬅ رجوع</a>
+    </div>
+</div>
+<script>
+const ownerRevenueOverviewConfig = {revenue_chart_config};
+const ownerOccupancyConfig = {occupancy_chart_config};
+const ownerExpenseDistributionConfig = {expense_chart_config};
+
+function ownerFormatNumber(value, suffix = '') {{
+    const numericValue = Number(value || 0);
+    const hasDecimal = Math.abs(numericValue % 1) > 0.001;
+    const formatted = numericValue.toLocaleString('en-US', {{
+        minimumFractionDigits: hasDecimal ? 1 : 0,
+        maximumFractionDigits: hasDecimal ? 1 : 0
+    }});
+    return `${{formatted}}${{suffix}}`;
+}}
+
+function ownerBuildGradient(ctx, area, startColor, endColor) {{
+    const gradient = ctx.createLinearGradient(0, area.bottom, 0, area.top);
+    gradient.addColorStop(0, endColor);
+    gradient.addColorStop(1, startColor);
+    return gradient;
+}}
+
+const ownerPremiumShadowPlugin = {{
+    id: 'ownerPremiumShadowPlugin',
+    beforeDatasetDraw(chart, args) {{
+        const ctx = chart.ctx;
+        ctx.save();
+        ctx.shadowColor = 'rgba(173, 143, 108, 0.20)';
+        ctx.shadowBlur = 18;
+        ctx.shadowOffsetY = 10;
+    }},
+    afterDatasetDraw(chart, args) {{
+        chart.ctx.restore();
+    }}
+}};
+
+function ownerCreateRevenueChart(canvasId, config) {{
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !config.values || !config.values.length) return;
+    new Chart(canvas, {{
+        type: 'bar',
+        data: {{
+            labels: config.labels,
+            datasets: [{{
+                data: config.values,
+                borderRadius: 16,
+                borderSkipped: false,
+                backgroundColor(context) {{
+                    const area = context.chart.chartArea;
+                    const palettes = [
+                        ['rgba(243, 232, 216, 0.96)', 'rgba(196, 171, 139, 0.96)'],
+                        ['rgba(233, 225, 209, 0.96)', 'rgba(168, 153, 126, 0.96)'],
+                        ['rgba(242, 228, 220, 0.96)', 'rgba(181, 152, 130, 0.96)']
+                    ];
+                    const palette = palettes[context.dataIndex % palettes.length];
+                    if (!area) return palette[0];
+                    return ownerBuildGradient(context.chart.ctx, area, palette[0], palette[1]);
+                }},
+            }}]
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {{
+                legend: {{ display: false }},
+                tooltip: {{
+                    rtl: true,
+                    callbacks: {{
+                        label(context) {{
+                            return `${{Number(context.raw).toLocaleString('en-US')}} ريال`;
+                        }}
+                    }}
+                }}
+            }},
+            scales: {{
+                x: {{
+                    ticks: {{ color: '#6b5a49' }},
+                    grid: {{ display: false }}
+                }},
+                y: {{
+                    ticks: {{ color: '#6b5a49' }},
+                    grid: {{ color: 'rgba(186, 163, 133, 0.14)' }}
+                }}
+            }}
+        }},
+        plugins: [ownerPremiumShadowPlugin]
+    }});
+}}
+
+function ownerCreateDoughnutChart(canvasId, config) {{
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !config.values || !config.values.length) return;
+    const palettes = [
+        ['rgba(243, 232, 216, 0.96)', 'rgba(196, 171, 139, 0.96)'],
+        ['rgba(233, 225, 209, 0.96)', 'rgba(168, 153, 126, 0.96)'],
+        ['rgba(242, 228, 220, 0.96)', 'rgba(181, 152, 130, 0.96)'],
+        ['rgba(234, 221, 204, 0.96)', 'rgba(159, 134, 111, 0.96)']
+    ];
+    new Chart(canvas, {{
+        type: 'doughnut',
+        data: {{
+            labels: config.labels,
+            datasets: [{{
+                data: config.values,
+                hoverOffset: 12,
+                borderWidth: 2,
+                borderColor: 'rgba(255,255,255,0.16)',
+                backgroundColor(context) {{
+                    const area = context.chart.chartArea;
+                    const palette = palettes[context.dataIndex % palettes.length];
+                    if (!area) return palette[0];
+                    return ownerBuildGradient(context.chart.ctx, area, palette[0], palette[1]);
+                }}
+            }}]
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '56%',
+            plugins: {{
+                legend: {{
+                    position: 'bottom',
+                    rtl: true,
+                    labels: {{
+                        color: '#6b5a49',
+                        usePointStyle: true,
+                        padding: 18
+                    }}
+                }},
+                tooltip: {{
+                    rtl: true,
+                    callbacks: {{
+                        label(context) {{
+                            return `${{context.label}}: ${{Number(context.raw).toLocaleString('en-US')}}`;
+                        }}
+                    }}
+                }}
+            }}
+        }},
+        plugins: [ownerPremiumShadowPlugin]
+    }});
+}}
+
+function ownerAnimateCounters() {{
+    const counters = document.querySelectorAll('[data-count]');
+    const observer = new IntersectionObserver((entries) => {{
+        entries.forEach((entry) => {{
+            if (!entry.isIntersecting || entry.target.dataset.animated === 'true') return;
+            entry.target.dataset.animated = 'true';
+            const target = Number(entry.target.dataset.count || 0);
+            const suffix = entry.target.dataset.suffix || '';
+            const duration = 1400;
+            const start = performance.now();
+            const tick = (now) => {{
+                const progress = Math.min((now - start) / duration, 1);
+                const eased = 1 - Math.pow(1 - progress, 3);
+                const value = target * eased;
+                entry.target.textContent = ownerFormatNumber(value, suffix);
+                if (progress < 1) {{
+                    requestAnimationFrame(tick);
+                }} else {{
+                    entry.target.textContent = ownerFormatNumber(target, suffix);
+                }}
+            }};
+            requestAnimationFrame(tick);
+            observer.unobserve(entry.target);
+        }});
+    }}, {{ threshold: 0.45 }});
+    counters.forEach((counter) => observer.observe(counter));
+}}
+
+function ownerInitReveal() {{
+    const elements = document.querySelectorAll('.owner-reveal');
+    const observer = new IntersectionObserver((entries) => {{
+        entries.forEach((entry) => {{
+            if (entry.isIntersecting) {{
+                entry.target.classList.add('is-visible');
+                observer.unobserve(entry.target);
+            }}
+        }});
+    }}, {{
+        threshold: 0.16,
+        rootMargin: '0px 0px -40px 0px'
+    }});
+    elements.forEach((element) => observer.observe(element));
+}}
+
+function ownerEnhanceTableStatuses() {{
+    document.querySelectorAll('.owner-table td:last-child').forEach((cell) => {{
+        const value = (cell.textContent || '').trim();
+        if (!value || cell.querySelector('a')) return;
+        let badgeClass = 'owner-status-badge-info';
+        if (value.includes('متأخر') || value.includes('منتهي')) {{
+            badgeClass = 'owner-status-badge-danger';
+        }} else if (value.includes('قريب') || value.includes('عالية') || value.includes('حرجة')) {{
+            badgeClass = 'owner-status-badge-warning';
+        }}
+        cell.innerHTML = `<span class="owner-status-badge ${{badgeClass}}">${{value}}</span>`;
+    }});
+}}
+
+ownerCreateRevenueChart('ownerRevenueOverviewChart', ownerRevenueOverviewConfig);
+ownerCreateDoughnutChart('ownerOccupancyChart', ownerOccupancyConfig);
+ownerCreateDoughnutChart('ownerExpenseDistributionChart', ownerExpenseDistributionConfig);
+ownerEnhanceTableStatuses();
+ownerInitReveal();
+ownerAnimateCounters();
+</script>
+"""
+
+
 @app.get("/property-management/{property_id}", response_class=HTMLResponse)
 def property_management_dashboard(request: Request, property_id: int):
     access_result = ensure_realestate_property_management_access(request, property_id)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
     conn = get_db()
+    sync_property_contracts_and_units(conn, property_id)
     prop = conn.execute("SELECT * FROM property_properties WHERE id = ?", (property_id,)).fetchone()
 
     if not prop:
@@ -8824,6 +9972,22 @@ def property_management_dashboard(request: Request, property_id: int):
         """,
         (property_id,)
     ).fetchall()
+    installment_rows = get_property_contract_installment_rows(conn, property_id)
+    manual_expenses = conn.execute(
+        """
+        SELECT property_expenses.*, property_units.name AS unit_name
+        FROM property_expenses
+        LEFT JOIN property_units ON property_units.id = property_expenses.unit_id
+        WHERE property_expenses.property_id = ?
+        ORDER BY property_expenses.id DESC
+        """,
+        (property_id,)
+    ).fetchall()
+    attachments_map = get_contract_attachment_rows(
+        conn,
+        CONTRACT_ATTACHMENT_SOURCE_PROPERTY,
+        [row["id"] for row in contracts],
+    )
     tenants = conn.execute(
         "SELECT * FROM property_tenants WHERE property_id = ? ORDER BY id DESC",
         (property_id,)
@@ -8831,27 +9995,66 @@ def property_management_dashboard(request: Request, property_id: int):
     conn.close()
 
     is_owner_view_only = realestate_owner_read_only(access_result)
+    if is_owner_view_only:
+        return build_realestate_owner_property_dashboard(
+            property_id,
+            prop,
+            units,
+            contracts,
+            maintenance,
+            installment_rows,
+            manual_expenses,
+            attachments_map,
+        )
     can_view_tenants = not is_owner_view_only
     can_view_maintenance = not is_owner_view_only and not is_realestate_property_accounts_employee(access_result)
     can_view_supervisors = not is_owner_view_only and not is_employee(access_result)
 
     latest_supervisor = supervisors[0] if supervisors else None
-    yearly_income = sum((contract["rent"] or 0) for contract in contracts)
+    expected_revenue = 0.0
+    collected_revenue = 0.0
     total_expenses = sum(((item["actual_cost"] or item["estimated_cost"]) or 0) for item in maintenance)
     today = date.today()
     expiring_contracts = []
+    due_soon_installments = []
+    contract_ids_with_installments = set()
+    contract_installment_counts = {}
+
+    for row in installment_rows:
+        contract_ids_with_installments.add(row["contract_id"])
+        if row["installment_id"]:
+            contract_installment_counts[row["contract_id"]] = contract_installment_counts.get(row["contract_id"], 0) + 1
+            amount = safe_amount(row["installment_amount"])
+            expected_revenue += amount
+            status_key = (row["installment_status"] or "").strip().lower()
+            if status_key == "paid":
+                collected_revenue += amount
+            due_date_value = parse_safe_date(row["due_date"])
+            remaining_days = (due_date_value - today).days if due_date_value else None
+            if due_date_value and remaining_days is not None and 0 < remaining_days <= 14 and status_key != "paid":
+                due_soon_installments.append({
+                    "unit_name": row["unit_name"] or "-",
+                    "tenant_name": row["tenant_name"] or "-",
+                    "amount": amount,
+                    "due_date": row["due_date"] or "-",
+                    "remaining_days": remaining_days,
+                    "status": row["installment_status"] or "-",
+                })
 
     for contract in contracts:
+        if contract["id"] not in contract_ids_with_installments:
+            expected_revenue += safe_amount(contract["rent"])
         end_date_value = parse_safe_date(contract["end_date"])
         if not end_date_value:
             continue
         remaining_days = (end_date_value - today).days
-        if 0 <= remaining_days <= 30:
+        if 0 <= remaining_days <= 60:
             expiring_contracts.append({
                 "unit_name": contract["unit_name"] or "-",
                 "tenant_name": contract["tenant_name"] or "-",
                 "end_date": contract["end_date"] or "-",
                 "remaining_days": remaining_days,
+                "status": compute_contract_status(contract["end_date"], contract["status"] or "-"),
             })
 
     supervisor_cards = ""
@@ -8905,44 +10108,32 @@ def property_management_dashboard(request: Request, property_id: int):
         </tr>
         """
 
+    due_installment_rows = ""
+    for installment in due_soon_installments:
+        due_installment_rows += f"""
+        <tr>
+            <td>{installment['unit_name']}</td>
+            <td>{installment['tenant_name']}</td>
+            <td>{installment['amount']:,.0f} ريال</td>
+            <td>{installment['due_date']}</td>
+            <td>{installment['remaining_days']} يوم</td>
+            <td>{installment['status']}</td>
+        </tr>
+        """
+
     contracts_warning_badge = ""
     if expiring_contracts:
         contracts_warning_badge = f'<div class="company-card-warning">تنبيه: {len(expiring_contracts)} قرب الانتهاء</div>'
-
-    expiring_contracts_alert = ""
-    if expiring_contracts:
-        contracts_label = "عقد" if len(expiring_contracts) == 1 else "عقود"
-        expiring_contracts_alert = f"""
-        <div class="inventory-warning-panel inventory-table-panel">
-            <div class="inventory-warning-head">
-                <div>
-                    <div class="inventory-warning-badge">تنبيه العقود</div>
-                    <h3>يوجد {len(expiring_contracts)} {contracts_label} متبقية على انتهائها خلال 30 يوم</h3>
-                    <p>راجع العقود التالية مبكرًا لتجنب انتهاء الإيجار دون متابعة.</p>
-                </div>
-            </div>
-            <div class="inventory-warning-table-wrap">
-                <table class="inventory-warning-table">
-                    <tr>
-                        <th>الوحدة</th>
-                        <th>المستأجر</th>
-                        <th>تاريخ الانتهاء</th>
-                        <th>المتبقي</th>
-                    </tr>
-                    {expiring_contracts_rows}
-                </table>
-            </div>
-        </div>
-        """
+    installments_warning_badge = ""
+    if due_soon_installments:
+        installments_warning_badge = f'<div class="company-card-warning">دفعات قريبة: {len(due_soon_installments)}</div>'
 
     cards_html = f"""
         <a href="/property-units?property_id={property_id}" class="company-card realestate"><h2>الوحدات ({len(units)})</h2></a>
-        <a href="/property-rental-contracts?property_id={property_id}" class="company-card realestate"><h2>العقود ({len(contracts)})</h2>{contracts_warning_badge}</a>
-        <a href="/property-revenue/{property_id}" class="company-card realestate"><h2>الإيرادات<br>{int(yearly_income):,} ريال</h2></a>
+        <a href="/property-rental-contracts?property_id={property_id}" class="company-card realestate"><h2>العقود ({len(contracts)})</h2>{contracts_warning_badge}{installments_warning_badge}</a>
+        <a href="/property-revenue/{property_id}" class="company-card realestate"><h2>الإيرادات المتوقعة<br>{int(expected_revenue):,} ريال</h2></a>
         <a href="/property-expenses/{property_id}" class="company-card realestate"><h2>المصروفات<br>{int(total_expenses):,} ريال</h2></a>
     """
-    if can_view_tenants:
-        cards_html += f'<a href="/property-tenants?property_id={property_id}" class="company-card realestate"><h2>المستأجرين ({len(tenants)})</h2></a>'
     if can_view_maintenance:
         cards_html += f'<a href="/maintenance-management?property_id={property_id}" class="company-card realestate"><h2>الصيانة ({len(maintenance)})</h2></a>'
     if can_view_supervisors:
@@ -8954,6 +10145,61 @@ def property_management_dashboard(request: Request, property_id: int):
     <div class="inventory-panel inventory-table-panel">
         <h3>المشرفون المسؤولون</h3>
         {supervisor_cards if supervisor_cards else '<div class="inventory-note">لا يوجد مشرفون معينون لهذا العقار</div>'}
+    </div>
+        """
+
+    contract_alerts_section = ""
+    if expiring_contracts:
+        contracts_label = "عقد" if len(expiring_contracts) == 1 else "عقود"
+        contract_alerts_section = f"""
+    <div class="inventory-warning-panel inventory-table-panel">
+        <div class="inventory-warning-head">
+            <div>
+                <div class="inventory-warning-badge">العقود التي تنتهي قريبًا</div>
+                <h3>يوجد {len(expiring_contracts)} {contracts_label} تنتهي خلال 60 يوم</h3>
+                <p>مراجعة هذه العقود مبكرًا تساعد على تقليل الشواغر والانقطاع التشغيلي.</p>
+            </div>
+        </div>
+        <div class="inventory-warning-table-wrap">
+            <table class="inventory-warning-table">
+                <tr>
+                    <th>الوحدة</th>
+                    <th>المستأجر</th>
+                    <th>تاريخ النهاية</th>
+                    <th>الأيام المتبقية</th>
+                    <th>الحالة</th>
+                </tr>
+                {expiring_contracts_rows}
+            </table>
+        </div>
+    </div>
+        """
+
+    installments_alert_section = ""
+    if due_soon_installments:
+        installments_label = "دفعة" if len(due_soon_installments) == 1 else "دفعات"
+        installments_alert_section = f"""
+    <div class="inventory-warning-panel inventory-table-panel finance-warning-soft">
+        <div class="inventory-warning-head">
+            <div>
+                <div class="inventory-warning-badge">الدفعات المستحقة قريبًا</div>
+                <h3>يوجد {len(due_soon_installments)} {installments_label} تستحق خلال 14 يوم</h3>
+                <p>تم عرض الدفعات غير المدفوعة فقط ضمن نافذة الاستحقاق القريبة.</p>
+            </div>
+        </div>
+        <div class="inventory-warning-table-wrap">
+            <table class="inventory-warning-table">
+                <tr>
+                    <th>الوحدة</th>
+                    <th>المستأجر</th>
+                    <th>مبلغ الدفعة</th>
+                    <th>تاريخ الاستحقاق</th>
+                    <th>الأيام المتبقية</th>
+                    <th>الحالة</th>
+                </tr>
+                {due_installment_rows}
+            </table>
+        </div>
     </div>
         """
 
@@ -8988,13 +10234,14 @@ def property_management_dashboard(request: Request, property_id: int):
 <div class="dashboard">
     <h1>{prop['name']}</h1>
     <p>{prop['location'] or 'بدون موقع محدد'} | النوع: {prop['property_type'] or '-'} | الحالة: {prop['status'] or '-'}</p>
-    {expiring_contracts_alert}
 
     <div class="companies">
         {cards_html}
     </div>
 
     {supervisor_section}
+    {contract_alerts_section}
+    {installments_alert_section}
     {maintenance_section}
 
     <a href="/property-management" class="glass-btn back-btn">⬅ رجوع</a>
@@ -9005,7 +10252,11 @@ def property_revenue_dashboard(request: Request, property_id: int):
     access_result = ensure_realestate_property_management_access(request, property_id)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    owner_guard = ensure_realestate_owner_dashboard_only(access_result, property_id)
+    if not isinstance(owner_guard, sqlite3.Row):
+        return owner_guard
     conn = get_db()
+    sync_property_contracts_and_units(conn, property_id)
     prop = conn.execute("SELECT * FROM property_properties WHERE id = ?", (property_id,)).fetchone()
 
     if not prop:
@@ -9029,6 +10280,7 @@ def property_revenue_dashboard(request: Request, property_id: int):
         """,
         (property_id,)
     ).fetchall()
+    installment_rows = get_property_contract_installment_rows(conn, property_id)
     maintenance_items = conn.execute(
         """
         SELECT maintenance_requests.*,
@@ -9042,49 +10294,86 @@ def property_revenue_dashboard(request: Request, property_id: int):
         """,
         (property_id,)
     ).fetchall()
+    manual_expenses = conn.execute(
+        """
+        SELECT property_expenses.*
+        FROM property_expenses
+        WHERE property_expenses.property_id = ?
+        ORDER BY property_expenses.id DESC
+        """,
+        (property_id,)
+    ).fetchall()
     conn.close()
 
     today = date.today()
-    total_revenue = 0.0
+    expected_revenue = 0.0
+    collected_revenue = 0.0
     total_expenses = 0.0
-    active_contracts_count = 0
-    expiring_contracts = []
+    outstanding_revenue = 0.0
+    net_collected_revenue = 0.0
     revenue_chart_items = []
     expense_totals_by_unit = {}
     occupied_unit_ids = set()
+    installment_status_labels = {
+        "unpaid": "غير مدفوعة",
+        "paid": "مدفوعة",
+        "late": "متأخرة",
+    }
+    contract_ids_with_installments = set()
+    contract_installment_number = {}
 
     for contract in contracts:
-        rent_amount = safe_amount(contract["rent"])
-        total_revenue += rent_amount
-
-        contract_status = (contract["status"] or "").strip()
-        end_date_value = parse_safe_date(contract["end_date"])
-        is_expired = end_date_value is not None and end_date_value < today
         if contract["unit_id"]:
             occupied_unit_ids.add(contract["unit_id"])
 
-        if contract_status != "منتهي" and not is_expired:
-            active_contracts_count += 1
+    revenue_rows = ""
+    for row in installment_rows:
+        contract_ids_with_installments.add(row["contract_id"])
+        if row["installment_id"]:
+            contract_installment_number[row["contract_id"]] = contract_installment_number.get(row["contract_id"], 0) + 1
+            installment_number = contract_installment_number[row["contract_id"]]
+            amount = safe_amount(row["installment_amount"])
+            expected_revenue += amount
+            status_key = (row["installment_status"] or "").strip().lower()
+            if status_key == "paid":
+                collected_revenue += amount
+            revenue_rows += f"""
+        <tr>
+            <td>{row['unit_name'] or '-'}</td>
+            <td>{row['tenant_name'] or '-'}</td>
+            <td>{installment_number}</td>
+            <td>{amount:,.0f} ريال</td>
+            <td>{row['due_date'] or '-'}</td>
+            <td>{installment_status_labels.get(status_key, row['installment_status'] or '-')}</td>
+            <td>{row['paid_at'] or '-'}</td>
+        </tr>
+            """
+            chart_label = f"{row['unit_name'] or 'وحدة غير محددة'} / {row['tenant_name'] or 'مستأجر غير محدد'}"
+            existing_item = next((item for item in revenue_chart_items if item["label"] == chart_label), None)
+            if existing_item:
+                existing_item["amount"] += amount
+            else:
+                revenue_chart_items.append({"label": chart_label, "amount": amount})
 
-        if end_date_value:
-            remaining_days = (end_date_value - today).days
-            if 0 <= remaining_days <= 30:
-                expiring_contracts.append({
-                    "unit_name": contract["unit_name"] or "-",
-                    "tenant_name": contract["tenant_name"] or "-",
-                    "end_date": contract["end_date"] or "-",
-                    "remaining_days": remaining_days,
-                })
-
-        revenue_chart_items.append({
-            "label": f"{contract['unit_name'] or 'وحدة غير محددة'} / {contract['tenant_name'] or 'مستأجر غير محدد'}",
-            "amount": rent_amount,
-            "start_date": contract["start_date"] or "-",
-            "end_date": contract["end_date"] or "-",
-            "status": contract["status"] or "-",
-            "unit_name": contract["unit_name"] or "-",
-            "tenant_name": contract["tenant_name"] or "-",
-        })
+    for contract in contracts:
+        if contract["id"] not in contract_ids_with_installments:
+            amount = safe_amount(contract["rent"])
+            expected_revenue += amount
+            revenue_rows += f"""
+        <tr>
+            <td>{contract['unit_name'] or '-'}</td>
+            <td>{contract['tenant_name'] or '-'}</td>
+            <td>-</td>
+            <td>{amount:,.0f} ريال</td>
+            <td>{contract['end_date'] or contract['start_date'] or '-'}</td>
+            <td>غير مجدولة</td>
+            <td>-</td>
+        </tr>
+            """
+            revenue_chart_items.append({
+                "label": f"{contract['unit_name'] or 'وحدة غير محددة'} / {contract['tenant_name'] or 'مستأجر غير محدد'}",
+                "amount": amount,
+            })
 
     for item in maintenance_items:
         expense_amount = safe_amount(item["actual_cost"]) if safe_amount(item["actual_cost"]) > 0 else safe_amount(item["estimated_cost"])
@@ -9092,7 +10381,11 @@ def property_revenue_dashboard(request: Request, property_id: int):
         unit_label = item["unit_name"] or "بدون وحدة محددة"
         expense_totals_by_unit[unit_label] = expense_totals_by_unit.get(unit_label, 0.0) + expense_amount
 
-    net_revenue = total_revenue - total_expenses
+    for item in manual_expenses:
+        total_expenses += safe_amount(item["amount"])
+
+    outstanding_revenue = expected_revenue - collected_revenue
+    net_collected_revenue = collected_revenue - total_expenses
     vacant_units_count = sum(1 for unit in units if unit["id"] not in occupied_unit_ids or (unit["status"] or "").strip() == "شاغرة")
 
     expense_chart_items = [
@@ -9100,16 +10393,25 @@ def property_revenue_dashboard(request: Request, property_id: int):
         for label, amount in sorted(expense_totals_by_unit.items(), key=lambda item: item[1], reverse=True)
     ]
 
-    comparison_max = max(total_revenue, total_expenses, 1)
+    comparison_max = max(expected_revenue, collected_revenue, total_expenses, 1)
 
     comparison_chart_html = f"""
     <div class="finance-bar-item">
         <div class="finance-bar-meta">
             <strong>الإيرادات</strong>
-            <span>{total_revenue:,.0f} ريال</span>
+            <span>{expected_revenue:,.0f} ريال</span>
         </div>
         <div class="finance-bar-track">
-            <div class="finance-bar-fill finance-bar-fill-green" style="width: {max(8, int((total_revenue / comparison_max) * 100))}%;"></div>
+            <div class="finance-bar-fill finance-bar-fill-green" style="width: {max(8, int((expected_revenue / comparison_max) * 100))}%;"></div>
+        </div>
+    </div>
+    <div class="finance-bar-item">
+        <div class="finance-bar-meta">
+            <strong>المحصل</strong>
+            <span>{collected_revenue:,.0f} ريال</span>
+        </div>
+        <div class="finance-bar-track">
+            <div class="finance-bar-fill finance-bar-fill-green" style="width: {max(8, int((collected_revenue / comparison_max) * 100))}%;"></div>
         </div>
     </div>
     <div class="finance-bar-item">
@@ -9122,19 +10424,6 @@ def property_revenue_dashboard(request: Request, property_id: int):
         </div>
     </div>
     """
-
-    revenue_rows = ""
-    for item in revenue_chart_items:
-        revenue_rows += f"""
-        <tr>
-            <td>{item['unit_name']}</td>
-            <td>{item['tenant_name']}</td>
-            <td>{item['amount']:,.0f} ريال</td>
-            <td>{item['start_date']}</td>
-            <td>{item['end_date']}</td>
-            <td>{item['status']}</td>
-        </tr>
-        """
 
     expense_rows = ""
     for item in maintenance_items:
@@ -9153,55 +10442,20 @@ def property_revenue_dashboard(request: Request, property_id: int):
         """
 
     warning_blocks = ""
-    if expiring_contracts:
-        expiring_rows = ""
-        for contract in expiring_contracts:
-            expiring_rows += f"""
-            <tr>
-                <td>{contract['unit_name']}</td>
-                <td>{contract['tenant_name']}</td>
-                <td>{contract['end_date']}</td>
-                <td>{contract['remaining_days']} يوم</td>
-            </tr>
-            """
-        contracts_label = "عقد" if len(expiring_contracts) == 1 else "عقود"
-        warning_blocks += f"""
-        <div class="inventory-warning-panel inventory-table-panel">
-            <div class="inventory-warning-head">
-                <div>
-                    <div class="inventory-warning-badge">تنبيه العقود</div>
-                    <h3>يوجد {len(expiring_contracts)} {contracts_label} متبقية على انتهائها خلال 30 يوم</h3>
-                    <p>هذه العقود تحتاج متابعة من صفحة الإيرادات قبل قرب تاريخ الانتهاء.</p>
-                </div>
-            </div>
-            <div class="inventory-warning-table-wrap">
-                <table class="inventory-warning-table">
-                    <tr>
-                        <th>الوحدة</th>
-                        <th>المستأجر</th>
-                        <th>تاريخ الانتهاء</th>
-                        <th>المتبقي</th>
-                    </tr>
-                    {expiring_rows}
-                </table>
-            </div>
-        </div>
-        """
-
-    if total_revenue > 0 and total_expenses >= total_revenue * 0.6:
+    if expected_revenue > 0 and total_expenses >= expected_revenue * 0.6:
         warning_blocks += f"""
         <div class="inventory-warning-panel inventory-table-panel finance-warning-soft">
             <div class="inventory-warning-head">
                 <div>
                     <div class="inventory-warning-badge">تنبيه المصروفات</div>
-                    <h3>المصروفات مرتفعة مقارنة بالإيرادات</h3>
-                    <p>بلغت المصروفات {total_expenses:,.0f} ريال مقابل إيرادات {total_revenue:,.0f} ريال.</p>
+                    <h3>المصروفات مرتفعة مقارنة بالإيراد المتوقع</h3>
+                    <p>بلغت المصروفات {total_expenses:,.0f} ريال مقابل إيراد متوقع {expected_revenue:,.0f} ريال.</p>
                 </div>
             </div>
         </div>
         """
 
-    net_card_class = "finance-card-positive" if net_revenue >= 0 else "finance-card-negative"
+    net_card_class = "finance-card-positive" if net_collected_revenue >= 0 else "finance-card-negative"
     revenue_pie_items = [item for item in revenue_chart_items if item["amount"] > 0]
     expense_pie_items = [item for item in expense_chart_items if item["amount"] > 0]
 
@@ -9233,27 +10487,31 @@ def property_revenue_dashboard(request: Request, property_id: int):
 
     <div class="finance-summary-grid">
         <div class="finance-card">
-            <span>إجمالي الإيرادات</span>
-            <strong>{total_revenue:,.0f} ريال</strong>
+            <span>الإيراد المتوقع</span>
+            <strong>{expected_revenue:,.0f} ريال</strong>
+        </div>
+        <div class="finance-card finance-card-positive">
+            <span>الإيراد المحصل</span>
+            <strong>{collected_revenue:,.0f} ريال</strong>
+        </div>
+        <div class="finance-card finance-card-secondary">
+            <span>الإيراد غير المحصل / المتبقي</span>
+            <strong>{outstanding_revenue:,.0f} ريال</strong>
         </div>
         <div class="finance-card finance-card-expense">
             <span>إجمالي المصروفات</span>
             <strong>{total_expenses:,.0f} ريال</strong>
         </div>
         <div class="finance-card {net_card_class}">
-            <span>صافي الإيراد</span>
-            <strong>{net_revenue:,.0f} ريال</strong>
-        </div>
-        <div class="finance-card">
-            <span>العقود النشطة</span>
-            <strong>{active_contracts_count}</strong>
+            <span>صافي المحصل بعد المصروفات</span>
+            <strong>{net_collected_revenue:,.0f} ريال</strong>
         </div>
     </div>
 
     <div class="finance-summary-grid finance-summary-grid-secondary">
         <div class="finance-card finance-card-secondary">
-            <span>العقود القريبة من الانتهاء</span>
-            <strong>{len(expiring_contracts)}</strong>
+            <span>عدد العقود</span>
+            <strong>{len(contracts)}</strong>
         </div>
         <div class="finance-card finance-card-secondary">
             <span>الوحدات الشاغرة</span>
@@ -9300,12 +10558,13 @@ def property_revenue_dashboard(request: Request, property_id: int):
                 <tr>
                     <th>الوحدة</th>
                     <th>المستأجر</th>
-                    <th>قيمة العقد</th>
-                    <th>تاريخ البداية</th>
-                    <th>تاريخ النهاية</th>
-                    <th>الحالة</th>
+                    <th>رقم الدفعة</th>
+                    <th>مبلغ الدفعة</th>
+                    <th>تاريخ الاستحقاق</th>
+                    <th>حالة الدفعة</th>
+                    <th>تاريخ التحصيل</th>
                 </tr>
-                {revenue_rows if revenue_rows else "<tr><td colspan='6'>لا توجد بيانات إيرادات</td></tr>"}
+                {revenue_rows if revenue_rows else "<tr><td colspan='7'>لا توجد بيانات إيرادات</td></tr>"}
             </table>
         </div>
     </div>
@@ -9508,7 +10767,13 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
     access_result = ensure_realestate_property_management_access(request, property_id)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    owner_guard = ensure_realestate_owner_dashboard_only(access_result, property_id)
+    if not isinstance(owner_guard, sqlite3.Row):
+        return owner_guard
+    is_owner_view_only = realestate_owner_read_only(access_result)
+    owner_property_ids = get_owner_accessible_property_set(access_result)
     conn = get_db()
+    sync_property_contracts_and_units(conn, property_id)
     prop = conn.execute("SELECT * FROM property_properties WHERE id = ?", (property_id,)).fetchone()
 
     if not prop:
@@ -9547,7 +10812,12 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
 
     category_labels = property_expense_category_labels()
     feedback_html = render_page_feedback(message, error)
-    is_owner_view_only = realestate_owner_read_only(access_result)
+    empty_colspan = "9" if not is_owner_view_only else "8"
+    installment_status_labels = {
+        "unpaid": "غير مدفوع",
+        "paid": "مدفوع",
+        "late": "متأخر",
+    }
     total_revenue = sum(safe_amount(contract["rent"]) for contract in contracts)
 
     maintenance_total = 0.0
@@ -10440,7 +11710,11 @@ def property_units_page(request: Request, property_id: int = 0, message: str = "
         if not isinstance(company_result, sqlite3.Row):
             return company_result
         access_result = company_result
+    owner_guard = ensure_realestate_owner_dashboard_only(access_result, property_id)
+    if not isinstance(owner_guard, sqlite3.Row):
+        return owner_guard
     conn = get_db()
+    sync_property_contracts_and_units(conn, property_id)
     current_property = None
     properties = conn.execute("SELECT * FROM property_properties ORDER BY name").fetchall()
     is_owner_view_only = realestate_owner_read_only(access_result)
@@ -10474,6 +11748,23 @@ def property_units_page(request: Request, property_id: int = 0, message: str = "
         ).fetchall()
     if is_owner_view_only:
         units = filter_rows_by_property_scope(units, owner_property_ids)
+    unit_contracts = conn.execute(
+        """
+        SELECT unit_id, end_date, status
+        FROM property_rent_contracts
+        WHERE unit_id IS NOT NULL
+        ORDER BY id DESC
+        """
+    ).fetchall()
+    unit_contract_status_map: dict[int, str] = {}
+    for contract in unit_contracts:
+        if not contract["unit_id"] or contract["unit_id"] in unit_contract_status_map:
+            continue
+        contract_status = compute_contract_status(contract["end_date"], contract["status"] or "")
+        if contract_status in {"ساري", "قريب ينتهي"}:
+            unit_contract_status_map[contract["unit_id"]] = "مؤجرة"
+        else:
+            unit_contract_status_map[contract["unit_id"]] = "شاغرة"
     conn.close()
 
     property_selector = ""
@@ -10496,6 +11787,7 @@ def property_units_page(request: Request, property_id: int = 0, message: str = "
 
     rows = ""
     for unit in units:
+        display_status = unit_contract_status_map.get(unit["id"], unit["status"] or "-")
         actions_cell = ""
         if not is_owner_view_only:
             actions_cell = f"""
@@ -10510,7 +11802,7 @@ def property_units_page(request: Request, property_id: int = 0, message: str = "
             <td>{unit['name']}</td>
             <td>{unit['type'] or '-'}</td>
             <td>{unit['rent'] or 0}</td>
-            <td>{unit['status'] or '-'}</td>
+            <td>{display_status}</td>
             {actions_cell}
         </tr>
         """
@@ -10527,16 +11819,12 @@ def property_units_page(request: Request, property_id: int = 0, message: str = "
             <input type="text" name="name" required>
 
             <label>النوع</label>
-            <input type="text" name="type">
-
-            <label>الإيجار</label>
-            <input type="number" step="0.01" name="rent">
-
-            <label>الحالة</label>
-            <select name="status">
-                <option value="متاحة">متاحة</option>
-                <option value="مؤجرة">مؤجرة</option>
-                <option value="صيانة">صيانة</option>
+            <select name="type">
+                <option value="">اختر نوع الوحدة</option>
+                <option value="سكني">سكني</option>
+                <option value="تجاري">تجاري</option>
+                <option value="مكتبي">مكتبي</option>
+                <option value="فندقي">فندقي</option>
             </select>
 
             <button type="submit" class="glass-btn gold-text">حفظ الوحدة</button>
@@ -10584,8 +11872,6 @@ def save_property_unit(
     property_id: int = Form(...),
     name: str = Form(...),
     type: str = Form(""),
-    rent: float = Form(0),
-    status: str = Form("متاحة")
 ):
     access_result = ensure_realestate_write_access(
         request,
@@ -10597,7 +11883,7 @@ def save_property_unit(
     conn = get_db()
     conn.execute(
         "INSERT INTO property_units (property_id, name, type, rent, status) VALUES (?, ?, ?, ?, ?)",
-        (property_id, name, type, rent, status)
+        (property_id, name, type, 0, "شاغرة")
     )
     conn.commit()
     conn.close()
@@ -10629,10 +11915,35 @@ def edit_property_unit_form(request: Request, unit_id: int, property_id: int = 0
         (current_property_id,)
     ).fetchone() if current_property_id else None
     conn.close()
+    unit_type_options = ""
+    current_unit_type = unit["type"] or ""
+    if current_unit_type and current_unit_type not in {"سكني", "تجاري", "مكتبي", "فندقي"}:
+        unit_type_options += f'<option value="{current_unit_type}" selected>{current_unit_type}</option>'
+    unit_type_options += f'''
+                <option value="">اختر نوع الوحدة</option>
+                <option value="سكني" {"selected" if current_unit_type == "سكني" else ""}>سكني</option>
+                <option value="تجاري" {"selected" if current_unit_type == "تجاري" else ""}>تجاري</option>
+                <option value="مكتبي" {"selected" if current_unit_type == "مكتبي" else ""}>مكتبي</option>
+                <option value="فندقي" {"selected" if current_unit_type == "فندقي" else ""}>فندقي</option>
+    '''
 
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
+<script>
+function toggleNewTenantFields(mode) {{
+    const select = document.getElementById(`contract-tenant-select-${{mode}}`);
+    const fields = document.getElementById(`contract-new-tenant-fields-${{mode}}`);
+    if (!select || !fields) return;
+    const isNewTenant = select.value === "__new__";
+    fields.style.display = isNewTenant ? "block" : "none";
+    fields.querySelectorAll("input, select").forEach((field) => {{
+        if (field.name === "new_tenant_name") {{
+            field.required = isNewTenant;
+        }}
+    }});
+}}
+</script>
 <body class="system-dark">
 {HOME_BUTTON}
 <div class="dashboard">
@@ -10648,16 +11959,8 @@ def edit_property_unit_form(request: Request, unit_id: int, property_id: int = 0
             <input type="text" name="name" value="{unit['name'] or ''}" required>
 
             <label>النوع</label>
-            <input type="text" name="type" value="{unit['type'] or ''}">
-
-            <label>الإيجار</label>
-            <input type="number" step="0.01" name="rent" value="{unit['rent'] or 0}">
-
-            <label>الحالة</label>
-            <select name="status">
-                <option value="متاحة" {"selected" if unit['status'] == "متاحة" else ""}>متاحة</option>
-                <option value="مؤجرة" {"selected" if unit['status'] == "مؤجرة" else ""}>مؤجرة</option>
-                <option value="صيانة" {"selected" if unit['status'] == "صيانة" else ""}>صيانة</option>
+            <select name="type">
+                {unit_type_options}
             </select>
 
             <button type="submit" class="glass-btn gold-text">حفظ التعديلات</button>
@@ -10676,8 +11979,6 @@ def update_property_unit(
     property_id: int = Form(...),
     name: str = Form(...),
     type: str = Form(""),
-    rent: float = Form(0),
-    status: str = Form("متاحة")
 ):
     access_result = ensure_realestate_write_access(
         request,
@@ -10688,9 +11989,10 @@ def update_property_unit(
         return access_result
     conn = get_db()
     conn.execute(
-        "UPDATE property_units SET name = ?, type = ?, rent = ?, status = ? WHERE id = ?",
-        (name, type, rent, status, unit_id)
+        "UPDATE property_units SET name = ?, type = ? WHERE id = ?",
+        (name, type, unit_id)
     )
+    refresh_unit_status_from_contracts(conn, unit_id)
     conn.commit()
     conn.close()
     return RedirectResponse(
@@ -10755,152 +12057,16 @@ def property_tenants_page(request: Request, property_id: int = 0, message: str =
         if not isinstance(company_result, sqlite3.Row):
             return company_result
         access_result = company_result
-    conn = get_db()
-    current_property = None
-    properties = conn.execute("SELECT * FROM property_properties ORDER BY name").fetchall()
-    is_owner_view_only = realestate_owner_read_only(access_result)
-    owner_property_ids = get_owner_accessible_property_set(access_result)
-    if is_owner_view_only:
-        properties = filter_rows_by_property_scope(properties, owner_property_ids, "id")
-    if property_id:
-        current_property = conn.execute(
-            "SELECT * FROM property_properties WHERE id = ?",
-            (property_id,)
-        ).fetchone()
-        units = conn.execute(
-            "SELECT * FROM property_units WHERE property_id = ? ORDER BY name",
-            (property_id,)
-        ).fetchall()
-    else:
-        units = conn.execute("SELECT * FROM property_units ORDER BY name").fetchall()
-    if is_owner_view_only:
-        units = filter_rows_by_property_scope(units, owner_property_ids)
-    if property_id:
-        tenants = conn.execute(
-            """
-            SELECT property_tenants.*, property_properties.name AS property_name, property_units.name AS unit_name
-            FROM property_tenants
-            LEFT JOIN property_properties ON property_properties.id = property_tenants.property_id
-            LEFT JOIN property_units ON property_units.id = property_tenants.unit_id
-            WHERE property_tenants.property_id = ?
-            ORDER BY property_tenants.id DESC
-            """,
-            (property_id,)
-        ).fetchall()
-    else:
-        tenants = conn.execute(
-            """
-            SELECT property_tenants.*, property_properties.name AS property_name, property_units.name AS unit_name
-            FROM property_tenants
-            LEFT JOIN property_properties ON property_properties.id = property_tenants.property_id
-            LEFT JOIN property_units ON property_units.id = property_tenants.unit_id
-            ORDER BY property_tenants.id DESC
-            """
-        ).fetchall()
-    if is_owner_view_only:
-        tenants = filter_rows_by_property_scope(tenants, owner_property_ids)
-    conn.close()
-
-    property_selector = ""
-    if property_id and current_property:
-        property_selector = f"""
-        <div class="inventory-note">الملك الحالي: <strong>{current_property['name']}</strong></div>
-        <input type="hidden" name="property_id" value="{property_id}">
-        """
-    else:
-        property_options = '<option value="">اختر الملك</option>'
-        for prop in properties:
-            selected = "selected" if property_id and prop["id"] == property_id else ""
-            property_options += f'<option value="{prop["id"]}" {selected}>{prop["name"]}</option>'
-        property_selector = f"""
-        <label>الملك</label>
-        <select name="property_id" required>{property_options}</select>
-        """
-
-    unit_options = '<option value="">اختر الوحدة</option>'
-    for unit in units:
-        unit_options += f'<option value="{unit["id"]}">{unit["name"]}</option>'
-
-    feedback_html = render_page_feedback(message, error)
-
-    rows = ""
-    for tenant in tenants:
-        actions_cell = ""
-        if not is_owner_view_only:
-            actions_cell = f"""
-            <td>
-                <a href="/edit-property-tenant/{tenant['id']}?property_id={tenant['property_id'] or property_id}" class="action-btn">تعديل</a>
-                <a href="/delete-property-tenant/{tenant['id']}?property_id={tenant['property_id'] or property_id}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا المستأجر؟')">حذف</a>
-            </td>
-            """
-        rows += f"""
-        <tr>
-            <td>{tenant['name']}</td>
-            <td>{tenant['property_name'] or '-'}</td>
-            <td>{tenant['unit_name'] or '-'}</td>
-            <td>{tenant['phone'] or '-'}</td>
-            <td>{tenant['id_number'] or '-'}</td>
-            {actions_cell}
-        </tr>
-        """
-
-    add_tenant_section = ""
-    if not is_owner_view_only:
-        add_tenant_section = f"""
-    <div class="inventory-panel inventory-table-panel">
-        <h3>إضافة مستأجر</h3>
-        <form action="/save-property-tenant" method="post">
-            {property_selector}
-
-            <label>الوحدة</label>
-            <select name="unit_id">{unit_options}</select>
-
-            <label>اسم المستأجر</label>
-            <input type="text" name="name" required>
-
-            <label>الهاتف</label>
-            <input type="text" name="phone">
-
-            <label>رقم الهوية</label>
-            <input type="text" name="id_number">
-
-            <button type="submit" class="glass-btn gold-text">حفظ المستأجر</button>
-        </form>
-    </div>
-        """
-
-    actions_header = "<th>الإدارة</th>" if not is_owner_view_only else ""
-    empty_colspan = "6" if not is_owner_view_only else "5"
-
-    return f"""
-<meta charset="UTF-8">
-<link rel="stylesheet" href="/static/style.css">
-<body class="system-dark">
-{HOME_BUTTON}
-<div class="dashboard">
-    <h1>المستأجرين</h1>
-    <p>{f"إدارة مستأجري الملك: {current_property['name']}" if current_property else "إدارة جميع المستأجرين"}</p>
-    {feedback_html}
-
-    {add_tenant_section}
-
-    <div class="inventory-panel inventory-table-panel">
-        <table border="1" style="background:white;margin:auto;width:100%;">
-            <tr>
-                <th>الاسم</th>
-                <th>الملك</th>
-                <th>الوحدة</th>
-                <th>الهاتف</th>
-                <th>رقم الهوية</th>
-                {actions_header}
-            </tr>
-            {rows if rows else f"<tr><td colspan='{empty_colspan}'>لا يوجد مستأجرون</td></tr>"}
-        </table>
-    </div>
-
-    <a href="{f'/property-management/{property_id}' if current_property else '/property-management'}" class="glass-btn back-btn">⬅ رجوع</a>
-</div>
-"""
+    owner_guard = ensure_realestate_owner_dashboard_only(access_result, property_id)
+    if not isinstance(owner_guard, sqlite3.Row):
+        return owner_guard
+    return RedirectResponse(
+        url=build_redirect_url(
+            f"/property-rental-contracts?property_id={property_id}" if property_id else "/property-rental-contracts",
+            message="تم نقل إدارة المستأجرين إلى صفحة العقود"
+        ),
+        status_code=303,
+    )
 
 
 @app.post("/save-property-tenant")
@@ -10915,7 +12081,7 @@ def save_property_tenant(
     access_result = ensure_realestate_write_access(
         request,
         property_id=property_id,
-        back_url=f"/property-tenants?property_id={property_id}",
+        back_url=f"/property-rental-contracts?property_id={property_id}",
     )
     if not isinstance(access_result, sqlite3.Row):
         return access_result
@@ -10927,7 +12093,7 @@ def save_property_tenant(
     conn.commit()
     conn.close()
     return RedirectResponse(
-        url=build_redirect_url(f"/property-tenants?property_id={property_id}", message="تم حفظ المستأجر بنجاح"),
+        url=build_redirect_url(f"/property-rental-contracts?property_id={property_id}", message="تم حفظ المستأجر بنجاح"),
         status_code=303
     )
 
@@ -10944,59 +12110,19 @@ def edit_property_tenant_form(request: Request, tenant_id: int, property_id: int
     access_result = ensure_realestate_write_access(
         request,
         property_id=current_property_id,
-        back_url=f"/property-tenants?property_id={current_property_id}",
+        back_url=f"/property-rental-contracts?property_id={current_property_id}",
     )
     if not isinstance(access_result, sqlite3.Row):
         conn.close()
         return access_result
-    current_property = conn.execute(
-        "SELECT * FROM property_properties WHERE id = ?",
-        (current_property_id,)
-    ).fetchone() if current_property_id else None
-    units = conn.execute(
-        "SELECT * FROM property_units WHERE property_id = ? ORDER BY name",
-        (current_property_id,)
-    ).fetchall() if current_property_id else []
     conn.close()
-
-    unit_options = '<option value="">اختر الوحدة</option>'
-    for unit in units:
-        selected = "selected" if tenant["unit_id"] == unit["id"] else ""
-        unit_options += f'<option value="{unit["id"]}" {selected}>{unit["name"]}</option>'
-
-    return f"""
-<meta charset="UTF-8">
-<link rel="stylesheet" href="/static/style.css">
-<body class="system-dark">
-{HOME_BUTTON}
-<div class="dashboard">
-    <h1>تعديل المستأجر</h1>
-    <p>{f"تحديث بيانات مستأجر في ملك: {current_property['name']}" if current_property else "تحديث بيانات المستأجر"}</p>
-
-    <div class="inventory-panel inventory-table-panel">
-        <form action="/update-property-tenant" method="post">
-            <input type="hidden" name="tenant_id" value="{tenant_id}">
-            <input type="hidden" name="property_id" value="{current_property_id}">
-
-            <label>الوحدة</label>
-            <select name="unit_id">{unit_options}</select>
-
-            <label>اسم المستأجر</label>
-            <input type="text" name="name" value="{tenant['name'] or ''}" required>
-
-            <label>الهاتف</label>
-            <input type="text" name="phone" value="{tenant['phone'] or ''}">
-
-            <label>رقم الهوية</label>
-            <input type="text" name="id_number" value="{tenant['id_number'] or ''}">
-
-            <button type="submit" class="glass-btn gold-text">حفظ التعديلات</button>
-        </form>
-    </div>
-
-    <a href="/property-tenants?property_id={current_property_id}" class="glass-btn back-btn">⬅ رجوع</a>
-</div>
-"""
+    return RedirectResponse(
+        url=build_redirect_url(
+            f"/property-rental-contracts?property_id={current_property_id}",
+            message="تم نقل تعديل بيانات المستأجر إلى صفحة العقود"
+        ),
+        status_code=303,
+    )
 
 
 @app.post("/update-property-tenant")
@@ -11012,7 +12138,7 @@ def update_property_tenant(
     access_result = ensure_realestate_write_access(
         request,
         property_id=property_id,
-        back_url=f"/property-tenants?property_id={property_id}",
+        back_url=f"/property-rental-contracts?property_id={property_id}",
     )
     if not isinstance(access_result, sqlite3.Row):
         return access_result
@@ -11024,7 +12150,7 @@ def update_property_tenant(
     conn.commit()
     conn.close()
     return RedirectResponse(
-        url=build_redirect_url(f"/property-tenants?property_id={property_id}", message="تم تحديث المستأجر بنجاح"),
+        url=build_redirect_url(f"/property-rental-contracts?property_id={property_id}", message="تم تحديث المستأجر بنجاح"),
         status_code=303
     )
 
@@ -11038,7 +12164,7 @@ def delete_property_tenant(request: Request, tenant_id: int, property_id: int = 
     if not tenant:
         conn.close()
         return RedirectResponse(
-            url=build_redirect_url(f"/property-tenants?property_id={current_property_id}", error="المستأجر غير موجود"),
+            url=build_redirect_url(f"/property-rental-contracts?property_id={current_property_id}", error="المستأجر غير موجود"),
             status_code=303
         )
 
@@ -11055,7 +12181,7 @@ def delete_property_tenant(request: Request, tenant_id: int, property_id: int = 
         conn.close()
         return RedirectResponse(
             url=build_redirect_url(
-                f"/property-tenants?property_id={current_property_id}",
+                f"/property-rental-contracts?property_id={current_property_id}",
                 error="لا يمكن حذف المستأجر لوجود عقود أو طلبات صيانة مرتبطة به"
             ),
             status_code=303
@@ -11065,13 +12191,18 @@ def delete_property_tenant(request: Request, tenant_id: int, property_id: int = 
     conn.commit()
     conn.close()
     return RedirectResponse(
-        url=build_redirect_url(f"/property-tenants?property_id={current_property_id}", message="تم حذف المستأجر بنجاح"),
+        url=build_redirect_url(f"/property-rental-contracts?property_id={current_property_id}", message="تم حذف المستأجر بنجاح"),
         status_code=303
     )
 
 
 @app.get("/property-rental-contracts", response_class=HTMLResponse)
 def property_rental_contracts_page(request: Request, property_id: int = 0, message: str = "", error: str = ""):
+    installment_status_labels = {
+        "unpaid": "غير مدفوعة",
+        "paid": "مدفوعة",
+        "late": "متأخرة",
+    }
     if property_id:
         access_result = ensure_realestate_property_management_access(request, property_id)
         if not isinstance(access_result, sqlite3.Row):
@@ -11081,7 +12212,11 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
         if not isinstance(company_result, sqlite3.Row):
             return company_result
         access_result = company_result
+    owner_guard = ensure_realestate_owner_dashboard_only(access_result, property_id)
+    if not isinstance(owner_guard, sqlite3.Row):
+        return owner_guard
     conn = get_db()
+    sync_property_contracts_and_units(conn, property_id)
     current_property = None
     properties = conn.execute("SELECT * FROM property_properties ORDER BY name").fetchall()
     is_owner_view_only = realestate_owner_read_only(access_result)
@@ -11141,6 +12276,21 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
         CONTRACT_ATTACHMENT_SOURCE_PROPERTY,
         [row["id"] for row in contracts],
     )
+    contract_installments_map: dict[int, list[sqlite3.Row]] = {}
+    contract_ids = [row["id"] for row in contracts]
+    if contract_ids:
+        placeholders = ", ".join("?" for _ in contract_ids)
+        installment_rows = conn.execute(
+            f"""
+            SELECT *
+            FROM contract_installments
+            WHERE contract_id IN ({placeholders})
+            ORDER BY due_date ASC, id ASC
+            """,
+            contract_ids,
+        ).fetchall()
+        for installment in installment_rows:
+            contract_installments_map.setdefault(installment["contract_id"], []).append(installment)
     conn.close()
 
     property_selector = ""
@@ -11163,7 +12313,7 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
     for unit in units:
         unit_options += f'<option value="{unit["id"]}">{unit["name"]}</option>'
 
-    tenant_options = '<option value="">اختر المستأجر</option>'
+    tenant_options = '<option value="">اختر المستأجر</option><option value="__new__">إضافة مستأجر جديد</option>'
     for tenant in tenants:
         tenant_options += f'<option value="{tenant["id"]}">{tenant["name"]}</option>'
 
@@ -11178,14 +12328,62 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
             is_admin_user=is_admin_user,
             property_id=contract["property_id"] or property_id,
         )
+        installments = contract_installments_map.get(contract["id"], [])
+        installments_rows = ""
+        for installment_index, installment in enumerate(installments, start=1):
+            installment_status_key = (installment["status"] or "").strip().lower()
+            installment_action_html = "-"
+            if not is_owner_view_only and installment_status_key != "paid":
+                installment_action_html = f"""
+                <form action="/mark-contract-installment-paid/{installment['id']}" method="post" style="display:inline;">
+                    <input type="hidden" name="property_id" value="{contract['property_id'] or property_id}">
+                    <button type="submit" class="action-btn" onclick="return confirm('تأكيد تحصيل هذه الدفعة؟')">تم الدفع</button>
+                </form>
+                """
+            installments_rows += f"""
+            <tr>
+                <td>{installment_index}</td>
+                <td>{safe_amount(installment['amount']):,.2f}</td>
+                <td>{installment['due_date'] or '-'}</td>
+                <td>{installment_status_labels.get(installment_status_key, installment['status'] or '-')}</td>
+                <td>{installment['paid_at'] or '-'}</td>
+                <td>{installment_action_html}</td>
+            </tr>
+            """
+        installments_table_html = f"""
+        <div style="margin-top:10px;">
+            <table border="1" style="background:white;margin:auto;width:100%;">
+                <tr>
+                    <th>رقم الدفعة</th>
+                    <th>المبلغ</th>
+                    <th>تاريخ الاستحقاق</th>
+                    <th>الحالة</th>
+                    <th>تاريخ التحصيل</th>
+                    <th>الإجراء</th>
+                </tr>
+                {installments_rows if installments_rows else "<tr><td colspan='6'>لا توجد دفعات مجدولة لهذا العقد</td></tr>"}
+            </table>
+        </div>
+        """
+        installments_button_html = f'<button type="button" class="action-btn" onclick="toggleContractInstallments(\'contract-installments-{contract["id"]}\')">عرض الدفعات</button>'
+        contract_status_display = compute_contract_status(contract["end_date"], contract["status"] or "-")
         actions_cell = ""
         if not is_owner_view_only:
             actions_cell = f"""
             <td>
+                {installments_button_html}
                 <a href="/edit-property-rental-contract/{contract['id']}?property_id={contract['property_id'] or property_id}" class="action-btn">تعديل</a>
                 <a href="/delete-property-rental-contract/{contract['id']}?property_id={contract['property_id'] or property_id}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا العقد؟')">حذف</a>
             </td>
             """
+        attachments_cell_html = f"""
+        <td>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+                {installments_button_html if is_owner_view_only else ""}
+                {attachments_html}
+            </div>
+        </td>
+        """
         rows += f"""
         <tr>
             <td>{contract['property_name'] or '-'}</td>
@@ -11194,9 +12392,14 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
             <td>{contract['rent'] or 0}</td>
             <td>{contract['start_date'] or '-'}</td>
             <td>{contract['end_date'] or '-'}</td>
-            <td>{contract['status'] or '-'}</td>
-            <td>{attachments_html}</td>
+            <td>{contract_status_display}</td>
+            {attachments_cell_html}
             {actions_cell}
+        </tr>
+        <tr id="contract-installments-{contract['id']}" style="display:none;">
+            <td colspan="8" style="padding:14px;background:rgba(255,255,255,0.04);">
+                {installments_table_html}
+            </td>
         </tr>
         """
 
@@ -11212,10 +12415,41 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
             <select name="unit_id" required>{unit_options}</select>
 
             <label>المستأجر</label>
-            <select name="tenant_id" required>{tenant_options}</select>
+            <select name="tenant_id" id="contract-tenant-select-new" required onchange="toggleNewTenantFields('new')">{tenant_options}</select>
 
-            <label>قيمة الإيجار</label>
-            <input type="number" step="0.01" name="rent" required>
+            <div id="contract-new-tenant-fields-new" style="display:none;">
+                <label>اسم المستأجر</label>
+                <input type="text" name="new_tenant_name">
+
+                <label>رقم الجوال</label>
+                <input type="text" name="new_tenant_phone">
+
+                <label>رقم الهوية</label>
+                <input type="text" name="new_tenant_id_number">
+
+                <label>نوع المستأجر</label>
+                <select name="new_tenant_type">
+                    <option value="">اختر نوع المستأجر</option>
+                    <option value="فرد">فرد</option>
+                    <option value="شركة">شركة</option>
+                </select>
+            </div>
+
+            <input type="hidden" name="rent" value="0">
+
+            <label>الإيجار السنوي</label>
+            <input type="number" step="0.01" name="annual_rent" required>
+
+            <label>مدة العقد (سنوات)</label>
+            <input type="number" name="contract_duration_years" min="1" step="1" required>
+
+            <label>طريقة الدفع</label>
+            <select name="payment_frequency" required>
+                <option value="yearly">سنوي</option>
+                <option value="semi-annual">نصف سنوي</option>
+                <option value="quarterly">ربع سنوي</option>
+                <option value="monthly">شهري</option>
+            </select>
 
             <label>بداية العقد</label>
             <input type="date" name="start_date">
@@ -11223,24 +12457,35 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
             <label>نهاية العقد</label>
             <input type="date" name="end_date">
 
-            <label>الحالة</label>
-            <select name="status">
-                <option value="ساري">ساري</option>
-                <option value="منتهي">منتهي</option>
-                <option value="معلق">معلق</option>
-            </select>
-
             <button type="submit" class="glass-btn gold-text">حفظ العقد</button>
         </form>
     </div>
         """
 
     actions_header = "<th>الإدارة</th>" if not is_owner_view_only else ""
-    empty_colspan = "9" if not is_owner_view_only else "8"
 
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
+<script>
+function toggleContractInstallments(rowId) {{
+    const row = document.getElementById(rowId);
+    if (!row) return;
+    row.style.display = row.style.display === "none" ? "table-row" : "none";
+}}
+function toggleNewTenantFields(mode) {{
+    const select = document.getElementById(`contract-tenant-select-${{mode}}`);
+    const fields = document.getElementById(`contract-new-tenant-fields-${{mode}}`);
+    if (!select || !fields) return;
+    const isNewTenant = select.value === "__new__";
+    fields.style.display = isNewTenant ? "block" : "none";
+    fields.querySelectorAll("input, select").forEach((field) => {{
+        if (field.name === "new_tenant_name") {{
+            field.required = isNewTenant;
+        }}
+    }});
+}}
+</script>
 <body class="system-dark">
 {HOME_BUTTON}
 <div class="dashboard">
@@ -11263,7 +12508,7 @@ def property_rental_contracts_page(request: Request, property_id: int = 0, messa
                 <th>المرفقات</th>
                 {actions_header}
             </tr>
-            {rows if rows else f"<tr><td colspan='{empty_colspan}'>لا توجد عقود إيجار</td></tr>"}
+            {rows if rows else "<tr><td colspan='8'>لا توجد عقود إيجار</td></tr>"}
         </table>
     </div>
 
@@ -11277,11 +12522,18 @@ def save_property_rental_contract(
     request: Request,
     property_id: int = Form(...),
     unit_id: int = Form(...),
-    tenant_id: int = Form(...),
-    rent: float = Form(...),
+    tenant_id: str = Form(""),
+    rent: float = Form(0),
+    annual_rent: float = Form(0),
+    contract_duration_years: int = Form(0),
+    payment_frequency: str = Form("yearly"),
     start_date: str = Form(""),
     end_date: str = Form(""),
-    status: str = Form("ساري")
+    status: str = Form("ساري"),
+    new_tenant_name: str = Form(""),
+    new_tenant_phone: str = Form(""),
+    new_tenant_id_number: str = Form(""),
+    new_tenant_type: str = Form(""),
 ):
     access_result = ensure_realestate_write_access(
         request,
@@ -11291,13 +12543,52 @@ def save_property_rental_contract(
     if not isinstance(access_result, sqlite3.Row):
         return access_result
     conn = get_db()
-    conn.execute(
+    resolved_tenant_id = resolve_contract_tenant_id(
+        conn,
+        property_id=property_id,
+        unit_id=unit_id,
+        tenant_id_value=tenant_id,
+        new_tenant_name=new_tenant_name,
+        new_tenant_phone=new_tenant_phone,
+        new_tenant_id_number=new_tenant_id_number,
+        new_tenant_type=new_tenant_type,
+    )
+    if not resolved_tenant_id:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/property-rental-contracts?property_id={property_id}",
+                error="يرجى اختيار مستأجر موجود أو إدخال بيانات مستأجر جديد"
+            ),
+            status_code=303
+        )
+    rent = calculate_contract_rent_value(annual_rent, contract_duration_years, payment_frequency)
+    status = compute_contract_status(end_date, status)
+    cursor = conn.cursor()
+    cursor.execute(
         """
         INSERT INTO property_rent_contracts (property_id, unit_id, tenant_id, rent, start_date, end_date, status)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (property_id, unit_id, tenant_id, rent, start_date, end_date, status)
+        (property_id, unit_id, resolved_tenant_id, rent, start_date, end_date, status)
     )
+    contract_id = cursor.lastrowid
+    installment_rows = build_contract_installment_rows(
+        contract_id=contract_id,
+        annual_rent=annual_rent,
+        contract_duration_years=contract_duration_years,
+        payment_frequency=payment_frequency,
+        contract_start_date=start_date,
+    )
+    if installment_rows:
+        conn.executemany(
+            """
+            INSERT INTO contract_installments (contract_id, amount, due_date, status, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            installment_rows,
+        )
+    refresh_unit_status_from_contracts(conn, unit_id)
     conn.commit()
     conn.close()
     return RedirectResponse(
@@ -11335,6 +12626,7 @@ def edit_property_rental_contract_form(request: Request, contract_id: int, prope
         "SELECT * FROM property_tenants WHERE property_id = ? ORDER BY name",
         (current_property_id,)
     ).fetchall() if current_property_id else []
+    contract_form_values = derive_contract_form_values(conn, contract_id)
     conn.close()
 
     unit_options = '<option value="">اختر الوحدة</option>'
@@ -11342,7 +12634,7 @@ def edit_property_rental_contract_form(request: Request, contract_id: int, prope
         selected = "selected" if contract["unit_id"] == unit["id"] else ""
         unit_options += f'<option value="{unit["id"]}" {selected}>{unit["name"]}</option>'
 
-    tenant_options = '<option value="">اختر المستأجر</option>'
+    tenant_options = '<option value="">اختر المستأجر</option><option value="__new__">إضافة مستأجر جديد</option>'
     for tenant in tenants:
         selected = "selected" if contract["tenant_id"] == tenant["id"] else ""
         tenant_options += f'<option value="{tenant["id"]}" {selected}>{tenant["name"]}</option>'
@@ -11350,6 +12642,20 @@ def edit_property_rental_contract_form(request: Request, contract_id: int, prope
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
+<script>
+function toggleNewTenantFields(mode) {{
+    const select = document.getElementById(`contract-tenant-select-${{mode}}`);
+    const fields = document.getElementById(`contract-new-tenant-fields-${{mode}}`);
+    if (!select || !fields) return;
+    const isNewTenant = select.value === "__new__";
+    fields.style.display = isNewTenant ? "block" : "none";
+    fields.querySelectorAll("input, select").forEach((field) => {{
+        if (field.name === "new_tenant_name") {{
+            field.required = isNewTenant;
+        }}
+    }});
+}}
+</script>
 <body class="system-dark">
 {HOME_BUTTON}
 <div class="dashboard">
@@ -11365,23 +12671,47 @@ def edit_property_rental_contract_form(request: Request, contract_id: int, prope
             <select name="unit_id" required>{unit_options}</select>
 
             <label>المستأجر</label>
-            <select name="tenant_id" required>{tenant_options}</select>
+            <select name="tenant_id" id="contract-tenant-select-edit" required onchange="toggleNewTenantFields('edit')">{tenant_options}</select>
 
-            <label>قيمة الإيجار</label>
-            <input type="number" step="0.01" name="rent" value="{contract['rent'] or 0}" required>
+            <div id="contract-new-tenant-fields-edit" style="display:none;">
+                <label>اسم المستأجر</label>
+                <input type="text" name="new_tenant_name">
+
+                <label>رقم الجوال</label>
+                <input type="text" name="new_tenant_phone">
+
+                <label>رقم الهوية</label>
+                <input type="text" name="new_tenant_id_number">
+
+                <label>نوع المستأجر</label>
+                <select name="new_tenant_type">
+                    <option value="">اختر نوع المستأجر</option>
+                    <option value="فرد">فرد</option>
+                    <option value="شركة">شركة</option>
+                </select>
+            </div>
+
+            <input type="hidden" name="rent" value="{contract['rent'] or 0}">
+
+            <label>الإيجار السنوي</label>
+            <input type="number" step="0.01" name="annual_rent" value="{contract_form_values['annual_rent']}" required>
+
+            <label>مدة العقد (سنوات)</label>
+            <input type="number" name="contract_duration_years" min="1" step="1" value="{contract_form_values['contract_duration_years']}" required>
+
+            <label>طريقة الدفع</label>
+            <select name="payment_frequency" required>
+                <option value="yearly" {"selected" if contract_form_values['payment_frequency'] == "yearly" else ""}>سنوي</option>
+                <option value="semi-annual" {"selected" if contract_form_values['payment_frequency'] == "semi-annual" else ""}>نصف سنوي</option>
+                <option value="quarterly" {"selected" if contract_form_values['payment_frequency'] == "quarterly" else ""}>ربع سنوي</option>
+                <option value="monthly" {"selected" if contract_form_values['payment_frequency'] == "monthly" else ""}>شهري</option>
+            </select>
 
             <label>بداية العقد</label>
             <input type="date" name="start_date" value="{contract['start_date'] or ''}">
 
             <label>نهاية العقد</label>
             <input type="date" name="end_date" value="{contract['end_date'] or ''}">
-
-            <label>الحالة</label>
-            <select name="status">
-                <option value="ساري" {"selected" if contract['status'] == "ساري" else ""}>ساري</option>
-                <option value="منتهي" {"selected" if contract['status'] == "منتهي" else ""}>منتهي</option>
-                <option value="معلق" {"selected" if contract['status'] == "معلق" else ""}>معلق</option>
-            </select>
 
             <button type="submit" class="glass-btn gold-text">حفظ التعديلات</button>
         </form>
@@ -11398,11 +12728,18 @@ def update_property_rental_contract(
     contract_id: int = Form(...),
     property_id: int = Form(...),
     unit_id: int = Form(...),
-    tenant_id: int = Form(...),
-    rent: float = Form(...),
+    tenant_id: str = Form(""),
+    rent: float = Form(0),
+    annual_rent: float = Form(0),
+    contract_duration_years: int = Form(0),
+    payment_frequency: str = Form("yearly"),
     start_date: str = Form(""),
     end_date: str = Form(""),
-    status: str = Form("ساري")
+    status: str = Form("ساري"),
+    new_tenant_name: str = Form(""),
+    new_tenant_phone: str = Form(""),
+    new_tenant_id_number: str = Form(""),
+    new_tenant_type: str = Form(""),
 ):
     access_result = ensure_realestate_write_access(
         request,
@@ -11412,18 +12749,111 @@ def update_property_rental_contract(
     if not isinstance(access_result, sqlite3.Row):
         return access_result
     conn = get_db()
+    current_contract = conn.execute(
+        "SELECT unit_id FROM property_rent_contracts WHERE id = ?",
+        (contract_id,),
+    ).fetchone()
+    old_unit_id = current_contract["unit_id"] if current_contract else 0
+    resolved_tenant_id = resolve_contract_tenant_id(
+        conn,
+        property_id=property_id,
+        unit_id=unit_id,
+        tenant_id_value=tenant_id,
+        new_tenant_name=new_tenant_name,
+        new_tenant_phone=new_tenant_phone,
+        new_tenant_id_number=new_tenant_id_number,
+        new_tenant_type=new_tenant_type,
+    )
+    if not resolved_tenant_id:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/property-rental-contracts?property_id={property_id}",
+                error="يرجى اختيار مستأجر موجود أو إدخال بيانات مستأجر جديد"
+            ),
+            status_code=303
+        )
+    rent = calculate_contract_rent_value(annual_rent, contract_duration_years, payment_frequency)
+    status = compute_contract_status(end_date, status)
     conn.execute(
         """
         UPDATE property_rent_contracts
         SET unit_id = ?, tenant_id = ?, rent = ?, start_date = ?, end_date = ?, status = ?
         WHERE id = ?
         """,
-        (unit_id, tenant_id, rent, start_date, end_date, status, contract_id)
+        (unit_id, resolved_tenant_id, rent, start_date, end_date, status, contract_id)
     )
+    conn.execute("DELETE FROM contract_installments WHERE contract_id = ?", (contract_id,))
+    installment_rows = build_contract_installment_rows(
+        contract_id=contract_id,
+        annual_rent=annual_rent,
+        contract_duration_years=contract_duration_years,
+        payment_frequency=payment_frequency,
+        contract_start_date=start_date,
+    )
+    if installment_rows:
+        conn.executemany(
+            """
+            INSERT INTO contract_installments (contract_id, amount, due_date, status, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            installment_rows,
+        )
+    if old_unit_id and old_unit_id != unit_id:
+        refresh_unit_status_from_contracts(conn, old_unit_id)
+    refresh_unit_status_from_contracts(conn, unit_id)
     conn.commit()
     conn.close()
     return RedirectResponse(
         url=build_redirect_url(f"/property-rental-contracts?property_id={property_id}", message="تم تحديث العقد بنجاح"),
+        status_code=303
+    )
+
+
+@app.post("/mark-contract-installment-paid/{installment_id}")
+def mark_contract_installment_paid(request: Request, installment_id: int, property_id: int = Form(0)):
+    conn = get_db()
+    installment = conn.execute(
+        """
+        SELECT
+            contract_installments.*,
+            property_rent_contracts.property_id
+        FROM contract_installments
+        LEFT JOIN property_rent_contracts ON property_rent_contracts.id = contract_installments.contract_id
+        WHERE contract_installments.id = ?
+        """,
+        (installment_id,),
+    ).fetchone()
+
+    current_property_id = property_id or (installment["property_id"] if installment else 0)
+    if not installment:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(f"/property-rental-contracts?property_id={current_property_id}", error="الدفعة غير موجودة"),
+            status_code=303
+        )
+
+    access_result = ensure_realestate_write_access(
+        request,
+        property_id=current_property_id,
+        back_url=f"/property-rental-contracts?property_id={current_property_id}",
+    )
+    if not isinstance(access_result, sqlite3.Row):
+        conn.close()
+        return access_result
+
+    conn.execute(
+        """
+        UPDATE contract_installments
+        SET status = ?, paid_at = ?
+        WHERE id = ?
+        """,
+        ("paid", datetime.now().strftime("%Y-%m-%d %H:%M"), installment_id)
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse(
+        url=build_redirect_url(f"/property-rental-contracts?property_id={current_property_id}", message="تم تسجيل تحصيل الدفعة بنجاح"),
         status_code=303
     )
 
@@ -11441,7 +12871,11 @@ def delete_property_rental_contract(request: Request, contract_id: int, property
             status_code=303
         )
 
+    unit_id = contract["unit_id"] or 0
     conn.execute("DELETE FROM property_rent_contracts WHERE id = ?", (contract_id,))
+    conn.execute("DELETE FROM contract_installments WHERE contract_id = ?", (contract_id,))
+    if unit_id:
+        refresh_unit_status_from_contracts(conn, unit_id)
     conn.commit()
     conn.close()
     return RedirectResponse(
@@ -12094,6 +13528,7 @@ def maintenance_management(request: Request, property_id: int = 0, status: str =
         company_result = ensure_realestate_maintenance_access(request)
         if not isinstance(company_result, sqlite3.Row):
             return company_result
+    current_user = getattr(request.state, "current_user", None) or get_current_user(request)
     conn = get_db()
     properties = conn.execute("SELECT * FROM property_properties ORDER BY name").fetchall()
     filters = []
@@ -12154,17 +13589,28 @@ def maintenance_management(request: Request, property_id: int = 0, status: str =
         selected = "selected" if maintenance_type == value else ""
         type_options += f'<option value="{value}" {selected}>{value}</option>'
 
+    is_admin_user = bool(current_user and is_admin(current_user))
     request_cards = ""
     for request in requests:
+        delete_button_html = ""
+        if is_admin_user:
+            delete_button_html = f"""
+            <form action="/delete-maintenance/{request['id']}" method="post" style="margin-top:10px;" onsubmit="return confirm('هل أنت متأكد من حذف طلب الصيانة؟');">
+                <button type="submit" class="action-btn delete-btn">حذف</button>
+            </form>
+            """
         request_cards += f"""
-        <a href="/maintenance-management/{request['id']}" class="company-card realestate property-site-card">
-            <h3>{request['maintenance_type'] or request['title'] or 'طلب صيانة'}</h3>
-            <p>🏢 {request['property_name'] or '-'}</p>
-            <p>🚪 {request['unit_name'] or '-'}</p>
-            <p>👤 {request['tenant_name'] or '-'}</p>
-            <p>📌 {request['status'] or '-'}</p>
-            <p>🚨 {request['priority'] or '-'}</p>
-        </a>
+        <div class="company-card realestate property-site-card">
+            <a href="/maintenance-management/{request['id']}" style="text-decoration:none;color:inherit;display:block;">
+                <h3>{request['maintenance_type'] or request['title'] or 'طلب صيانة'}</h3>
+                <p>🏢 {request['property_name'] or '-'}</p>
+                <p>🚪 {request['unit_name'] or '-'}</p>
+                <p>👤 {request['tenant_name'] or '-'}</p>
+                <p>📌 {request['status'] or '-'}</p>
+                <p>🚨 {request['priority'] or '-'}</p>
+            </a>
+            {delete_button_html}
+        </div>
         """
 
     return f"""
@@ -12199,6 +13645,26 @@ def maintenance_management(request: Request, property_id: int = 0, status: str =
     <a href="{f'/property-management/{property_id}' if property_id else '/company/realestate'}" class="glass-btn back-btn">⬅ رجوع</a>
 </div>
 """
+
+
+@app.post("/delete-maintenance/{request_id}")
+def delete_maintenance_request(request: Request, request_id: int):
+    current_user = getattr(request.state, "current_user", None) or get_current_user(request)
+    if not current_user:
+        return RedirectResponse(url="/login", status_code=303)
+    if not is_admin(current_user):
+        return access_denied_response("هذه العملية متاحة للمدير فقط", back_url="/maintenance-management")
+
+    conn = get_db()
+    request_row = conn.execute(
+        "SELECT id FROM maintenance_requests WHERE id = ?",
+        (request_id,),
+    ).fetchone()
+    if request_row:
+        conn.execute("DELETE FROM maintenance_requests WHERE id = ?", (request_id,))
+        conn.commit()
+    conn.close()
+    return RedirectResponse(url="/maintenance-management", status_code=303)
 
 
 @app.get("/maintenance-management/{request_id}", response_class=HTMLResponse)

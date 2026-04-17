@@ -1,10 +1,10 @@
-/* =========================
+﻿/* =========================
    Dark System Theme
 ========================= */
 
 body.system-dark{
 
-    background-image: url("/static/background.jpg");
+    background-image: url("/static/images/bg.jpg");
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
@@ -13,26 +13,274 @@ body.system-dark{
     color:#000000;
 }
 
-.system-dark .dashboard h1 {
-    color: #000000;
+body.system-dark.owner-page {
+    background-image: url('/static/images/bg.jpg') !important;
+    background-size: cover !important;
+    background-position: center !important;
+    background-repeat: no-repeat !important;
+    background-attachment: fixed !important;
 }
 
-.system-dark .dashboard p {
-    color: #ffffff;
+body.system-dark.owner-page .owner-dashboard::before {
+    background: none !important;
+}
+
+@keyframes premium-fade-up {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes premium-soft-glow {
+    0%,
+    100% {
+        box-shadow: 0 14px 32px rgba(140, 112, 76, 0.08);
+    }
+    50% {
+        box-shadow: 0 18px 38px rgba(189, 161, 124, 0.14);
+    }
+}
+
+.premium-reveal {
+    opacity: 1;
+    transform: translateY(0);
+    animation: premium-fade-up 0.8s cubic-bezier(.22,1,.36,1) both;
+    animation-delay: var(--premium-delay, 0s);
+    will-change: opacity, transform;
+}
+
+.premium-glow {
+    opacity: 1;
+    transform: translateY(0);
+    animation: premium-fade-up 0.8s cubic-bezier(.22,1,.36,1) both,
+               premium-soft-glow 7s ease-in-out 0.9s infinite;
+}
+
+body.system-dark:not(.owner-page) .dashboard > *,
+body.system-dark:not(.owner-page) .companies > *,
+body.system-dark:not(.owner-page) .inventory-panel,
+body.system-dark:not(.owner-page) .inventory-table-panel,
+body.system-dark:not(.owner-page) .company-card,
+body.system-dark:not(.owner-page) .property-site-card,
+body.system-dark:not(.owner-page) .inventory-note,
+body.system-dark:not(.owner-page) .finance-chart-card,
+body.system-dark:not(.owner-page) table,
+body.system-dark:not(.owner-page) form,
+body.system-dark:not(.owner-page) .glass-btn,
+body.system-dark:not(.owner-page) .action-btn,
+body.system-dark:not(.owner-page) .home-button,
+body.contract-clean .contract-page {
+    opacity: 1;
+    transform: translateY(0);
+    animation: premium-fade-up 0.8s cubic-bezier(.22,1,.36,1) both;
+    animation-delay: var(--premium-delay, 0s);
+    will-change: opacity, transform;
+}
+
+body.system-dark:not(.owner-page) .inventory-panel,
+body.system-dark:not(.owner-page) .inventory-table-panel,
+body.system-dark:not(.owner-page) .company-card,
+body.system-dark:not(.owner-page) .property-site-card,
+body.system-dark:not(.owner-page) .finance-chart-card,
+body.contract-clean .contract-page {
+    animation: premium-fade-up 0.8s cubic-bezier(.22,1,.36,1) both;
+}
+
+body.system-dark:not(.owner-page) .dashboard > *:nth-child(1),
+body.system-dark:not(.owner-page) .companies > *:nth-child(1) { --premium-delay: 0.04s; }
+body.system-dark:not(.owner-page) .dashboard > *:nth-child(2),
+body.system-dark:not(.owner-page) .companies > *:nth-child(2) { --premium-delay: 0.10s; }
+body.system-dark:not(.owner-page) .dashboard > *:nth-child(3),
+body.system-dark:not(.owner-page) .companies > *:nth-child(3) { --premium-delay: 0.16s; }
+body.system-dark:not(.owner-page) .dashboard > *:nth-child(4),
+body.system-dark:not(.owner-page) .companies > *:nth-child(4) { --premium-delay: 0.22s; }
+body.system-dark:not(.owner-page) .dashboard > *:nth-child(5),
+body.system-dark:not(.owner-page) .companies > *:nth-child(5) { --premium-delay: 0.28s; }
+body.system-dark:not(.owner-page) .dashboard > *:nth-child(6),
+body.system-dark:not(.owner-page) .companies > *:nth-child(6) { --premium-delay: 0.34s; }
+
+body.system-dark:not(.owner-page) .inventory-panel,
+body.system-dark:not(.owner-page) .inventory-table-panel,
+body.system-dark:not(.owner-page) .company-card,
+body.system-dark:not(.owner-page) .property-site-card,
+body.system-dark:not(.owner-page) .finance-chart-card,
+body.system-dark:not(.owner-page) table,
+body.contract-clean .contract-page {
+    transition: transform 0.45s ease, box-shadow 0.45s ease, border-color 0.45s ease, background 0.45s ease;
+}
+
+body.system-dark:not(.owner-page) .inventory-panel:hover,
+body.system-dark:not(.owner-page) .inventory-table-panel:hover,
+body.system-dark:not(.owner-page) .company-card:hover,
+body.system-dark:not(.owner-page) .property-site-card:hover,
+body.system-dark:not(.owner-page) .finance-chart-card:hover,
+body.system-dark:not(.owner-page) table:hover,
+body.contract-clean .contract-page:hover {
+    transform: translateY(-10px) scale(1.02);
+    box-shadow: 0 28px 52px rgba(0,0,0,0.14), 0 0 0 1px rgba(214, 195, 163, 0.34), inset 0 1px 0 rgba(255,255,255,0.52);
+    border-color: rgba(184, 155, 109, 0.34);
+    z-index: 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .premium-reveal,
+    .premium-glow,
+    body.system-dark:not(.owner-page) .dashboard > *,
+    body.system-dark:not(.owner-page) .companies > *,
+    body.system-dark:not(.owner-page) .inventory-panel,
+    body.system-dark:not(.owner-page) .inventory-table-panel,
+    body.system-dark:not(.owner-page) .company-card,
+    body.system-dark:not(.owner-page) .property-site-card,
+    body.system-dark:not(.owner-page) .inventory-note,
+    body.system-dark:not(.owner-page) .finance-chart-card,
+    body.system-dark:not(.owner-page) table,
+    body.system-dark:not(.owner-page) form,
+    body.system-dark:not(.owner-page) .glass-btn,
+    body.system-dark:not(.owner-page) .action-btn,
+    body.system-dark:not(.owner-page) .home-button,
+    body.contract-clean .contract-page {
+        animation: none !important;
+        opacity: 1 !important;
+        transform: none !important;
+        transition: none !important;
+    }
+}
+
+body.system-dark,
+body.system-dark * {
+    color: #6b573d;
+}
+
+body.system-dark h1,
+body.system-dark h2,
+body.system-dark h3,
+body.system-dark h4,
+body.system-dark .dashboard h1,
+body.system-dark .card-title,
+body.system-dark .section-title,
+body.system-dark .page-title,
+body.system-dark .form-title,
+body.system-dark legend,
+body.system-dark th {
+    color: #5f4b32;
+}
+
+body.system-dark p,
+body.system-dark span,
+body.system-dark small,
+body.system-dark .dashboard p,
+body.system-dark .section-subtitle,
+body.system-dark .helper-text,
+body.system-dark .muted-text,
+body.system-dark .form-help,
+body.system-dark .empty-state {
+    color: #8f7a5c;
+}
+
+body.system-dark td,
+body.system-dark label,
+body.system-dark li,
+body.system-dark a,
+body.system-dark button,
+body.system-dark input,
+body.system-dark select,
+body.system-dark textarea,
+body.system-dark option,
+body.system-dark .badge,
+body.system-dark .status-badge,
+body.system-dark .table-wrapper *,
+body.system-dark .dashboard *,
+body.system-dark .company-card,
+body.system-dark .company-card *,
+body.system-dark .glass-btn,
+body.system-dark .action-btn,
+body.system-dark .back-btn {
+    color: #6b573d;
+    -webkit-text-fill-color: #6b573d;
+}
+
+body.system-dark input::placeholder,
+body.system-dark textarea::placeholder {
+    color: #8f7a5c;
+}
+
+.system-topbar {
+    width: min(1240px, calc(100% - 36px));
+    margin: 18px auto 30px auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 14px;
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 20;
+}
+
+.system-topbar-auth,
+.system-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.system-topbar-auth {
+    margin-inline-start: auto;
+}
+
+body.system-dark .home-button {
+    position: static;
+    top: auto;
+    right: auto;
+    z-index: auto;
+    margin: 0;
+    flex: 0 0 auto;
+}
+
+body.system-dark #global-auth-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-inline-start: auto;
+}
+
+body.system-dark .dashboard {
+    padding-top: 0;
+}
+
+@media (max-width: 720px) {
+    .system-topbar {
+        width: calc(100% - 24px);
+        margin: 16px auto 24px auto;
+        align-items: stretch;
+    }
+
+    .system-topbar,
+    .system-topbar-auth,
+    .system-topbar-actions {
+        justify-content: flex-start;
+    }
 }
 
 .system-dark .company-card {
-    backdrop-filter: blur(20px);
-    background: rgba(255, 255, 255, 0.05);
-    box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
+    box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
 }
 
 
 .glass-btn {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.72);
     backdrop-filter: blur(10px);
     border: 1px solid rgba(255, 255, 255, 0.2);
-    color: white;
+    color: #6b573d;
     padding: 10px 18px;
     border-radius: 12px;
     cursor: pointer;
@@ -61,7 +309,7 @@ body.system-dark{
 
 .action-btn {
     background: #111 !important;
-    color: #fff !important;
+    color: #6b573d !important;
     border-radius: 8px;
     padding: 6px 12px;
     text-decoration: none;
@@ -69,7 +317,7 @@ body.system-dark{
     font-size: 13px;
     border: 1px solid #111 !important;
     backdrop-filter: none !important;
-    -webkit-text-fill-color: #fff !important;
+    -webkit-text-fill-color: #6b573d !important;
     text-shadow: none !important;
     margin: 0 4px;
 }
@@ -88,14 +336,14 @@ body.system-dark{
 }
 
 .back-btn {
-    color: #000 !important;
+    color: #6b573d !important;
 }
 
 .home-button {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    z-index: 9999;
+    position: static;
+    top: auto;
+    right: auto;
+    z-index: auto;
     font-weight: bold;
 }
 
@@ -122,17 +370,17 @@ body.system-dark{
 
 
 /* =========================
-   الأساسيات
+   ط§ظ„ط£ط³ط§ط³ظٹط§طھ
 ========================= */
 body {
     margin: 0;
     font-family: "Segoe UI", Tahoma, Arial;
-    background: #8fa1b5; /* الخلفية الرئيسية */
+    background: #8fa1b5; /* ط§ظ„ط®ظ„ظپظٹط© ط§ظ„ط±ط¦ظٹط³ظٹط© */
     direction: rtl;
 }
 
 /* =========================
-   الحاوية العامة
+   ط§ظ„ط­ط§ظˆظٹط© ط§ظ„ط¹ط§ظ…ط©
 ========================= */
 .dashboard {
     padding: 50px 30px;
@@ -152,7 +400,7 @@ body {
 }
 
 /* =========================
-   شبكة الكروت
+   ط´ط¨ظƒط© ط§ظ„ظƒط±ظˆطھ
 ========================= */
 .companies {
     display: grid;
@@ -163,8 +411,47 @@ body {
 }
 
 /* =========================
-   الكرت الأساسي
+   ط§ظ„ظƒط±طھ ط§ظ„ط£ط³ط§ط³ظٹ
 ========================= */
+.company-card,
+.inventory-panel,
+.inventory-table-panel,
+.finance-card,
+.expense-summary-card,
+.property-site-card,
+.admin-users-landing-card,
+.glass-card {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+    background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(180, 150, 100, 0.15);
+    box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
+    transition: transform 0.36s cubic-bezier(.22,1,.36,1), box-shadow 0.36s cubic-bezier(.22,1,.36,1), border-color 0.36s cubic-bezier(.22,1,.36,1), background 0.36s cubic-bezier(.22,1,.36,1);
+}
+
+.company-card::after,
+.inventory-panel::after,
+.inventory-table-panel::after,
+.finance-card::after,
+.expense-summary-card::after,
+.property-site-card::after,
+.admin-users-landing-card::after,
+.glass-card::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(to right, #d6c3a3, #b89b6d);
+    border-radius: inherit;
+    opacity: 0.55;
+    pointer-events: none;
+}
+
 .company-card {
     height: 180px;
     border-radius: 30px;
@@ -176,45 +463,64 @@ body {
     font-size: 24px;
     font-weight: bold;
     color: #ffffff;
-    box-shadow: 0 18px 35px rgba(0,0,0,0.25);
-    transition: all 0.35s ease;
-    background: rgba(255,255,255,0.1);
-    backdrop-filter: blur(15px);
-    border: 1px solid rgba(255,255,255,0.22);
+    box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
 }
 
-.company-card:hover {
-    transform: translateY(-8px) scale(1.03);
-    box-shadow: 0 30px 55px rgba(0,0,0,0.35);
+.company-card:hover,
+.inventory-panel:hover,
+.inventory-table-panel:hover,
+.finance-card:hover,
+.expense-summary-card:hover,
+.property-site-card:hover,
+.admin-users-landing-card:hover,
+.glass-card:hover {
+    transform: translateY(-10px) scale(1.02);
+    box-shadow: 0 28px 52px rgba(0,0,0,0.14), 0 0 0 1px rgba(214, 195, 163, 0.34), inset 0 1px 0 rgba(255,255,255,0.56);
+    border-color: rgba(184, 155, 109, 0.34);
+    background: linear-gradient(180deg, rgba(255, 252, 247, 0.82), rgba(238, 226, 208, 0.74));
+    z-index: 2;
+}
+
+.company-card:focus-visible,
+.inventory-panel:focus-within,
+.inventory-table-panel:focus-within,
+.finance-card:focus-within,
+.expense-summary-card:focus-within,
+.property-site-card:focus-within,
+.admin-users-landing-card:focus-within,
+.glass-card:focus-within {
+    transform: translateY(-4px) scale(1.005);
+    box-shadow: 0 20px 40px rgba(0,0,0,0.10), 0 0 0 1px rgba(184, 155, 109, 0.26), inset 0 1px 0 rgba(255,255,255,0.5);
+    border-color: rgba(184, 155, 109, 0.28);
 }
 
 /* =========================
-   ألوان الكروت (واضحة وفخمة)
+   ط£ظ„ظˆط§ظ† ط§ظ„ظƒط±ظˆطھ (ظˆط§ط¶ط­ط© ظˆظپط®ظ…ط©)
 ========================= */
 
-/* المقاولات */
+/* ط§ظ„ظ…ظ‚ط§ظˆظ„ط§طھ */
 .company-card.works {
     color: #ffffff;
 }
 
-/* التطوير العقاري */
+/* ط§ظ„طھط·ظˆظٹط± ط§ظ„ط¹ظ‚ط§ط±ظٹ */
 .company-card.realestate {
     color: #ffffff;
 }
 
-/* اللوجستيات */
+/* ط§ظ„ظ„ظˆط¬ط³طھظٹط§طھ */
 .company-card.logistics {
-    background: rgba(255,255,255,0.18);
+    background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
     color: #111;
 }
 
-/* الصفحات الداخلية (عقود – عروض أسعار – إلخ) */
+/* ط§ظ„طµظپط­ط§طھ ط§ظ„ط¯ط§ط®ظ„ظٹط© (ط¹ظ‚ظˆط¯ â€“ ط¹ط±ظˆط¶ ط£ط³ط¹ط§ط± â€“ ط¥ظ„ط®) */
 .company-card:not(.works):not(.realestate):not(.logistics) {
     color: #ffffff;
 }
 
 /* =========================
-   النص داخل الكرت
+   ط§ظ„ظ†طµ ط¯ط§ط®ظ„ ط§ظ„ظƒط±طھ
 ========================= */
 .company-card h2 {
     margin: 0;
@@ -242,7 +548,7 @@ body {
 }
 
 /* =========================
-   روابط الرجوع
+   ط±ظˆط§ط¨ط· ط§ظ„ط±ط¬ظˆط¹
 ========================= */
 .dashboard a[href="/"] {
     display: inline-block;
@@ -265,12 +571,12 @@ body {
 }
 
 .inventory-panel {
-    background: rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(16px);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(180, 150, 100, 0.15);
     border-radius: 24px;
     padding: 24px;
-    box-shadow: 0 18px 35px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
     text-align: right;
 }
 
@@ -350,10 +656,10 @@ body {
 }
 
 .expense-summary-card {
-    background: var(--expense-surface);
-    border: 1px solid var(--expense-border);
+    background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
+    border: 1px solid rgba(180, 150, 100, 0.15);
     border-radius: 24px;
-    box-shadow: var(--expense-shadow);
+    box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
     position: relative;
     overflow: hidden;
 }
@@ -397,11 +703,11 @@ body {
 
 .expense-form-panel,
 .expense-table-panel {
-    background: rgba(247, 250, 252, 0.14);
+    background: rgba(247, 250, 252, 0.78);
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 28px;
     box-shadow: 0 20px 48px rgba(15, 23, 42, 0.14);
-    backdrop-filter: blur(18px);
+    backdrop-filter: blur(10px);
 }
 
 .expense-panel-head {
@@ -611,6 +917,8 @@ body {
 .inventory-table-panel {
     max-width: 1100px;
     margin: 0 auto 24px auto;
+    border-radius: 24px;
+    padding: 22px;
 }
 
 .inventory-table-head {
@@ -971,13 +1279,14 @@ body {
 }
 
 .finance-card {
-    background: rgba(255, 255, 255, 0.11);
-    backdrop-filter: blur(16px);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(180, 150, 100, 0.15);
     border-radius: 24px;
     padding: 22px;
     text-align: right;
-    box-shadow: 0 18px 35px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
 }
 
 .finance-card span {
@@ -1382,14 +1691,14 @@ body {
 }
 
 /* =========================
-   Quote – عزل كامل
+   Quote â€“ ط¹ط²ظ„ ظƒط§ظ…ظ„
 ========================= */
 
 body {
     background: #9aa9b8;
 }
 
-/* حاوية الطباعة */
+/* ط­ط§ظˆظٹط© ط§ظ„ط·ط¨ط§ط¹ط© */
 
 
 .header {
@@ -1463,7 +1772,7 @@ body {
     font-size: 14px;
     line-height: 1.9;
 }
-/* زر الطباعة */
+/* ط²ط± ط§ظ„ط·ط¨ط§ط¹ط© */
 .print-btn {
     display: inline-block;
     margin-top: 25px;
@@ -1512,7 +1821,7 @@ body {
 
 }
 
-/* علامة مائية للطباعة فقط */
+/* ط¹ظ„ط§ظ…ط© ظ…ط§ط¦ظٹط© ظ„ظ„ط·ط¨ط§ط¹ط© ظپظ‚ط· */
 @media print {
 
     .watermark {
@@ -1526,3 +1835,37 @@ body {
     }
 
 }
+
+/* ط´ط¹ط§ط± ط§ظ„ظ†ط¸ط§ظ… ط¹ظ„ظ‰ ط§ظ„ظٹط³ط§ط± */
+body.system-dark::before {
+    content: "";
+    position: fixed;
+
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+
+    width: 600px;
+    height: 600px;
+
+    background: url('/static/images/logo.png') no-repeat center;
+    background-size: contain;
+    image-rendering: auto;
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
+
+    opacity: 1;
+
+    z-index: 0;
+    pointer-events: none;
+}
+
+body.login-page::before {
+    left: 18%;
+    top: 40%;
+    transform: translateY(-50%);
+
+    width: 500px;
+    height: 500px;
+}
+
