@@ -23,6 +23,7 @@ from datetime import date, datetime, time, timedelta
 from starlette.middleware.sessions import SessionMiddleware
 from urllib.parse import quote
 import arabic_reshaper
+from arabic_reshaper import reshape
 from bidi.algorithm import get_display
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_RIGHT
@@ -1288,6 +1289,66 @@ def format_arabic_pdf_text(value) -> str:
     return get_display(reshaped)
 
 
+def fix_arabic_text(text):
+    if not text:
+        return ""
+    try:
+        reshaped = reshape(str(text))
+        return get_display(reshaped)
+    except:
+        return text
+
+
+def build_quote_description_paragraph_text(value, font_name: str, font_size: float, max_width: float) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return format_arabic_pdf_text("-")
+
+    wrapped_lines = []
+    source_lines = text.splitlines() or [text]
+
+    def append_wrapped_line(line_text: str) -> None:
+        normalized = " ".join(str(line_text or "").split())
+        if not normalized:
+            wrapped_lines.append("")
+            return
+
+        words = normalized.split(" ")
+        current = ""
+
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if pdfmetrics.stringWidth(candidate, font_name, font_size) <= max_width:
+                current = candidate
+                continue
+
+            if current:
+                wrapped_lines.append(current)
+
+            if pdfmetrics.stringWidth(word, font_name, font_size) <= max_width:
+                current = word
+                continue
+
+            chunk = ""
+            for char in word:
+                candidate_chunk = f"{chunk}{char}"
+                if chunk and pdfmetrics.stringWidth(candidate_chunk, font_name, font_size) > max_width:
+                    wrapped_lines.append(chunk)
+                    chunk = char
+                else:
+                    chunk = candidate_chunk
+            current = chunk
+
+        if current:
+            wrapped_lines.append(current)
+
+    for source_line in source_lines:
+        append_wrapped_line(source_line)
+
+    formatted_lines = [escape(format_arabic_pdf_text(line)) if line else "" for line in wrapped_lines]
+    return "<br/>".join(formatted_lines) or escape(format_arabic_pdf_text("-"))
+
+
 def decimal_from_value(value) -> Decimal:
     try:
         return Decimal(str(value or 0))
@@ -1550,6 +1611,8 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
     subtitle_style = ParagraphStyle("QuoteReportSubtitle", parent=styles["Normal"], fontName=font_name, fontSize=10, leading=14, alignment=TA_RIGHT, textColor=colors.HexColor("#4b5f73"))
     section_style = ParagraphStyle("QuoteReportSection", parent=styles["Heading2"], fontName=font_name, fontSize=13, leading=18, alignment=TA_RIGHT, textColor=colors.HexColor("#11466b"), spaceAfter=6, spaceBefore=6)
     body_style = ParagraphStyle("QuoteReportBody", parent=styles["Normal"], fontName=font_name, fontSize=10, leading=16, alignment=TA_RIGHT, textColor=colors.HexColor("#1e293b"))
+    items_section_style = ParagraphStyle("QuoteReportItemsSection", parent=section_style, keepWithNext=True)
+    description_style = ParagraphStyle("QuoteReportDescription", parent=body_style, leading=14, alignment=TA_RIGHT, wordWrap="RTL")
     centered_style = ParagraphStyle("QuoteReportCentered", parent=body_style, alignment=1, fontSize=15, leading=20, textColor=colors.HexColor("#102235"))
     intro_text = "السلام عليكم ورحمة الله وبركاته، نفيدكم بتقديم عرض السعر التالي حسب البيانات والبنود الموضحة أدناه."
     footer_text = "هذا العرض صالح للاعتماد وفق البنود والأسعار الموضحة أعلاه، ويسعدنا خدمتكم والإجابة عن أي استفسار."
@@ -1592,8 +1655,9 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
         ("TOPPADDING", (0, 0), (-1, -1), 10),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
     ]))
-    story.extend([summary_table, Spacer(1, 10), Paragraph(format_arabic_pdf_text("بنود عرض السعر"), section_style)])
+    story.extend([summary_table, Spacer(1, 10), Paragraph(format_arabic_pdf_text("بنود عرض السعر"), items_section_style)])
 
+    description_col_width = 130 * mm
     items_rows = [[
         Paragraph(format_arabic_pdf_text("الإجمالي"), body_style),
         Paragraph(format_arabic_pdf_text("سعر الوحدة"), body_style),
@@ -1606,7 +1670,10 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
             Paragraph(format_arabic_pdf_text(f"{format_currency(line_total)} ريال"), body_style),
             Paragraph(format_arabic_pdf_text(f"{format_currency(safe_float(item['unit_price']))} ريال"), body_style),
             Paragraph(format_arabic_pdf_text(format_currency(safe_float(item["qty"]))), body_style),
-            Paragraph(format_arabic_pdf_text(item["description"] or "-"), body_style),
+            Paragraph(
+                build_quote_description_paragraph_text(item["description"] or "-", font_name, description_style.fontSize, description_col_width - 8),
+                description_style,
+            ),
         ])
     if len(items_rows) == 1:
         items_rows.append([
@@ -1621,15 +1688,26 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
         Paragraph(format_arabic_pdf_text(""), body_style),
         Paragraph(format_arabic_pdf_text("الإجمالي"), body_style),
     ])
-    items_table = Table(items_rows, colWidths=[45 * mm, 45 * mm, 35 * mm, 115 * mm], repeatRows=1, hAlign="RIGHT")
+    items_table = Table(
+        items_rows,
+        colWidths=[40 * mm, 40 * mm, 30 * mm, description_col_width],
+        repeatRows=1,
+        splitByRow=1,
+        splitInRow=1,
+        hAlign="RIGHT",
+    )
     items_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf3")),
         ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f8fafc")]),
         ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eef4f8")),
         ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
         ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("ALIGN", (3, 0), (3, -1), "RIGHT"),
+        ("VALIGN", (3, 0), (3, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
     ]))
     story.extend([items_table, Spacer(1, 10), Paragraph(format_arabic_pdf_text("جدول الدفعات"), section_style)])
 
@@ -1701,16 +1779,25 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     small_label_style = ParagraphStyle("ContractReportSmallLabel", parent=body_style, fontSize=9.2, leading=13, textColor=colors.HexColor("#7a6851"))
     card_value_style = ParagraphStyle("ContractReportCardValue", parent=body_style, fontSize=11, leading=17, textColor=colors.HexColor("#243445"))
 
+    contract_page_width = 166 * mm
+    contract_column_width = 62 * mm
+
+    def contract_paragraph(text, style, width=contract_page_width):
+        return Paragraph(
+            build_quote_description_paragraph_text(text, font_name, style.fontSize, width),
+            style,
+        )
+
     scope_story = []
     if items:
         for index, item in enumerate(items, start=1):
             description = (item["description"] or "").strip() or ""
             line_total = safe_float(item["qty"]) * safe_float(item["unit_price"])
-            scope_story.append(Paragraph(format_arabic_pdf_text(f"{index}. {description}"), body_style))
-            scope_story.append(Paragraph(format_arabic_pdf_text(f"بمبلغ: {format_currency(line_total)} ريال"), body_style))
+            scope_story.append(contract_paragraph(f"{index}. {description}", body_style))
+            scope_story.append(contract_paragraph(f"بمبلغ: {format_currency(line_total)} ريال", body_style))
     else:
-        scope_story.append(Paragraph(format_arabic_pdf_text("1. "), body_style))
-        scope_story.append(Paragraph(format_arabic_pdf_text("بمبلغ: "), body_style))
+        scope_story.append(contract_paragraph("1. ", body_style))
+        scope_story.append(contract_paragraph("بمبلغ: ", body_style))
 
     payment_story = []
     if payments:
@@ -1721,13 +1808,13 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
                 payment_text = f"- {title} بنسبة ({format_percentage_display(payment['percentage'])}) بمبلغ {format_currency(float(amount))} ريال"
             else:
                 payment_text = f"- دفعة بنسبة ({format_percentage_display(payment['percentage'])}) بمبلغ {format_currency(float(amount))} ريال"
-            payment_story.append(Paragraph(format_arabic_pdf_text(payment_text), body_style))
+            payment_story.append(contract_paragraph(payment_text, body_style))
     else:
-        payment_story.append(Paragraph(format_arabic_pdf_text("- "), body_style))
+        payment_story.append(contract_paragraph("- ", body_style))
 
     header_band = Table([[
-        Paragraph(format_arabic_pdf_text(company_profile["name"]), title_style),
-        Paragraph(format_arabic_pdf_text("عقد تنفيذ أعمال مقاولات عامة"), centered_style),
+        contract_paragraph(company_profile["name"], title_style, 53 * mm),
+        contract_paragraph("عقد تنفيذ أعمال مقاولات عامة", centered_style, 83 * mm),
     ]], colWidths=[65 * mm, 95 * mm], hAlign="RIGHT")
     header_band.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f5efe6")),
@@ -1743,14 +1830,14 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     meta_cards = Table([
         [
             [
-                Paragraph(format_arabic_pdf_text("رقم العقد"), small_label_style),
+                contract_paragraph("رقم العقد", small_label_style, 66 * mm),
                 Spacer(1, 5),
-                Paragraph(format_arabic_pdf_text(contract_number), card_value_style),
+                contract_paragraph(contract_number, card_value_style, 66 * mm),
             ],
             [
-                Paragraph(format_arabic_pdf_text("التاريخ"), small_label_style),
+                contract_paragraph("التاريخ", small_label_style, 66 * mm),
                 Spacer(1, 5),
-                Paragraph(format_arabic_pdf_text(issue_date), card_value_style),
+                contract_paragraph(issue_date, card_value_style, 66 * mm),
             ],
         ]
     ], colWidths=[78 * mm, 78 * mm], hAlign="RIGHT")
@@ -1766,7 +1853,7 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     ]))
 
     def build_section_heading(text: str):
-        heading = Table([[Paragraph(format_arabic_pdf_text(text), section_style)]], colWidths=[166 * mm], hAlign="RIGHT")
+        heading = Table([[contract_paragraph(text, section_style, contract_page_width - 12)]], colWidths=[166 * mm], hAlign="RIGHT")
         heading.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f4eee7")),
             ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#d8c9b5")),
@@ -1781,25 +1868,25 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     parties_table = Table([
         [
             [
-                Paragraph(format_arabic_pdf_text("الطرف الثاني"), section_style),
+                contract_paragraph("الطرف الثاني", section_style, contract_column_width),
                 Spacer(1, 4),
-                Paragraph(format_arabic_pdf_text(f"السيد/ {client_name}، بموجب هوية رقم {client_id}،"), body_style),
-                Paragraph(format_arabic_pdf_text(f"وعنوانه: {client_address}،"), body_style),
-                Paragraph(format_arabic_pdf_text("ويشار إليه فيما بعد بـ \"الطرف الثاني\" أو \"العميل\"."), body_style),
+                contract_paragraph(f"السيد/ {client_name}، بموجب هوية رقم {client_id}،", body_style, contract_column_width),
+                contract_paragraph(f"وعنوانه: {client_address}،", body_style, contract_column_width),
+                contract_paragraph("ويشار إليه فيما بعد بـ \"الطرف الثاني\" أو \"العميل\".", body_style, contract_column_width),
                 Spacer(1, 4),
-                Paragraph(format_arabic_pdf_text(f"المشروع: {project_name or ''}"), subtitle_style),
-                Paragraph(format_arabic_pdf_text(f"الموقع: {project_location or ''}"), subtitle_style),
+                contract_paragraph(f"المشروع: {project_name or ''}", subtitle_style, contract_column_width),
+                contract_paragraph(f"الموقع: {project_location or ''}", subtitle_style, contract_column_width),
             ],
             [
-                Paragraph(format_arabic_pdf_text("الطرف الأول"), section_style),
+                contract_paragraph("الطرف الأول", section_style, contract_column_width),
                 Spacer(1, 4),
-                Paragraph(format_arabic_pdf_text(f"شركة {company_profile['name']}، سجل تجاري رقم {company_profile['commercial_register']}،"), body_style),
-                Paragraph(format_arabic_pdf_text(f"وعنوانها: {company_profile['address']}،"), body_style),
-                Paragraph(format_arabic_pdf_text(f"ويمثلها في هذا العقد {company_profile['representative']}،"), body_style),
-                Paragraph(format_arabic_pdf_text("ويشار إليها فيما بعد بـ \"الطرف الأول\" أو \"المقاول\"."), body_style),
+                contract_paragraph(f"شركة {company_profile['name']}، سجل تجاري رقم {company_profile['commercial_register']}،", body_style, contract_column_width),
+                contract_paragraph(f"وعنوانها: {company_profile['address']}،", body_style, contract_column_width),
+                contract_paragraph(f"ويمثلها في هذا العقد {company_profile['representative']}،", body_style, contract_column_width),
+                contract_paragraph("ويشار إليها فيما بعد بـ \"الطرف الأول\" أو \"المقاول\".", body_style, contract_column_width),
                 Spacer(1, 4),
-                Paragraph(format_arabic_pdf_text(f"الرقم الوطني الموحد: {company_profile['national_number']}"), subtitle_style),
-                Paragraph(format_arabic_pdf_text(f"جوال: {company_profile['mobile']}"), subtitle_style),
+                contract_paragraph(f"الرقم الوطني الموحد: {company_profile['national_number']}", subtitle_style, contract_column_width),
+                contract_paragraph(f"جوال: {company_profile['mobile']}", subtitle_style, contract_column_width),
             ],
         ]
     ], colWidths=[82 * mm, 82 * mm], hAlign="RIGHT")
@@ -1816,9 +1903,9 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
 
     contract_value_card = Table([[
         [
-            Paragraph(format_arabic_pdf_text("القيمة الإجمالية"), small_label_style),
+            contract_paragraph("القيمة الإجمالية", small_label_style, contract_page_width - 16),
             Spacer(1, 4),
-            Paragraph(format_arabic_pdf_text(f"{format_currency(total)} ريال سعودي فقط لا غير"), card_value_style),
+            contract_paragraph(f"{format_currency(total)} ريال سعودي فقط لا غير", card_value_style, contract_page_width - 16),
         ]
     ]], colWidths=[166 * mm], hAlign="RIGHT")
     contract_value_card.setStyle(TableStyle([
@@ -1837,14 +1924,14 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
         Spacer(1, 10),
         parties_table,
         Spacer(1, 8),
-        Paragraph(format_arabic_pdf_text("وقد قرر الطرفان وهما بكامل أهليتهما الشرعية والنظامية التعاقد وفق البنود التالية:"), body_style),
+        contract_paragraph("وقد قرر الطرفان وهما بكامل أهليتهما الشرعية والنظامية التعاقد وفق البنود التالية:", body_style),
         Spacer(1, 8),
         build_section_heading("أولاً: التمهيد"),
         Spacer(1, 4),
-        Paragraph(format_arabic_pdf_text("يعد هذا التمهيد جزءاً لا يتجزأ من هذا العقد ومكملاً له في جميع بنوده."), body_style),
-        Paragraph(format_arabic_pdf_text(f"وحيث أن الطرف الثاني يرغب في تنفيذ أعمال مقاولات عامة في الموقع الكائن في {project_location or ''}،"), body_style),
-        Paragraph(format_arabic_pdf_text("وحيث أن الطرف الأول يمتلك الخبرة والكفاءة لتنفيذ هذه الأعمال،"), body_style),
-        Paragraph(format_arabic_pdf_text("فقد تم الاتفاق على ما يلي:"), body_style),
+        contract_paragraph("يعد هذا التمهيد جزءاً لا يتجزأ من هذا العقد ومكملاً له في جميع بنوده.", body_style),
+        contract_paragraph(f"وحيث أن الطرف الثاني يرغب في تنفيذ أعمال مقاولات عامة في الموقع الكائن في {project_location or ''}،", body_style),
+        contract_paragraph("وحيث أن الطرف الأول يمتلك الخبرة والكفاءة لتنفيذ هذه الأعمال،", body_style),
+        contract_paragraph("فقد تم الاتفاق على ما يلي:", body_style),
         Spacer(1, 8),
         build_section_heading("ثانياً: نطاق العمل"),
         Spacer(1, 4),
@@ -1855,71 +1942,71 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
         Spacer(1, 8),
         build_section_heading("ثالثاً: مدة التنفيذ"),
         Spacer(1, 4),
-        Paragraph(format_arabic_pdf_text(f"1. مدة تنفيذ الأعمال هي ({duration_text}) تبدأ من تاريخ استلام الموقع."), body_style),
-        Paragraph(format_arabic_pdf_text("2. في حال تأخر الطرف الثاني في تسليم الموقع أو الدفعات، تمدد المدة تلقائياً."), body_style),
+        contract_paragraph(f"1. مدة تنفيذ الأعمال هي ({duration_text}) تبدأ من تاريخ استلام الموقع.", body_style),
+        contract_paragraph("2. في حال تأخر الطرف الثاني في تسليم الموقع أو الدفعات، تمدد المدة تلقائياً.", body_style),
         Spacer(1, 8),
         build_section_heading("رابعاً: قيمة العقد والدفعات"),
         Spacer(1, 4),
         contract_value_card,
         Spacer(1, 6),
-        Paragraph(format_arabic_pdf_text("2. يتم السداد كالتالي:"), body_style),
+        contract_paragraph("2. يتم السداد كالتالي:", body_style),
     ])
     story.extend(payment_story)
     story.extend([
-        Paragraph(format_arabic_pdf_text("3. يتم السداد بموجب تحويل بنكي إلى حساب الطرف الأول لدى بنك الإنماء رقم (SA5405000068207285292000)."), body_style),
+        contract_paragraph("3. يتم السداد بموجب تحويل بنكي إلى حساب الطرف الأول لدى بنك الإنماء رقم (SA5405000068207285292000).", body_style),
         Spacer(1, 8),
         build_section_heading("خامساً: الشروط العامة"),
         Spacer(1, 4),
-        Paragraph(format_arabic_pdf_text("1. تنفيذ الأعمال وفق المتطلبات المتفق عليها."), body_style),
-        Paragraph(format_arabic_pdf_text("2. مسؤولية سلامة العاملين على الطرف الأول."), body_style),
-        Paragraph(format_arabic_pdf_text("3. يحق للمقاول وضع لوحة تعريفية في الموقع."), body_style),
+        contract_paragraph("1. تنفيذ الأعمال وفق المتطلبات المتفق عليها.", body_style),
+        contract_paragraph("2. مسؤولية سلامة العاملين على الطرف الأول.", body_style),
+        contract_paragraph("3. يحق للمقاول وضع لوحة تعريفية في الموقع.", body_style),
         Spacer(1, 8),
         build_section_heading("سادساً: مسؤوليات الطرفين"),
         Spacer(1, 4),
-        Paragraph(format_arabic_pdf_text("مسؤوليات الطرف الأول (المقاول):"), body_style),
-        Paragraph(format_arabic_pdf_text("1. توفير العمالة والمعدات اللازمة."), body_style),
-        Paragraph(format_arabic_pdf_text("2. المحافظة على نظافة الموقع."), body_style),
-        Paragraph(format_arabic_pdf_text("3. تسليم الأعمال في الوقت المحدد."), body_style),
+        contract_paragraph("مسؤوليات الطرف الأول (المقاول):", body_style),
+        contract_paragraph("1. توفير العمالة والمعدات اللازمة.", body_style),
+        contract_paragraph("2. المحافظة على نظافة الموقع.", body_style),
+        contract_paragraph("3. تسليم الأعمال في الوقت المحدد.", body_style),
         Spacer(1, 4),
-        Paragraph(format_arabic_pdf_text("مسؤوليات الطرف الثاني (العميل):"), body_style),
-        Paragraph(format_arabic_pdf_text("1. تسليم الموقع جاهز للعمل."), body_style),
-        Paragraph(format_arabic_pdf_text("2. سداد الدفعات في وقتها."), body_style),
+        contract_paragraph("مسؤوليات الطرف الثاني (العميل):", body_style),
+        contract_paragraph("1. تسليم الموقع جاهز للعمل.", body_style),
+        contract_paragraph("2. سداد الدفعات في وقتها.", body_style),
         Spacer(1, 8),
         build_section_heading("سابعاً: الاستلام"),
         Spacer(1, 4),
-        Paragraph(format_arabic_pdf_text("1. يتم إشعار العميل بموعد التسليم."), body_style),
-        Paragraph(format_arabic_pdf_text("2. يجب الاستلام خلال 3 أيام من الإشعار."), body_style),
-        Paragraph(format_arabic_pdf_text("3. في حال عدم الحضور يعتبر المشروع مستلماً حكماً."), body_style),
-        Paragraph(format_arabic_pdf_text("4. يحق للمقاول توثيق التسليم."), body_style),
+        contract_paragraph("1. يتم إشعار العميل بموعد التسليم.", body_style),
+        contract_paragraph("2. يجب الاستلام خلال 3 أيام من الإشعار.", body_style),
+        contract_paragraph("3. في حال عدم الحضور يعتبر المشروع مستلماً حكماً.", body_style),
+        contract_paragraph("4. يحق للمقاول توثيق التسليم.", body_style),
         Spacer(1, 8),
         build_section_heading("ثامناً: الأحكام العامة"),
         Spacer(1, 4),
-        Paragraph(format_arabic_pdf_text("1. يخضع العقد لأنظمة المملكة العربية السعودية."), body_style),
-        Paragraph(format_arabic_pdf_text(f"2. في حال النزاع يتم حله ودياً، وإن تعذر يحال للمحكمة التجارية ب{company_profile['city']}."), body_style),
-        Paragraph(format_arabic_pdf_text("3. حرر العقد من نسختين لكل طرف نسخة."), body_style),
+        contract_paragraph("1. يخضع العقد لأنظمة المملكة العربية السعودية.", body_style),
+        contract_paragraph(f"2. في حال النزاع يتم حله ودياً، وإن تعذر يحال للمحكمة التجارية ب{company_profile['city']}.", body_style),
+        contract_paragraph("3. حرر العقد من نسختين لكل طرف نسخة.", body_style),
         Spacer(1, 10),
-        Paragraph(format_arabic_pdf_text("والله ولي التوفيق"), centered_style),
+        contract_paragraph("والله ولي التوفيق", centered_style),
         Spacer(1, 10),
-        Paragraph(format_arabic_pdf_text(f"حرر في مدينة {company_profile['city']} بتاريخ: ........ الموافق .... / .... / .... هـ"), body_style),
+        contract_paragraph(f"حرر في مدينة {company_profile['city']} بتاريخ: ........ الموافق .... / .... / .... هـ", body_style),
         Spacer(1, 18),
     ])
 
     signature_table = Table([
         [
             [
-                Paragraph(format_arabic_pdf_text("الطرف الثاني"), section_style),
+                contract_paragraph("الطرف الثاني", section_style, 60 * mm),
                 Spacer(1, 10),
-                Paragraph(format_arabic_pdf_text("الاسم:"), body_style),
+                contract_paragraph("الاسم:", body_style, 60 * mm),
                 Spacer(1, 18),
-                Paragraph(format_arabic_pdf_text("التوقيع:"), body_style),
+                contract_paragraph("التوقيع:", body_style, 60 * mm),
             ],
             [
-                Paragraph(format_arabic_pdf_text("الطرف الأول"), section_style),
+                contract_paragraph("الطرف الأول", section_style, 60 * mm),
                 Spacer(1, 10),
-                Paragraph(format_arabic_pdf_text(company_profile["name"]), body_style),
-                Paragraph(format_arabic_pdf_text(f"الاسم: {company_profile['representative']}"), body_style),
+                contract_paragraph(company_profile["name"], body_style, 60 * mm),
+                contract_paragraph(f"الاسم: {company_profile['representative']}", body_style, 60 * mm),
                 Spacer(1, 10),
-                Paragraph(format_arabic_pdf_text("التوقيع:"), body_style),
+                contract_paragraph("التوقيع:", body_style, 60 * mm),
             ],
         ]
     ], colWidths=[80 * mm, 80 * mm], hAlign="CENTER")
@@ -4557,7 +4644,7 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
         quote_item_form_html = f"""
 <form action="/add-item/{quote_id}?company={company}" method="post">
 الوصف:
-<input type="text" name="description" required>
+<textarea name="description" rows="6" style="width:100%; resize: vertical;" required></textarea>
 
 الكمية:
 <input type="number" step="0.01" name="qty" required>
@@ -4593,6 +4680,13 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
 {HOME_BUTTON}
+<style>
+.table td {{
+    vertical-align: top;
+    white-space: normal;
+    line-height: 1.8;
+}}
+</style>
 
 <div style="background:white;padding:60px 40px;line-height:2;text-align:right;position:relative">
 
@@ -4649,7 +4743,7 @@ URBAN RISE<br>WORKS
 
 <br><br>
 
-<table border="1" style="width:100%;text-align:center">
+<table class="table" border="1" style="width:100%;text-align:center">
 
 <tr>
 <th>الوصف</th>
@@ -4675,7 +4769,7 @@ URBAN RISE<br>WORKS
 
 <br>
 
-<table border="1" style="width:100%;text-align:center">
+<table class="table" border="1" style="width:100%;text-align:center">
 
 <tr>
 <th>الدفعة</th>
