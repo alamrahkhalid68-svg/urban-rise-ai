@@ -701,6 +701,10 @@ body {
     background: rgba(31, 138, 138, 0.62);
 }
 
+.expense-summary-card-collected::before {
+    background: rgba(104, 118, 195, 0.62);
+}
+
 .expense-form-panel,
 .expense-table-panel {
     background: rgba(247, 250, 252, 0.78);
@@ -905,6 +909,28 @@ body {
 
 .expense-primary-btn:hover {
     background: linear-gradient(135deg, rgba(31, 85, 114, 0.98), rgba(40, 107, 118, 0.98));
+}
+
+.expense-collected-panel {
+    padding: 18px 22px;
+}
+
+.expense-collected-form {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.expense-collected-label {
+    color: rgba(255, 255, 255, 0.94);
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.expense-collected-form input[type="number"] {
+    width: min(240px, 100%);
+    margin: 0;
 }
 
 .expense-inline-hint {
@@ -1137,6 +1163,15 @@ body {
 
     .expense-form-actions .expense-primary-btn,
     .expense-table-actions .expense-table-btn {
+        width: 100%;
+    }
+
+    .expense-collected-form {
+        align-items: stretch;
+    }
+
+    .expense-collected-form input[type="number"],
+    .expense-collected-form .expense-primary-btn {
         width: 100%;
     }
 }

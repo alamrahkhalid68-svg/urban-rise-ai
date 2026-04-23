@@ -521,6 +521,22 @@ CREATE TABLE IF NOT EXISTS project_expenses (
 """)
 
 conn.execute("""
+CREATE TABLE IF NOT EXISTS project_collections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER,
+    title TEXT,
+    amount REAL,
+    date TEXT,
+    party_name TEXT,
+    payment_method TEXT,
+    collection_status TEXT,
+    invoice_reference TEXT,
+    attachment_path TEXT,
+    notes TEXT
+)
+""")
+
+conn.execute("""
 CREATE TABLE IF NOT EXISTS project_daily (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER,
@@ -1062,6 +1078,8 @@ PROJECT_EXPENSE_CATEGORIES = [
 
 PROJECT_EXPENSE_PAYMENT_METHODS = ["نقد", "تحويل", "عهدة"]
 PROJECT_EXPENSE_PAYMENT_STATUSES = ["مدفوع", "غير مدفوع"]
+PROJECT_COLLECTION_PAYMENT_METHODS = PROJECT_EXPENSE_PAYMENT_METHODS
+PROJECT_COLLECTION_STATUSES = ["محصل", "معلق"]
 PROJECT_EXPENSE_NAME_SUGGESTIONS = {
     "مواد": ["اسمنت", "حديد", "بلاط", "دهان"],
     "أجور": ["عامل", "مشرف", "مهندس", "فني"],
@@ -1263,7 +1281,7 @@ def build_project_expense_payment_status_badge(status: str) -> str:
     cleaned_status = (status or "").strip()
     if not cleaned_status:
         return "-"
-    theme = "paid" if cleaned_status == "مدفوع" else "unpaid"
+    theme = "paid" if cleaned_status in {"مدفوع", "محصل"} else "unpaid"
     return f'<span class="expense-badge expense-badge-status" data-status="{escape(theme)}">{escape(cleaned_status)}</span>'
 
 
@@ -1408,13 +1426,16 @@ def draw_works_contract_pdf_frame(canvas, doc):
     canvas.restoreState()
 
 
-def build_project_expenses_report_pdf(project, expenses, contract_total: float, company: str = "") -> tuple[str, str]:
+def build_project_expenses_report_pdf(project, expenses, contract_total: float, collections=None, company: str = "") -> tuple[str, str]:
     os.makedirs("pdfs", exist_ok=True)
     file_name = f"project_expenses_report_{project['id']}.pdf"
     file_path = os.path.join("pdfs", file_name)
     font_name = get_pdf_report_font_name()
+    collections = collections or []
+    include_collections = normalize_access_value(company) == "works"
 
     total_expenses = sum(safe_float(expense["amount"]) for expense in expenses)
+    total_collections = sum(safe_float(collection["amount"]) for collection in collections) if include_collections else 0.0
     remaining = contract_total - total_expenses
     spend_ratio = (total_expenses / contract_total * 100) if contract_total > 0 else 0.0
     total_paid = sum(
@@ -1496,21 +1517,41 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
         Paragraph(format_arabic_pdf_text("الملخص المالي"), section_style),
     ]
 
-    summary_data = [
-        [
-            Paragraph(format_arabic_pdf_text("نسبة الصرف"), body_style),
-            Paragraph(format_arabic_pdf_text("المتبقي"), body_style),
-            Paragraph(format_arabic_pdf_text("إجمالي المصروفات"), body_style),
-            Paragraph(format_arabic_pdf_text("قيمة العقد"), body_style),
-        ],
-        [
-            Paragraph(format_arabic_pdf_text(f"{spend_ratio:.1f}%"), body_style),
-            Paragraph(format_arabic_pdf_text(f"{format_currency(remaining)} ريال"), body_style),
-            Paragraph(format_arabic_pdf_text(f"{format_currency(total_expenses)} ريال"), body_style),
-            Paragraph(format_arabic_pdf_text(f"{format_currency(contract_total)} ريال"), body_style),
-        ],
-    ]
-    summary_table = Table(summary_data, colWidths=[55 * mm, 60 * mm, 65 * mm, 60 * mm], hAlign="RIGHT")
+    if include_collections:
+        summary_data = [
+            [
+                Paragraph(format_arabic_pdf_text("المحصل"), body_style),
+                Paragraph(format_arabic_pdf_text("نسبة الصرف"), body_style),
+                Paragraph(format_arabic_pdf_text("المتبقي"), body_style),
+                Paragraph(format_arabic_pdf_text("إجمالي المصروفات"), body_style),
+                Paragraph(format_arabic_pdf_text("قيمة العقد"), body_style),
+            ],
+            [
+                Paragraph(format_arabic_pdf_text(f"{format_currency(total_collections)} ريال"), body_style),
+                Paragraph(format_arabic_pdf_text(f"{spend_ratio:.1f}%"), body_style),
+                Paragraph(format_arabic_pdf_text(f"{format_currency(remaining)} ريال"), body_style),
+                Paragraph(format_arabic_pdf_text(f"{format_currency(total_expenses)} ريال"), body_style),
+                Paragraph(format_arabic_pdf_text(f"{format_currency(contract_total)} ريال"), body_style),
+            ],
+        ]
+        summary_widths = [48 * mm, 46 * mm, 50 * mm, 55 * mm, 50 * mm]
+    else:
+        summary_data = [
+            [
+                Paragraph(format_arabic_pdf_text("نسبة الصرف"), body_style),
+                Paragraph(format_arabic_pdf_text("المتبقي"), body_style),
+                Paragraph(format_arabic_pdf_text("إجمالي المصروفات"), body_style),
+                Paragraph(format_arabic_pdf_text("قيمة العقد"), body_style),
+            ],
+            [
+                Paragraph(format_arabic_pdf_text(f"{spend_ratio:.1f}%"), body_style),
+                Paragraph(format_arabic_pdf_text(f"{format_currency(remaining)} ريال"), body_style),
+                Paragraph(format_arabic_pdf_text(f"{format_currency(total_expenses)} ريال"), body_style),
+                Paragraph(format_arabic_pdf_text(f"{format_currency(contract_total)} ريال"), body_style),
+            ],
+        ]
+        summary_widths = [55 * mm, 60 * mm, 65 * mm, 60 * mm]
+    summary_table = Table(summary_data, colWidths=summary_widths, hAlign="RIGHT")
     summary_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eaf1f7")),
         ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#f8fafc")),
@@ -1575,13 +1616,74 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
         ("RIGHTPADDING", (0, 0), (-1, -1), 6),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ]))
-    story.extend([expenses_table, Spacer(1, 10), Paragraph(format_arabic_pdf_text("مؤشرات إضافية"), section_style)])
+    story.extend([expenses_table])
+
+    if include_collections:
+        story.extend([Spacer(1, 10), Paragraph(format_arabic_pdf_text("تفاصيل التحصيلات"), section_style)])
+
+        collections_rows = [[
+            Paragraph(format_arabic_pdf_text("التاريخ"), body_style),
+            Paragraph(format_arabic_pdf_text("البيان"), body_style),
+            Paragraph(format_arabic_pdf_text("الجهة"), body_style),
+            Paragraph(format_arabic_pdf_text("طريقة الدفع"), body_style),
+            Paragraph(format_arabic_pdf_text("الحالة"), body_style),
+            Paragraph(format_arabic_pdf_text("المرجع"), body_style),
+            Paragraph(format_arabic_pdf_text("المبلغ"), body_style),
+        ]]
+
+        for collection in collections:
+            collections_rows.append([
+                Paragraph(format_arabic_pdf_text(collection["date"] or "-"), body_style),
+                Paragraph(format_arabic_pdf_text(collection["title"] or "-"), body_style),
+                Paragraph(format_arabic_pdf_text(collection["party_name"] or "-"), body_style),
+                Paragraph(format_arabic_pdf_text(collection["payment_method"] or "-"), body_style),
+                Paragraph(format_arabic_pdf_text(collection["collection_status"] or "-"), body_style),
+                Paragraph(format_arabic_pdf_text(collection["invoice_reference"] or "-"), body_style),
+                Paragraph(format_arabic_pdf_text(f"{format_currency(safe_float(collection['amount']))} ريال"), body_style),
+            ])
+
+        if len(collections_rows) == 1:
+            collections_rows.append([
+                Paragraph(format_arabic_pdf_text("-"), body_style),
+                Paragraph(format_arabic_pdf_text("لا توجد تحصيلات مسجلة"), body_style),
+                Paragraph(format_arabic_pdf_text("-"), body_style),
+                Paragraph(format_arabic_pdf_text("-"), body_style),
+                Paragraph(format_arabic_pdf_text("-"), body_style),
+                Paragraph(format_arabic_pdf_text("-"), body_style),
+                Paragraph(format_arabic_pdf_text("0 ريال"), body_style),
+            ])
+
+        collections_table = Table(
+            collections_rows,
+            colWidths=[30 * mm, 58 * mm, 42 * mm, 35 * mm, 32 * mm, 32 * mm, 33 * mm],
+            repeatRows=1,
+            hAlign="RIGHT",
+        )
+        collections_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf3")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#14344f")),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.extend([collections_table])
+
+    story.extend([Spacer(1, 10), Paragraph(format_arabic_pdf_text("مؤشرات إضافية"), section_style)])
 
     extra_notes_lines = [
         f"عدد القيود: {len(expenses)}",
         f"إجمالي المدفوع: {format_currency(total_paid)} ريال",
         f"إجمالي غير المدفوع: {format_currency(total_unpaid)} ريال",
     ]
+    if include_collections:
+        extra_notes_lines.insert(1, f"عدد التحصيلات: {len(collections)}")
+        extra_notes_lines.insert(2, f"إجمالي المحصل: {format_currency(total_collections)} ريال")
     if general_notes:
         extra_notes_lines.append(f"ملاحظات عامة: {general_notes}")
     else:
@@ -2071,8 +2173,23 @@ def cascade_delete_project_records(project_id: int, company: str = "") -> None:
         for row in daily_attachments:
             delete_project_daily_attachment_file(row["attachment_path"] or "")
 
+        expense_attachments = conn.execute(
+            "SELECT attachment_path FROM project_expenses WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+        for row in expense_attachments:
+            delete_project_daily_attachment_file(row["attachment_path"] or "")
+
+        collection_attachments = conn.execute(
+            "SELECT attachment_path FROM project_collections WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+        for row in collection_attachments:
+            delete_project_daily_attachment_file(row["attachment_path"] or "")
+
         conn.execute("DELETE FROM project_daily WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM project_expenses WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM project_collections WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM project_equipment WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM project_suppliers WHERE project_id = ?", (project_id,))
 
@@ -6031,6 +6148,13 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
         "SELECT * FROM project_expenses WHERE project_id = ? ORDER BY date DESC, id DESC",
         (project_id,)
     ).fetchall()
+    is_works_company_page = normalize_access_value(company) == "works"
+    collections = []
+    if is_works_company_page:
+        collections = conn.execute(
+            "SELECT * FROM project_collections WHERE project_id = ? ORDER BY date DESC, id DESC",
+            (project_id,)
+        ).fetchall()
 
     conn.close()
 
@@ -6039,6 +6163,7 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
     contract_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
     if contract_total <= 0 and project and "contract_value" in project.keys():
         contract_total = safe_float(project["contract_value"])
+    collected_amount = sum(safe_float(collection["amount"]) for collection in collections)
     remaining = contract_total - sum(safe_float(e["amount"]) for e in expenses)
     spend_ratio = (sum(safe_float(e["amount"]) for e in expenses) / contract_total * 100) if contract_total > 0 else 0.0
     feedback_html = render_page_feedback(
@@ -6064,6 +6189,15 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
     project_name = escape(project["name"] or f"مشروع رقم {project_id}") if project else f"مشروع رقم {project_id}"
     summary_remaining_class = "finance-card-positive" if remaining >= 0 else "finance-card-negative"
     show_actions = not is_read_only_works_partner
+    collection_payment_method_options = "".join(
+        f'<option value="{escape(item)}">{escape(item)}</option>'
+        for item in PROJECT_COLLECTION_PAYMENT_METHODS
+    )
+    collection_status_options = "".join(
+        f'<option value="{escape(item)}">{escape(item)}</option>'
+        for item in PROJECT_COLLECTION_STATUSES
+    )
+    collection_rows = ""
 
     for e in expenses:
         amount = safe_float(e["amount"])
@@ -6094,6 +6228,37 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
             <td class="expense-cell-amount">{format_currency(amount)} ريال</td>
             <td>{attachment_html}</td>
             <td>{actions_html}</td>
+        </tr>
+        """
+
+    for collection in collections:
+        collection_amount = safe_float(collection["amount"])
+        collection_attachment_html = (
+            f'<a href="{escape(collection["attachment_path"])}" target="_blank" class="expense-table-btn expense-table-btn-attachment">عرض المرفق</a>'
+            if ("attachment_path" in collection.keys() and collection["attachment_path"]) else
+            "-"
+        )
+        collection_actions_html = "-"
+        if show_actions:
+            collection_actions_html = (
+                f'''<div class="expense-table-actions"><a href="/edit-project-collection/{collection['id']}?project_id={project_id}&company={company}" class="expense-table-btn">تعديل</a>'''
+                f'''<a href="/delete-project-collection/{collection['id']}?project_id={project_id}&company={company}" class="expense-table-btn expense-table-btn-danger" onclick="return confirm('هل تريد حذف هذا التحصيل؟')">حذف</a></div>'''
+            )
+        collection_rows += f"""
+        <tr class="expense-table-row">
+            <td class="expense-cell-date">{escape(collection['date'] or '-')}</td>
+            <td class="expense-cell-title">
+                <strong>{escape(collection['title'] or '-')}</strong>
+                {f"<br><span class='expense-cell-meta'>مرجع: {escape(collection['invoice_reference'])}</span>" if ('invoice_reference' in collection.keys() and collection['invoice_reference']) else ""}
+                {f"<br><span class='expense-cell-meta'>{escape(collection['notes'])}</span>" if ('notes' in collection.keys() and collection['notes']) else ""}
+            </td>
+            <td>{escape((collection['party_name'] or '-')) if 'party_name' in collection.keys() else '-'}</td>
+            <td>{escape((collection['payment_method'] or '-')) if 'payment_method' in collection.keys() else '-'}</td>
+            <td>{build_project_expense_payment_status_badge(collection['collection_status'] if 'collection_status' in collection.keys() else '')}</td>
+            <td>{escape((collection['invoice_reference'] or '-')) if 'invoice_reference' in collection.keys() else '-'}</td>
+            <td class="expense-cell-amount">{format_currency(collection_amount)} ريال</td>
+            <td>{collection_attachment_html}</td>
+            <td>{collection_actions_html}</td>
         </tr>
         """
 
@@ -6184,6 +6349,71 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
     </div>
     """
 
+    project_collection_form_html = ""
+    if is_works_company_page and not is_read_only_works_partner:
+        project_collection_form_html = f"""
+    <div class="inventory-panel inventory-table-panel expense-form-panel">
+        <div class="expense-panel-head">
+            <div>
+                <h3>إضافة تحصيل</h3>
+            </div>
+        </div>
+        <form action="/save-project-collection" method="post" enctype="multipart/form-data" class="expense-form">
+            <input type="hidden" name="project_id" value="{project_id}">
+            <input type="hidden" name="company" value="{company}">
+
+            <div class="expense-form-grid">
+                <div>
+                    <label>بيان/اسم التحصيل</label>
+                    <input type="text" name="title" placeholder="مثال: دفعة أولى" required>
+                </div>
+                <div>
+                    <label>المبلغ</label>
+                    <input type="number" step="0.01" min="0" name="amount" required>
+                </div>
+                <div>
+                    <label>التاريخ</label>
+                    <input type="date" name="collection_date" value="{date.today().isoformat()}" required>
+                </div>
+                <div>
+                    <label>الجهة / العميل</label>
+                    <input type="text" name="party_name" placeholder="اسم الجهة أو المحول">
+                </div>
+                <div>
+                    <label>طريقة الدفع</label>
+                    <select name="payment_method">
+                        <option value="">اختر طريقة الدفع</option>
+                        {collection_payment_method_options}
+                    </select>
+                </div>
+                <div>
+                    <label>الحالة</label>
+                    <select name="collection_status">
+                        <option value="">اختر الحالة</option>
+                        {collection_status_options}
+                    </select>
+                </div>
+                <div>
+                    <label>رقم المرجع</label>
+                    <input type="text" name="invoice_reference" placeholder="مثال: RC-1042">
+                </div>
+                <div>
+                    <label>مرفق</label>
+                    <input type="file" name="attachment" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx">
+                </div>
+                <div class="expense-form-wide">
+                    <label>ملاحظات</label>
+                    <textarea name="notes" rows="3" placeholder="أي ملاحظات مختصرة"></textarea>
+                </div>
+            </div>
+
+            <div class="expense-form-actions">
+                <button type="submit" class="glass-btn gold-text expense-primary-btn">حفظ التحصيل</button>
+            </div>
+        </form>
+    </div>
+    """
+
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
@@ -6219,6 +6449,10 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
             <span>المتبقي</span>
             <strong>{format_currency(remaining)} ريال</strong>
         </div>
+        {f'''<div class="finance-card expense-summary-card expense-summary-card-collected">
+            <span>المحصل</span>
+            <strong>{format_currency(collected_amount)} ريال</strong>
+        </div>''' if is_works_company_page else ""}
         <div class="finance-card expense-summary-card expense-summary-card-ratio">
             <span>نسبة الصرف</span>
             <strong>{spend_ratio:.1f}%</strong>
@@ -6226,6 +6460,7 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
     </div>
 
     {project_expense_form_html}
+    {project_collection_form_html}
 
     <div class="inventory-table-panel expense-table-panel">
         <div class="inventory-table-head expense-table-head">
@@ -6257,6 +6492,37 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
             </table>
         </div>
     </div>
+
+    {f'''<div class="inventory-table-panel expense-table-panel">
+        <div class="inventory-table-head expense-table-head">
+            <h3 style="margin:0;color:#ffffff;">سجل التحصيل</h3>
+            <div class="expense-table-count">عدد السجلات: {len(collections)}</div>
+        </div>
+
+        <div class="expense-table-scroll">
+            <table class="finance-table expense-table">
+                <tr>
+                    <th>التاريخ</th>
+                    <th>البيان</th>
+                    <th>الجهة</th>
+                    <th>طريقة الدفع</th>
+                    <th>الحالة</th>
+                    <th>المرجع</th>
+                    <th>المبلغ</th>
+                    <th>المرفق</th>
+                    <th>الإدارة</th>
+                </tr>
+
+                {collection_rows if collection_rows else "<tr><td colspan='9'>لا توجد تحصيلات مسجلة حتى الآن</td></tr>"}
+
+                <tr class="expense-table-total-row">
+                    <td colspan="6"><strong>الإجمالي</strong></td>
+                    <td><strong>{format_currency(collected_amount)} ريال</strong></td>
+                    <td colspan="2"></td>
+                </tr>
+            </table>
+        </div>
+    </div>''' if is_works_company_page else ""}
 </div>
 <script>
 (function () {{
@@ -6452,6 +6718,89 @@ def save_expense(
     )
 
 
+@app.post("/save-project-collection")
+def save_project_collection(
+    request: Request,
+    project_id: int = Form(...),
+    company: str = Form(...),
+    title: str = Form(...),
+    amount: float = Form(...),
+    collection_date: str = Form(""),
+    party_name: str = Form(""),
+    payment_method: str = Form(""),
+    collection_status: str = Form(""),
+    invoice_reference: str = Form(""),
+    notes: str = Form(""),
+    attachment: UploadFile = File(None),
+):
+    access_result = ensure_employee_section_access(request, company, "expenses")
+    if isinstance(access_result, RedirectResponse) or isinstance(access_result, HTMLResponse):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    if normalize_access_value(company) != "works":
+        return RedirectResponse(url=f"/project-expenses?project_id={project_id}&company={company}", status_code=303)
+    cleaned_title = title.strip()
+    if not cleaned_title:
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/project-expenses?project_id={project_id}&company={company}",
+                error="بيان/اسم التحصيل مطلوب",
+            ),
+            status_code=303,
+        )
+    if payment_method.strip() and payment_method.strip() not in PROJECT_COLLECTION_PAYMENT_METHODS:
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/project-expenses?project_id={project_id}&company={company}",
+                error="طريقة الدفع المحددة غير صحيحة",
+            ),
+            status_code=303,
+        )
+    if collection_status.strip() and collection_status.strip() not in PROJECT_COLLECTION_STATUSES:
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/project-expenses?project_id={project_id}&company={company}",
+                error="حالة التحصيل المحددة غير صحيحة",
+            ),
+            status_code=303,
+        )
+
+    conn = get_db()
+    attachment_path = save_project_expense_attachment(attachment)
+    conn.execute(
+        """
+        INSERT INTO project_collections (
+            project_id, title, amount, date, party_name, payment_method,
+            collection_status, invoice_reference, attachment_path, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            project_id,
+            cleaned_title,
+            amount,
+            collection_date or date.today().isoformat(),
+            party_name.strip(),
+            payment_method.strip(),
+            collection_status.strip(),
+            invoice_reference.strip(),
+            attachment_path,
+            notes.strip(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse(
+        url=build_redirect_url(
+            f"/project-expenses?project_id={project_id}&company={company}",
+            message="تم حفظ التحصيل بنجاح",
+        ),
+        status_code=303,
+    )
+
+
 @app.get("/project-expenses-report")
 def project_expenses_report(request: Request, project_id: int, company: str = ""):
     access_result = ensure_employee_section_access(request, company, "expenses")
@@ -6483,13 +6832,23 @@ def project_expenses_report(request: Request, project_id: int, company: str = ""
         "SELECT * FROM project_expenses WHERE project_id = ? ORDER BY date DESC, id DESC",
         (project_id,)
     ).fetchall()
+    collections = conn.execute(
+        "SELECT * FROM project_collections WHERE project_id = ? ORDER BY date DESC, id DESC",
+        (project_id,)
+    ).fetchall()
     conn.close()
 
     contract_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
     if contract_total <= 0 and "contract_value" in project.keys():
         contract_total = safe_float(project["contract_value"])
 
-    file_path, file_name = build_project_expenses_report_pdf(project, expenses, contract_total, company=company)
+    file_path, file_name = build_project_expenses_report_pdf(
+        project,
+        expenses,
+        contract_total,
+        collections=collections,
+        company=company,
+    )
     return FileResponse(
         path=file_path,
         filename=file_name,
@@ -6877,6 +7236,255 @@ def delete_project_expense(request: Request, expense_id: int, project_id: int, c
         url=build_redirect_url(
             f"/project-expenses?project_id={project_id}&company={company}",
             message="تم حذف المصروف بنجاح",
+        ),
+        status_code=303
+    )
+
+
+@app.get("/edit-project-collection/{collection_id}", response_class=HTMLResponse)
+def edit_project_collection(request: Request, collection_id: int, project_id: int, company: str = ""):
+    access_result = ensure_employee_section_access(request, company, "expenses")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    if normalize_access_value(company) != "works":
+        return RedirectResponse(url=f"/project-expenses?project_id={project_id}&company={company}", status_code=303)
+    conn = get_db()
+    collection = conn.execute(
+        "SELECT * FROM project_collections WHERE id = ? AND project_id = ?",
+        (collection_id, project_id)
+    ).fetchone()
+    conn.close()
+
+    if not collection:
+        return "<h2>التحصيل غير موجود</h2>"
+
+    feedback_html = render_page_feedback(
+        request.query_params.get("message", ""),
+        request.query_params.get("error", ""),
+    )
+    payment_method_options = "".join(
+        f'<option value="{escape(item)}" {"selected" if (collection["payment_method"] or "") == item else ""}>{escape(item)}</option>'
+        for item in PROJECT_COLLECTION_PAYMENT_METHODS
+    )
+    collection_status_options = "".join(
+        f'<option value="{escape(item)}" {"selected" if (collection["collection_status"] or "") == item else ""}>{escape(item)}</option>'
+        for item in PROJECT_COLLECTION_STATUSES
+    )
+    current_attachment_html = (
+        f'<a href="{escape(collection["attachment_path"] or "")}" target="_blank" class="expense-table-btn expense-table-btn-attachment">عرض المرفق الحالي</a>'
+        if ("attachment_path" in collection.keys() and collection["attachment_path"]) else
+        "<span class='expense-inline-hint'>لا يوجد مرفق حالي</span>"
+    )
+
+    return f"""
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="/static/style.css">
+  <body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard expense-page expense-edit-page">
+
+<div class="finance-page-header">
+<div>
+<h1>تعديل التحصيل</h1>
+<p>تحديث نفس سجل التحصيل بدون تغيير بنية الصفحة.</p>
+</div>
+<a href="/project-expenses?project_id={project_id}&company={company}" class="glass-btn back-btn expense-page-back-btn">⬅ رجوع</a>
+</div>
+{feedback_html}
+
+<div class="inventory-panel inventory-table-panel expense-form-panel">
+<form action="/update-project-collection/{collection_id}" method="post" enctype="multipart/form-data" class="expense-form">
+<input type="hidden" name="project_id" value="{project_id}">
+<input type="hidden" name="company" value="{company}">
+
+<div class="expense-form-grid">
+<div>
+<label>بيان/اسم التحصيل</label>
+<input type="text" name="title" value="{escape(collection['title'] or '')}" required>
+</div>
+
+<div>
+<label>المبلغ</label>
+<input type="number" step="0.01" min="0" name="amount" value="{collection['amount'] or 0}" required>
+</div>
+
+<div>
+<label>التاريخ</label>
+<input type="date" name="collection_date" value="{escape(collection['date'] or date.today().isoformat())}" required>
+</div>
+
+<div>
+<label>الجهة / العميل</label>
+<input type="text" name="party_name" value="{escape(collection['party_name'] or '')}">
+</div>
+
+<div>
+<label>طريقة الدفع</label>
+<select name="payment_method">
+<option value="">اختر طريقة الدفع</option>
+{payment_method_options}
+</select>
+</div>
+
+<div>
+<label>الحالة</label>
+<select name="collection_status">
+<option value="">اختر الحالة</option>
+{collection_status_options}
+</select>
+</div>
+
+<div>
+<label>رقم المرجع</label>
+<input type="text" name="invoice_reference" value="{escape(collection['invoice_reference'] or '')}">
+</div>
+
+<div>
+<label>مرفق جديد</label>
+<input type="file" name="attachment" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx">
+{current_attachment_html}
+</div>
+
+<div class="expense-form-wide">
+<label>ملاحظات</label>
+<textarea name="notes" rows="3">{escape(collection['notes'] or '')}</textarea>
+</div>
+</div>
+
+<div class="expense-form-actions">
+<button type="submit" class="glass-btn gold-text expense-primary-btn">حفظ التعديل</button>
+</div>
+</form>
+</div>
+
+</div>
+"""
+
+
+@app.post("/update-project-collection/{collection_id}")
+def update_project_collection(
+    request: Request,
+    collection_id: int,
+    project_id: int = Form(...),
+    company: str = Form(...),
+    title: str = Form(...),
+    amount: float = Form(...),
+    collection_date: str = Form(""),
+    party_name: str = Form(""),
+    payment_method: str = Form(""),
+    collection_status: str = Form(""),
+    invoice_reference: str = Form(""),
+    notes: str = Form(""),
+    attachment: UploadFile = File(None),
+):
+    access_result = ensure_employee_section_access(request, company, "expenses")
+    if isinstance(access_result, RedirectResponse) or isinstance(access_result, HTMLResponse):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    if normalize_access_value(company) != "works":
+        return RedirectResponse(url=f"/project-expenses?project_id={project_id}&company={company}", status_code=303)
+    conn = get_db()
+    cleaned_title = title.strip()
+    if not cleaned_title:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/edit-project-collection/{collection_id}?project_id={project_id}&company={company}",
+                error="بيان/اسم التحصيل مطلوب",
+            ),
+            status_code=303
+        )
+    if payment_method.strip() and payment_method.strip() not in PROJECT_COLLECTION_PAYMENT_METHODS:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/edit-project-collection/{collection_id}?project_id={project_id}&company={company}",
+                error="طريقة الدفع المحددة غير صحيحة",
+            ),
+            status_code=303
+        )
+    if collection_status.strip() and collection_status.strip() not in PROJECT_COLLECTION_STATUSES:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/edit-project-collection/{collection_id}?project_id={project_id}&company={company}",
+                error="حالة التحصيل المحددة غير صحيحة",
+            ),
+            status_code=303
+        )
+    current_record = conn.execute(
+        "SELECT attachment_path FROM project_collections WHERE id = ? AND project_id = ?",
+        (collection_id, project_id)
+    ).fetchone()
+    attachment_path = current_record["attachment_path"] if current_record and "attachment_path" in current_record.keys() else ""
+    new_attachment_path = save_project_expense_attachment(attachment)
+    if new_attachment_path:
+        delete_project_daily_attachment_file(attachment_path or "")
+        attachment_path = new_attachment_path
+    conn.execute(
+        """
+        UPDATE project_collections
+        SET title = ?, amount = ?, date = ?, party_name = ?, payment_method = ?,
+            collection_status = ?, invoice_reference = ?, attachment_path = ?, notes = ?
+        WHERE id = ? AND project_id = ?
+        """,
+        (
+            cleaned_title,
+            amount,
+            collection_date or date.today().isoformat(),
+            party_name.strip(),
+            payment_method.strip(),
+            collection_status.strip(),
+            invoice_reference.strip(),
+            attachment_path,
+            notes.strip(),
+            collection_id,
+            project_id,
+        )
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse(
+        url=build_redirect_url(
+            f"/project-expenses?project_id={project_id}&company={company}",
+            message="تم تحديث التحصيل بنجاح",
+        ),
+        status_code=303
+    )
+
+
+@app.get("/delete-project-collection/{collection_id}")
+def delete_project_collection(request: Request, collection_id: int, project_id: int, company: str = ""):
+    access_result = ensure_employee_section_access(request, company, "expenses")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    if normalize_access_value(company) != "works":
+        return RedirectResponse(url=f"/project-expenses?project_id={project_id}&company={company}", status_code=303)
+    conn = get_db()
+    collection = conn.execute(
+        "SELECT attachment_path FROM project_collections WHERE id = ? AND project_id = ?",
+        (collection_id, project_id)
+    ).fetchone()
+    conn.execute(
+        "DELETE FROM project_collections WHERE id = ? AND project_id = ?",
+        (collection_id, project_id)
+    )
+    conn.commit()
+    conn.close()
+    if collection and "attachment_path" in collection.keys():
+        delete_project_daily_attachment_file(collection["attachment_path"] or "")
+    return RedirectResponse(
+        url=build_redirect_url(
+            f"/project-expenses?project_id={project_id}&company={company}",
+            message="تم حذف التحصيل بنجاح",
         ),
         status_code=303
     )
@@ -9296,6 +9904,7 @@ def build_realestate_owner_property_dashboard(
 ) -> str:
     today = date.today()
     total_units = len(units)
+    unit_map = {unit["id"]: unit for unit in units if unit["id"]}
     installment_status_labels = {
         "unpaid": "غير مدفوعة",
         "paid": "مدفوعة",
@@ -9356,24 +9965,46 @@ def build_realestate_owner_property_dashboard(
                 })
 
     maintenance_total = 0.0
-    open_important_maintenance = []
+    completed_maintenance_for_owner = []
     for item in maintenance_items:
         amount = safe_amount(item["actual_cost"]) if safe_amount(item["actual_cost"]) > 0 else safe_amount(item["estimated_cost"])
         maintenance_total += amount
         item_keys = item.keys()
         status_value = (item["status"] if "status" in item_keys else "") or ""
         status_key = status_value.strip().lower()
-        priority_value = (item["priority"] if "priority" in item_keys else "") or ""
-        priority_key = priority_value.strip().lower()
-        is_open = status_key not in {"completed", "مكتمل", "closed", "منتهي"}
-        is_important = priority_key in {"high", "urgent", "critical", "عالية", "عالي", "حرجة"}
-        if is_open and is_important:
-            open_important_maintenance.append({
-                "title": item["maintenance_type"] if "maintenance_type" in item_keys and item["maintenance_type"] else (item["title"] if "title" in item_keys and item["title"] else "-"),
-                "unit_name": item["unit_name"] if "unit_name" in item_keys and item["unit_name"] else "-",
-                "status": status_value or "-",
-                "priority": priority_value or "-",
-                "updated_at": (item["updated_at"] if "updated_at" in item_keys and item["updated_at"] else "") or (item["created_at"] if "created_at" in item_keys and item["created_at"] else "-"),
+        actual_cost = safe_amount(item["actual_cost"]) if "actual_cost" in item_keys else 0.0
+        request_property_id = item["property_id"] if "property_id" in item_keys else 0
+        unit_id = item["unit_id"] if "unit_id" in item_keys else 0
+        linked_unit = unit_map.get(unit_id) if unit_id else None
+        is_completed = status_key in {"completed", "مكتمل"}
+        has_final_amount = actual_cost > 0
+        is_same_property = request_property_id == property_id
+        has_valid_unit_link = bool(linked_unit)
+        if is_completed and has_final_amount and is_same_property and has_valid_unit_link:
+            title_value = (
+                (item["title"] if "title" in item_keys and item["title"] else "")
+                or (item["maintenance_type"] if "maintenance_type" in item_keys and item["maintenance_type"] else "")
+                or (item["description"] if "description" in item_keys and item["description"] else "")
+                or "-"
+            )
+            title_value = str(title_value).strip()
+            if len(title_value) > 70:
+                title_value = title_value[:67].rstrip() + "..."
+            attachment_html = (
+                f'<a href="{escape(item["image_path"])}" target="_blank" class="action-btn">عرض المرفق</a>'
+                if ("image_path" in item_keys and item["image_path"]) else
+                '<span class="owner-status-badge">لا يوجد مرفق</span>'
+            )
+            completed_maintenance_for_owner.append({
+                "unit_name": item["unit_name"] if "unit_name" in item_keys and item["unit_name"] else (linked_unit["name"] or "-"),
+                "title": title_value,
+                "actual_cost": actual_cost,
+                "completed_at": (
+                    (item["completed_date"] if "completed_date" in item_keys and item["completed_date"] else "")
+                    or (item["updated_at"] if "updated_at" in item_keys and item["updated_at"] else "")
+                    or (item["created_at"] if "created_at" in item_keys and item["created_at"] else "-")
+                ),
+                "attachment_html": attachment_html,
             })
 
     operational_total = sum(safe_amount(item["amount"]) for item in manual_expenses)
@@ -9458,17 +10089,17 @@ def build_realestate_owner_property_dashboard(
         """
         for item in late_installments
     )
-    maintenance_rows = "".join(
+    completed_maintenance_rows = "".join(
         f"""
         <tr>
-            <td>{item['title']}</td>
             <td>{item['unit_name']}</td>
-            <td>{item['status']}</td>
-            <td>{item['priority']}</td>
-            <td>{item['updated_at']}</td>
+            <td>{item['title']}</td>
+            <td>{item['actual_cost']:,.0f} ريال</td>
+            <td>{item['completed_at']}</td>
+            <td>{item['attachment_html']}</td>
         </tr>
         """
-        for item in open_important_maintenance
+        for item in completed_maintenance_for_owner
     )
     vacant_units_rows = "".join(
         f"""
@@ -9630,7 +10261,7 @@ def build_realestate_owner_property_dashboard(
                 <div class="owner-badge">المتبقي للتحصيل <strong>{outstanding_revenue:,.0f} ريال</strong></div>
                 <div class="owner-badge">عقود تنتهي قريبًا <strong>{len(expiring_contracts)}</strong></div>
                 <div class="owner-badge">دفعات متأخرة <strong>{len(late_installments)}</strong></div>
-                <div class="owner-badge">الصيانة المفتوحة المهمة <strong>{len(open_important_maintenance)}</strong></div>
+                <div class="owner-badge">الصيانات المكتملة <strong>{len(completed_maintenance_for_owner)}</strong></div>
             </div>
         </section>
 
@@ -9789,21 +10420,21 @@ def build_realestate_owner_property_dashboard(
         <section class="owner-section owner-reveal">
             <div class="owner-section-header">
                 <div>
-                    <h3>الصيانة المفتوحة المهمة</h3>
-                    <p>الطلبات ذات الأولوية الأعلى فقط، مع عرض بسيط وواضح دون تفاصيل تشغيلية زائدة.</p>
+                    <h3>الصيانات المكتملة</h3>
+                    <p>الطلبات المعتمدة بعد إدخال المبلغ الفعلي النهائي فقط.</p>
                 </div>
-                <div class="owner-section-pill">{len(open_important_maintenance)} طلب</div>
+                <div class="owner-section-pill">{len(completed_maintenance_for_owner)} سجل</div>
             </div>
             <div class="owner-table-wrap">
                 <table class="owner-table">
                 <tr>
-                    <th>النوع</th>
                     <th>الوحدة</th>
-                    <th>الحالة</th>
-                    <th>الأولوية</th>
-                    <th>آخر تحديث</th>
+                    <th>الوصف</th>
+                    <th>المبلغ الفعلي</th>
+                    <th>تاريخ الإكمال</th>
+                    <th>المرفق</th>
                 </tr>
-                {maintenance_rows if maintenance_rows else "<tr><td colspan='5'>لا توجد طلبات صيانة مهمة مفتوحة</td></tr>"}
+                {completed_maintenance_rows if completed_maintenance_rows else "<tr><td colspan='5'>لا توجد صيانات مكتملة حتى الآن</td></tr>"}
                 </table>
             </div>
         </section>
