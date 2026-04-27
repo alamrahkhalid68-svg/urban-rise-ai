@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.templating import Jinja2Templates
@@ -80,6 +80,7 @@ PROTECTED_ROUTE_PREFIXES = (
     "/property-revenue",
     "/property-expenses",
     "/maintenance-management",
+    "/daily-activity-report",
     "/client-maintenance",
     "/realestate-investment",
     "/investment-projects",
@@ -491,6 +492,32 @@ CREATE TABLE IF NOT EXISTS contract_attachments (
 )
 """)
 
+conn.execute("""
+CREATE TABLE IF NOT EXISTS contract_appendices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company TEXT,
+    parent_contract_id INTEGER,
+    project_id INTEGER,
+    client TEXT,
+    appendix_date TEXT,
+    short_description TEXT,
+    notes TEXT,
+    total REAL,
+    status TEXT,
+    created_at TEXT
+)
+""")
+
+conn.execute("""
+CREATE TABLE IF NOT EXISTS contract_appendix_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    appendix_id INTEGER,
+    description TEXT,
+    qty REAL,
+    unit_price REAL
+)
+""")
+
 # المشاريع
 conn.execute("""
 CREATE TABLE IF NOT EXISTS projects (
@@ -516,7 +543,9 @@ CREATE TABLE IF NOT EXISTS project_expenses (
     project_id INTEGER,
     title TEXT,
     amount REAL,
-    date TEXT
+    date TEXT,
+    created_at TEXT,
+    created_by_user_id INTEGER
 )
 """)
 
@@ -543,7 +572,9 @@ CREATE TABLE IF NOT EXISTS project_daily (
     report TEXT,
     workers INTEGER,
     date TEXT,
-    attachment_path TEXT
+    attachment_path TEXT,
+    created_at TEXT,
+    created_by_user_id INTEGER
 )
 """)
 
@@ -739,6 +770,8 @@ CREATE TABLE IF NOT EXISTS maintenance_requests (
     final_report TEXT,
     created_at TEXT,
     updated_at TEXT,
+    created_by_user_id INTEGER,
+    updated_by_user_id INTEGER,
     image_path TEXT
 )
 """)
@@ -755,7 +788,8 @@ CREATE TABLE IF NOT EXISTS property_expenses (
     expense_date TEXT,
     vendor_or_payee TEXT,
     notes TEXT,
-    created_at TEXT
+    created_at TEXT,
+    created_by_user_id INTEGER
 )
 """)
 
@@ -807,8 +841,12 @@ for statement in [
     "ALTER TABLE maintenance_requests ADD COLUMN final_report TEXT",
     "ALTER TABLE maintenance_requests ADD COLUMN created_at TEXT",
     "ALTER TABLE maintenance_requests ADD COLUMN updated_at TEXT",
+    "ALTER TABLE maintenance_requests ADD COLUMN created_by_user_id INTEGER",
+    "ALTER TABLE maintenance_requests ADD COLUMN updated_by_user_id INTEGER",
     "ALTER TABLE maintenance_requests ADD COLUMN image_path TEXT",
     "ALTER TABLE project_daily ADD COLUMN attachment_path TEXT",
+    "ALTER TABLE project_daily ADD COLUMN created_at TEXT",
+    "ALTER TABLE project_daily ADD COLUMN created_by_user_id INTEGER",
 ]:
     try:
         conn.execute(statement)
@@ -824,6 +862,9 @@ for statement in [
     "ALTER TABLE project_expenses ADD COLUMN invoice_reference TEXT",
     "ALTER TABLE project_expenses ADD COLUMN attachment_path TEXT",
     "ALTER TABLE project_expenses ADD COLUMN notes TEXT",
+    "ALTER TABLE project_expenses ADD COLUMN created_at TEXT",
+    "ALTER TABLE project_expenses ADD COLUMN created_by_user_id INTEGER",
+    "ALTER TABLE property_expenses ADD COLUMN created_by_user_id INTEGER",
 ]:
     try:
         conn.execute(statement)
@@ -2129,6 +2170,215 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     return file_path, file_name
 
 
+def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tuple[str, str]:
+    os.makedirs("pdfs", exist_ok=True)
+    file_name = f"contract_appendix_{appendix['id']}.pdf"
+    file_path = os.path.join("pdfs", file_name)
+    font_name = get_pdf_report_font_name()
+    company_profile = WORKS_COMPANY_PROFILE
+    appendix_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
+    if appendix_total <= 0:
+        appendix_total = safe_float(appendix["total"])
+    parent_contract_number = f"25/{int(parent_contract['id']):04d}" if parent_contract else "-"
+    appendix_number = f"APP-{int(appendix['id']):04d}"
+    appendix_date = (appendix["appendix_date"] or "").strip() or datetime.now().strftime("%Y-%m-%d")
+    client_name = (appendix["client"] or "").strip() or (project["client"] if project else "") or "-"
+    project_name = (project["name"] or "").strip() if project else ""
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("AppendixReportTitle", parent=styles["Heading1"], fontName=font_name, fontSize=18, leading=24, alignment=TA_RIGHT, textColor=colors.HexColor("#213547"), spaceAfter=4)
+    subtitle_style = ParagraphStyle("AppendixReportSubtitle", parent=styles["Normal"], fontName=font_name, fontSize=9.5, leading=14, alignment=TA_RIGHT, textColor=colors.HexColor("#6b7280"))
+    body_style = ParagraphStyle("AppendixReportBody", parent=styles["Normal"], fontName=font_name, fontSize=10.5, leading=18, alignment=TA_RIGHT, textColor=colors.HexColor("#2b3440"))
+    section_style = ParagraphStyle("AppendixReportSection", parent=body_style, fontSize=11.5, leading=19, textColor=colors.HexColor("#1f2937"), spaceBefore=4, spaceAfter=0)
+    centered_style = ParagraphStyle("AppendixReportCentered", parent=body_style, alignment=1, fontSize=18, leading=26, textColor=colors.HexColor("#1f2d3d"))
+    small_label_style = ParagraphStyle("AppendixReportSmallLabel", parent=body_style, fontSize=9.2, leading=13, textColor=colors.HexColor("#7a6851"))
+    card_value_style = ParagraphStyle("AppendixReportCardValue", parent=body_style, fontSize=11, leading=17, textColor=colors.HexColor("#243445"))
+    description_style = ParagraphStyle("AppendixReportDescription", parent=body_style, leading=14, alignment=TA_RIGHT, wordWrap="RTL")
+
+    page_width = 166 * mm
+
+    def appendix_paragraph(text, style, width=page_width):
+        return Paragraph(
+            build_quote_description_paragraph_text(text, font_name, style.fontSize, width),
+            style,
+        )
+
+    def build_section_heading(text: str):
+        heading = Table([[appendix_paragraph(text, section_style, page_width - 12)]], colWidths=[166 * mm], hAlign="RIGHT")
+        heading.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f4eee7")),
+            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#d8c9b5")),
+            ("LINEAFTER", (0, 0), (0, 0), 3, colors.HexColor("#b79a75")),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ]))
+        return heading
+
+    header_band = Table([[
+        appendix_paragraph(company_profile["name"], title_style, 53 * mm),
+        appendix_paragraph("ملحق عقد", centered_style, 83 * mm),
+    ]], colWidths=[65 * mm, 95 * mm], hAlign="RIGHT")
+    header_band.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f5efe6")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#d6c4ab")),
+        ("LINEBEFORE", (1, 0), (1, 0), 0.5, colors.HexColor("#ddcfba")),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+
+    meta_cards = Table([
+        [
+            [appendix_paragraph("رقم الملحق", small_label_style, 48 * mm), Spacer(1, 5), appendix_paragraph(appendix_number, card_value_style, 48 * mm)],
+            [appendix_paragraph("رقم العقد الأساسي", small_label_style, 48 * mm), Spacer(1, 5), appendix_paragraph(parent_contract_number, card_value_style, 48 * mm)],
+            [appendix_paragraph("تاريخ الملحق", small_label_style, 48 * mm), Spacer(1, 5), appendix_paragraph(appendix_date, card_value_style, 48 * mm)],
+        ]
+    ], colWidths=[54 * mm, 54 * mm, 54 * mm], hAlign="RIGHT")
+    meta_cards.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fbf8f3")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#e2d6c5")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#ede3d6")),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+
+    party_table = Table([
+        [
+            appendix_paragraph(f"اسم العميل: {client_name}", body_style, 76 * mm),
+            appendix_paragraph(f"المشروع: {project_name or '-'}", body_style, 76 * mm),
+        ],
+    ], colWidths=[82 * mm, 82 * mm], hAlign="RIGHT")
+    party_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fcfaf7")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#ddd1c0")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#ece2d7")),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+
+    description_col_width = 86 * mm
+    item_rows = [[
+        Paragraph(format_arabic_pdf_text("الإجمالي"), body_style),
+        Paragraph(format_arabic_pdf_text("سعر الوحدة"), body_style),
+        Paragraph(format_arabic_pdf_text("الكمية"), body_style),
+        Paragraph(format_arabic_pdf_text("البيان"), body_style),
+    ]]
+    for item in items:
+        line_total = safe_float(item["qty"]) * safe_float(item["unit_price"])
+        item_rows.append([
+            Paragraph(format_arabic_pdf_text(f"{format_currency(line_total)} ريال"), body_style),
+            Paragraph(format_arabic_pdf_text(f"{format_currency(safe_float(item['unit_price']))} ريال"), body_style),
+            Paragraph(format_arabic_pdf_text(format_currency(safe_float(item["qty"]))), body_style),
+            Paragraph(
+                build_quote_description_paragraph_text(item["description"] or "-", font_name, description_style.fontSize, description_col_width - 8),
+                description_style,
+            ),
+        ])
+    if len(item_rows) == 1:
+        item_rows.append([
+            Paragraph(format_arabic_pdf_text("0 ريال"), body_style),
+            Paragraph(format_arabic_pdf_text("-"), body_style),
+            Paragraph(format_arabic_pdf_text("-"), body_style),
+            Paragraph(format_arabic_pdf_text("لا توجد بنود"), body_style),
+        ])
+    item_rows.append([
+        Paragraph(format_arabic_pdf_text(f"{format_currency(appendix_total)} ريال"), body_style),
+        Paragraph(format_arabic_pdf_text(""), body_style),
+        Paragraph(format_arabic_pdf_text(""), body_style),
+        Paragraph(format_arabic_pdf_text("إجمالي قيمة الملحق"), body_style),
+    ])
+    items_table = Table(
+        item_rows,
+        colWidths=[30 * mm, 30 * mm, 24 * mm, description_col_width],
+        repeatRows=1,
+        splitByRow=1,
+        splitInRow=1,
+        hAlign="RIGHT",
+    )
+    items_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf3")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f8fafc")]),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eef4f8")),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+        ("ALIGN", (3, 0), (3, -1), "RIGHT"),
+        ("VALIGN", (3, 0), (3, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+    ]))
+
+    notes_text = (appendix["notes"] or "").strip() or "لا توجد ملاحظات أو شروط إضافية."
+    story = [
+        header_band,
+        Spacer(1, 8),
+        meta_cards,
+        Spacer(1, 10),
+        party_table,
+        Spacer(1, 8),
+        build_section_heading("وصف مختصر للعمل الإضافي"),
+        Spacer(1, 4),
+        appendix_paragraph(appendix["short_description"] or "-", body_style),
+        Spacer(1, 8),
+        build_section_heading("جدول البنود"),
+        Spacer(1, 4),
+        items_table,
+        Spacer(1, 8),
+        build_section_heading("ملاحظات وشروط الملحق"),
+        Spacer(1, 4),
+        appendix_paragraph(notes_text, body_style),
+        Spacer(1, 8),
+        appendix_paragraph("يعتبر هذا الملحق جزءًا لا يتجزأ من العقد الأساسي المشار إليه أعلاه.", body_style),
+        Spacer(1, 16),
+    ]
+
+    signature_table = Table([
+        [
+            [
+                appendix_paragraph("الطرف الثاني", section_style, 60 * mm),
+                Spacer(1, 10),
+                appendix_paragraph("الاسم:", body_style, 60 * mm),
+                Spacer(1, 18),
+                appendix_paragraph("التوقيع:", body_style, 60 * mm),
+            ],
+            [
+                appendix_paragraph("الطرف الأول", section_style, 60 * mm),
+                Spacer(1, 10),
+                appendix_paragraph(company_profile["name"], body_style, 60 * mm),
+                appendix_paragraph(f"الاسم: {company_profile['representative']}", body_style, 60 * mm),
+                Spacer(1, 10),
+                appendix_paragraph("التوقيع:", body_style, 60 * mm),
+            ],
+        ]
+    ], colWidths=[80 * mm, 80 * mm], hAlign="CENTER")
+    signature_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fcfaf7")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#ddd1c0")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#ece2d7")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+    ]))
+    story.extend([signature_table, Spacer(1, 8), Paragraph(format_arabic_pdf_text(f"بيانات التواصل: جوال {company_profile['mobile']} | {company_profile['address']}"), subtitle_style)])
+
+    doc = SimpleDocTemplate(file_path, pagesize=A4, rightMargin=22 * mm, leftMargin=22 * mm, topMargin=24 * mm, bottomMargin=18 * mm)
+    doc.build(story, onFirstPage=draw_works_contract_pdf_frame, onLaterPages=draw_works_contract_pdf_frame)
+    return file_path, file_name
+
+
 def save_maintenance_image(image: UploadFile | None) -> str:
     if not image or not getattr(image, "filename", ""):
         return ""
@@ -2202,6 +2452,11 @@ def cascade_delete_project_records(project_id: int, company: str = "") -> None:
             ).fetchone()
             if contract:
                 quote_id = contract["quote_id"]
+            conn.execute(
+                "DELETE FROM contract_appendix_items WHERE appendix_id IN (SELECT id FROM contract_appendices WHERE parent_contract_id = ?)",
+                (contract_id,),
+            )
+            conn.execute("DELETE FROM contract_appendices WHERE parent_contract_id = ?", (contract_id,))
             conn.execute("DELETE FROM contracts WHERE id = ?", (contract_id,))
 
         if quote_id:
@@ -2236,6 +2491,54 @@ def format_currency(value: float) -> str:
     return f"{value:,.2f}".rstrip("0").rstrip(".")
 
 
+def get_project_appendices_total(conn, project_id: int) -> float:
+    if not project_id:
+        return 0.0
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(total), 0) AS total
+        FROM contract_appendices
+        WHERE project_id = ?
+        """,
+        (project_id,),
+    ).fetchone()
+    return safe_float(row["total"] if row else 0)
+
+
+def get_contract_project(conn, contract_row):
+    if not contract_row:
+        return None
+    manual_project_id = contract_row["manual_project_id"] if "manual_project_id" in contract_row.keys() else None
+    if manual_project_id:
+        return conn.execute(
+            "SELECT * FROM projects WHERE id = ? AND company = ?",
+            (manual_project_id, contract_row["company"]),
+        ).fetchone()
+    return conn.execute(
+        "SELECT * FROM projects WHERE contract_id = ? AND company = ? LIMIT 1",
+        (contract_row["id"], contract_row["company"]),
+    ).fetchone()
+
+
+def calculate_project_contract_total(conn, project_row) -> float:
+    contract = None
+    items = []
+    if project_row and project_row["contract_id"]:
+        contract = conn.execute(
+            "SELECT * FROM contracts WHERE id = ?",
+            (project_row["contract_id"],)
+        ).fetchone()
+    if contract and contract["quote_id"]:
+        items = conn.execute(
+            "SELECT qty, unit_price FROM quote_items WHERE quote_id = ?",
+            (contract["quote_id"],)
+        ).fetchall()
+    contract_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
+    if contract_total <= 0 and project_row and "contract_value" in project_row.keys():
+        contract_total = safe_float(project_row["contract_value"])
+    return contract_total + get_project_appendices_total(conn, project_row["id"] if project_row else 0)
+
+
 def build_project_financial_snapshot(conn, project_row):
     contract = None
     quote = None
@@ -2266,6 +2569,7 @@ def build_project_financial_snapshot(conn, project_row):
     contract_value = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
     if contract_value <= 0 and "contract_value" in project_row.keys():
         contract_value = safe_float(project_row["contract_value"])
+    contract_value += get_project_appendices_total(conn, project_row["id"])
     total_expenses = sum(safe_float(expense["amount"]) for expense in expenses)
     profit = contract_value - total_expenses
     profit_percentage = (profit / contract_value * 100) if contract_value > 0 else 0.0
@@ -3403,34 +3707,248 @@ def logout(request: Request):
 
 def render_internal_portal(user) -> HTMLResponse:
     admin_users_button = ""
+    daily_report_button = ""
     if is_admin(user):
-        admin_users_button = '<div style="margin:20px 0 28px;"><a href="/admin/users" class="glass-btn gold-text">تسجيل مستخدم جديد</a></div>'
+        admin_users_button = '<a href="/admin/users" class="portal-admin-btn">تسجيل مستخدم جديد</a>'
+        daily_report_button = '<a href="/daily-activity-report" class="portal-admin-btn">تقرير أعمال اليوم</a>'
     return HTMLResponse(
         content=f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
+<style>
+.system-topbar .glass-btn,
+.system-topbar-auth .glass-btn {{
+    background: rgba(245, 248, 250, 0.82);
+    border: 1px solid rgba(178, 137, 57, 0.42);
+    color: #3b2610;
+    box-shadow: 0 10px 24px rgba(34, 24, 12, 0.13), inset 0 1px 0 rgba(255,255,255,0.42);
+}}
+.portal-shell {{
+    width: min(1040px, calc(100% - 36px));
+    margin: 18px auto 38px;
+    text-align: center;
+}}
+.portal-hero {{
+    padding: 10px 0 18px;
+}}
+.portal-title {{
+    margin: 0;
+    font-size: clamp(32px, 4.2vw, 52px);
+    line-height: 1;
+    font-weight: 900;
+    letter-spacing: 0.4px;
+    color: #3b250c;
+    background: linear-gradient(135deg, #2f1d08 0%, #6b4717 48%, #a1762e 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    text-shadow: 0 1px 0 rgba(255,255,255,0.48), 0 10px 24px rgba(32, 22, 10, 0.22);
+}}
+.portal-kicker {{
+    margin: 10px 0 0;
+    color: #4a3217;
+    font-size: 15px;
+    font-weight: 800;
+    text-shadow: 0 1px 0 rgba(255,255,255,0.35);
+}}
+.portal-admin-actions {{
+    min-height: 42px;
+    margin: 16px 0 0;
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+}}
+.portal-admin-btn {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 36px;
+    padding: 7px 15px;
+    border-radius: 999px;
+    background: rgba(245, 248, 250, 0.84);
+    border: 1px solid rgba(178, 137, 57, 0.48);
+    color: #3a250d;
+    text-decoration: none;
+    font-weight: 800;
+    font-size: 13px;
+    box-shadow: 0 12px 28px rgba(35, 24, 10, 0.14), inset 0 1px 0 rgba(255,255,255,0.45);
+    backdrop-filter: blur(18px);
+    transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}}
+.portal-admin-btn:hover {{
+    transform: translateY(-1px);
+    border-color: rgba(178, 137, 57, 0.72);
+    box-shadow: 0 14px 30px rgba(35, 24, 10, 0.18), 0 0 22px rgba(212,175,55,0.22), inset 0 1px 0 rgba(255,255,255,0.50);
+}}
+.portal-company-grid {{
+    direction: rtl;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(230px, 1fr));
+    gap: 22px;
+    align-items: stretch;
+    margin-top: 22px;
+}}
+@keyframes portal-card-shine {{
+    0% {{
+        transform: translateX(115%);
+        opacity: 0;
+    }}
+    22% {{
+        opacity: 1;
+    }}
+    100% {{
+        transform: translateX(-115%);
+        opacity: 0;
+    }}
+}}
+.portal-company-grid .portal-company-card:nth-child(1) {{ --portal-delay: 0.08s; }}
+.portal-company-grid .portal-company-card:nth-child(2) {{ --portal-delay: 0.16s; }}
+.portal-company-grid .portal-company-card:nth-child(3) {{ --portal-delay: 0.24s; }}
+.portal-company-card {{
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    min-height: 205px;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 24px 24px 22px;
+    border-radius: 20px;
+    background: linear-gradient(135deg, rgba(245, 248, 250, 0.92), rgba(238, 231, 217, 0.82));
+    border: 1px solid rgba(212, 175, 55, 0.42);
+    box-shadow: 0 18px 44px rgba(30, 22, 12, 0.18), inset 0 1px 0 rgba(255,255,255,0.54), inset 0 0 0 1px rgba(255,255,255,0.22);
+    color: #3a250d;
+    text-decoration: none;
+    backdrop-filter: blur(18px);
+    transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease;
+    animation: premium-fade-up 0.8s cubic-bezier(.22,1,.36,1) both;
+    animation-delay: var(--portal-delay, 0s);
+}}
+.portal-company-card::before {{
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background: linear-gradient(115deg, transparent 0%, rgba(255,255,255,0.42) 38%, rgba(212,175,55,0.12) 48%, transparent 62%);
+    transform: translateX(115%);
+    opacity: 0;
+    pointer-events: none;
+    will-change: transform, opacity;
+    transition: transform 0.65s ease, opacity 0.3s ease;
+    animation: portal-card-shine 0.9s ease both;
+    animation-delay: calc(var(--portal-delay, 0s) + 0.45s);
+}}
+.portal-company-card::after {{
+    content: "";
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    left: 28px;
+    right: 28px;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, rgba(178, 137, 57, 0.92), transparent);
+    pointer-events: none;
+}}
+.portal-company-card > * {{
+    position: relative;
+    z-index: 3;
+}}
+.portal-company-card:hover {{
+    transform: translateY(-4px);
+    border-color: rgba(178, 137, 57, 0.68);
+    box-shadow: 0 20px 44px rgba(30, 22, 12, 0.22), 0 0 30px rgba(212, 175, 55, 0.22), inset 0 1px 0 rgba(255,255,255,0.62), inset 0 0 0 1px rgba(255,255,255,0.30);
+}}
+.portal-company-card:hover::before {{
+    transform: translateX(-115%);
+    opacity: 1;
+    animation: none;
+}}
+.portal-company-card.is-featured {{
+    transform: translateY(-5px);
+    background: linear-gradient(135deg, rgba(248, 250, 251, 0.96), rgba(236, 226, 204, 0.88));
+    border-color: rgba(178, 137, 57, 0.56);
+}}
+.portal-company-card.is-featured:hover {{
+    transform: translateY(-8px);
+}}
+.portal-company-title {{
+    margin: 8px 0 8px;
+    color: #31200d;
+    font-size: clamp(20px, 2vw, 27px);
+    line-height: 1.12;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-shadow: 0 1px 0 rgba(255,255,255,0.48), 0 4px 10px rgba(0,0,0,0.14);
+}}
+.portal-company-subtitle {{
+    margin: 0;
+    color: #5d3f1c;
+    font-size: 15px;
+    font-weight: 800;
+}}
+.portal-company-desc {{
+    margin: 12px auto 16px;
+    color: #604a2c;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.8;
+}}
+.portal-enter-btn {{
+    align-self: center;
+    min-width: 98px;
+    padding: 8px 18px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.48);
+    border: 1px solid rgba(178, 137, 57, 0.48);
+    color: #3a250d;
+    font-weight: 900;
+    box-shadow: 0 10px 24px rgba(42, 29, 12, 0.12), inset 0 1px 0 rgba(255,255,255,0.48);
+}}
+@media (max-width: 860px) {{
+    .portal-company-grid {{
+        grid-template-columns: 1fr;
+    }}
+    .portal-company-card.is-featured,
+    .portal-company-card.is-featured:hover {{
+        transform: none;
+    }}
+}}
+</style>
 <body class="system-dark">
 {HOME_BUTTON}
-<div class="dashboard">
-    
-<h1 class="system-title">Urban Rise AI</h1>
-    <p>اختر الشركة للدخول إلى نظامها</p>
-    {admin_users_button}
-    <div class="companies">
-        <a href="/company/works" class="company-card works">
-            <h2>Urban Rise Works</h2>
-            <p>المقاولات</p>
+<main class="portal-shell">
+    <section class="portal-hero">
+        <h1 class="portal-title">Urban Rise AI</h1>
+        <p class="portal-kicker">بوابة إدارة مجموعة أوربان رايز</p>
+        <div class="portal-admin-actions">{daily_report_button}{admin_users_button}</div>
+    </section>
+
+    <section class="portal-company-grid" aria-label="بوابات الشركات">
+        <a href="/company/works" class="portal-company-card">
+            <div>
+                <h2 class="portal-company-title">Urban Rise Works</h2>
+                <p class="portal-company-subtitle">المقاولات</p>
+                <p class="portal-company-desc">المشاريع، العقود، المصروفات</p>
+            </div>
+            <span class="portal-enter-btn">دخول</span>
         </a>
-        <a href="/company/realestate" class="company-card realestate">
-            <h2>Urban Rise</h2>
-            <p>التطوير والاستثمار العقاري</p>
+        <a href="/company/realestate" class="portal-company-card is-featured">
+            <div>
+                <h2 class="portal-company-title">Urban Rise Real Estate</h2>
+                <p class="portal-company-subtitle">التطوير والاستثمار العقاري</p>
+                <p class="portal-company-desc">الأملاك، العقود، الصيانة</p>
+            </div>
+            <span class="portal-enter-btn">دخول</span>
         </a>
-        <a href="/company/logistics" class="company-card logistics">
-            <h2>Urban Rise Logistics</h2>
-            <p>اللوجستيات</p>
+        <a href="/company/logistics" class="portal-company-card">
+            <div>
+                <h2 class="portal-company-title">Urban Rise Logistics</h2>
+                <p class="portal-company-subtitle">اللوجستيات</p>
+                <p class="portal-company-desc">التشغيل، النقل، المتابعة</p>
+            </div>
+            <span class="portal-enter-btn">دخول</span>
         </a>
-    </div>
-</div>
+    </section>
+</main>
 """,
         media_type="text/html; charset=utf-8",
     )
@@ -3457,6 +3975,239 @@ def internal_portal(request: Request):
     if not user:
         return RedirectResponse(url="/login", status_code=303)
     return render_internal_portal(user)
+
+
+def daily_activity_time(value: str = "") -> str:
+    clean_value = (value or "").strip()
+    if not clean_value:
+        return "--:--"
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(clean_value[:19], fmt).strftime("%H:%M")
+        except ValueError:
+            pass
+    if len(clean_value) >= 16 and clean_value[10] == " ":
+        return clean_value[11:16]
+    return "--:--"
+
+
+def daily_activity_actor(row, fallback: str = "مستخدم") -> str:
+    full_name = (row["full_name"] or "").strip() if "full_name" in row.keys() else ""
+    username = (row["username"] or "").strip() if "username" in row.keys() else ""
+    return full_name or username or fallback
+
+
+def build_daily_activity_report_data():
+    today = date.today().isoformat()
+    conn = get_db()
+    try:
+        works_expenses = conn.execute(
+            """
+            SELECT project_expenses.*, users.full_name, users.username, projects.name AS project_name
+            FROM project_expenses
+            JOIN projects ON projects.id = project_expenses.project_id
+            LEFT JOIN users ON users.id = project_expenses.created_by_user_id
+            WHERE projects.company = 'works'
+              AND COALESCE(substr(project_expenses.created_at, 1, 10), project_expenses.date) = ?
+            ORDER BY COALESCE(project_expenses.created_at, project_expenses.date) DESC, project_expenses.id DESC
+            """,
+            (today,),
+        ).fetchall()
+        works_daily = conn.execute(
+            """
+            SELECT project_daily.*, users.full_name, users.username, projects.name AS project_name
+            FROM project_daily
+            JOIN projects ON projects.id = project_daily.project_id
+            LEFT JOIN users ON users.id = project_daily.created_by_user_id
+            WHERE projects.company = 'works'
+              AND COALESCE(substr(project_daily.created_at, 1, 10), project_daily.date) = ?
+            ORDER BY COALESCE(project_daily.created_at, project_daily.date) DESC, project_daily.id DESC
+            """,
+            (today,),
+        ).fetchall()
+        property_expenses = conn.execute(
+            """
+            SELECT property_expenses.*, users.full_name, users.username,
+                   property_properties.name AS property_name, property_units.name AS unit_name
+            FROM property_expenses
+            LEFT JOIN users ON users.id = property_expenses.created_by_user_id
+            LEFT JOIN property_properties ON property_properties.id = property_expenses.property_id
+            LEFT JOIN property_units ON property_units.id = property_expenses.unit_id
+            WHERE COALESCE(substr(property_expenses.created_at, 1, 10), property_expenses.expense_date) = ?
+            ORDER BY COALESCE(property_expenses.created_at, property_expenses.expense_date) DESC, property_expenses.id DESC
+            """,
+            (today,),
+        ).fetchall()
+        maintenance_updates = conn.execute(
+            """
+            SELECT maintenance_requests.*, users.full_name, users.username,
+                   property_properties.name AS property_name, property_units.name AS unit_name
+            FROM maintenance_requests
+            LEFT JOIN users ON users.id = maintenance_requests.updated_by_user_id
+            LEFT JOIN property_properties ON property_properties.id = maintenance_requests.property_id
+            LEFT JOIN property_units ON property_units.id = maintenance_requests.unit_id
+            WHERE substr(COALESCE(maintenance_requests.updated_at, maintenance_requests.created_at), 1, 10) = ?
+            ORDER BY COALESCE(maintenance_requests.updated_at, maintenance_requests.created_at) DESC, maintenance_requests.id DESC
+            """,
+            (today,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    return {
+        "today": today,
+        "works_expenses": works_expenses,
+        "works_daily": works_daily,
+        "property_expenses": property_expenses,
+        "maintenance_updates": maintenance_updates,
+    }
+
+
+def render_daily_activity_lines(data):
+    works_lines = []
+    realestate_lines = []
+
+    for row in data["works_daily"]:
+        actor = escape(daily_activity_actor(row, "السجل اليومي"))
+        report_time = daily_activity_time(row["created_at"] or row["date"])
+        works_lines.append(f'<li class="daily-activity-good">🟢 {actor} (السجل اليومي): رفع تقرير الساعة {report_time}</li>')
+
+    for row in data["works_expenses"]:
+        actor = escape(daily_activity_actor(row, "المحاسب"))
+        expense_time = daily_activity_time(row["created_at"] or row["date"])
+        works_lines.append(f'<li class="daily-activity-good">🟢 {actor} (مصروفات): أضاف مصروف الساعة {expense_time}</li>')
+
+    for row in data["maintenance_updates"]:
+        unit_label = escape(row["unit_name"] or "-")
+        maintenance_time = daily_activity_time(row["updated_at"] or row["created_at"])
+        if row["status"] == "completed":
+            realestate_lines.append(f'<li class="daily-activity-good">🟢 الصيانة: تم إكمال صيانة للوحدة {unit_label} الساعة {maintenance_time}</li>')
+        else:
+            actor = escape(daily_activity_actor(row, "الصيانة"))
+            realestate_lines.append(f'<li class="daily-activity-good">🟢 {actor} (الصيانة): تحديث طلب للوحدة {unit_label} الساعة {maintenance_time}</li>')
+
+    for row in data["property_expenses"]:
+        actor = escape(daily_activity_actor(row, "المحاسب"))
+        expense_time = daily_activity_time(row["created_at"] or row["expense_date"])
+        unit_suffix = f" للوحدة {escape(row['unit_name'])}" if row["unit_name"] else ""
+        realestate_lines.append(f'<li class="daily-activity-good">🟢 {actor} (مصروفات): أضاف مصروف{unit_suffix} الساعة {expense_time}</li>')
+
+    return works_lines, realestate_lines
+
+
+def build_daily_activity_analysis(data) -> list[str]:
+    works_count = len(data["works_expenses"]) + len(data["works_daily"])
+    maintenance_count = len(data["maintenance_updates"])
+    daily_count = len(data["works_daily"])
+    analysis = []
+
+    if works_count >= 2:
+        analysis.append("نشاط المقاولات اليوم جيد.")
+    elif works_count == 1:
+        analysis.append("نشاط المقاولات اليوم محدود.")
+    else:
+        analysis.append("لا يوجد نشاط واضح للمقاولات اليوم.")
+
+    if maintenance_count:
+        analysis.append("إدارة الأملاك: نشاط الصيانة اليوم موجود ومتابع.")
+    else:
+        analysis.append("إدارة الأملاك: لا يوجد نشاط صيانة اليوم — راجع الفريق.")
+
+    if daily_count:
+        analysis.append("تم رفع سجل يومي اليوم.")
+    else:
+        analysis.append("نشاط السجل اليومي ضعيف.")
+
+    return analysis[:3]
+
+
+@app.get("/daily-activity-report", response_class=HTMLResponse)
+def daily_activity_report(request: Request):
+    current_user = require_role(request, {"admin"})
+    if not isinstance(current_user, sqlite3.Row):
+        return current_user
+
+    data = build_daily_activity_report_data()
+    works_lines, realestate_lines = render_daily_activity_lines(data)
+    analysis_items = "".join(f"<li>{escape(item)}</li>" for item in build_daily_activity_analysis(data))
+    works_alerts = []
+    realestate_alerts = []
+
+    if not data["works_daily"]:
+        works_alerts.append("⚠️ لم يتم رفع أي سجل يومي اليوم")
+        works_lines.append('<li class="daily-activity-problem">🔴 السجل اليومي: لم يتم تسجيل أي تقرير اليوم</li>')
+    if not data["maintenance_updates"]:
+        realestate_alerts.append("⚠️ لا يوجد نشاط صيانة اليوم")
+        realestate_lines.append('<li class="daily-activity-problem">🔴 الصيانة: لا يوجد تحديث اليوم</li>')
+    if not data["works_expenses"]:
+        works_lines.append('<li class="daily-activity-problem">🔴 المصروفات: لا يوجد مصروفات اليوم</li>')
+    if not data["property_expenses"]:
+        realestate_lines.append('<li class="daily-activity-problem">🔴 المصروفات: لا يوجد مصروفات اليوم</li>')
+    if not realestate_lines:
+        realestate_lines.append('<li class="daily-activity-problem">🔴 لا يوجد نشاط اليوم</li>')
+
+    alerts_html = "".join(
+        f'<div class="daily-activity-alert daily-activity-warning">{escape(alert)}</div>'
+        for alert in works_alerts + realestate_alerts
+    )
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+.daily-activity-alert,
+.daily-activity-good,
+.daily-activity-warning,
+.daily-activity-problem {{
+    border: 1px solid transparent;
+    border-radius: 14px;
+    padding: 10px 14px;
+    margin: 8px 0;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 10px 26px rgba(48, 35, 22, 0.10);
+}}
+.daily-activity-good {{
+    background: rgba(209, 232, 214, 0.72);
+    border-color: rgba(75, 126, 84, 0.34);
+    color: #1f5b32;
+}}
+.daily-activity-warning {{
+    background: rgba(238, 217, 172, 0.78);
+    border-color: rgba(156, 115, 45, 0.36);
+    color: #5f421b;
+}}
+.daily-activity-problem {{
+    background: rgba(244, 205, 199, 0.74);
+    border-color: rgba(147, 61, 51, 0.34);
+    color: #7a241f;
+}}
+</style>
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>تقرير أعمال اليوم</h1>
+    <p>{data['today']}</p>
+
+    <div class="inventory-panel" style="text-align:right;margin:18px 0;">
+        <h3>تحليل سريع</h3>
+        <ul style="line-height:2;margin:0;padding-right:22px;">{analysis_items}</ul>
+    </div>
+
+    {alerts_html}
+
+    <div class="inventory-panel" style="text-align:right;margin:18px 0;">
+        <h3>🏢 المقاولات</h3>
+        <ul style="line-height:2.1;margin:0;padding-right:22px;">{''.join(works_lines)}</ul>
+    </div>
+
+    <div class="inventory-panel" style="text-align:right;margin:18px 0;">
+        <h3>🏠 إدارة الأملاك</h3>
+        <ul style="line-height:2.1;margin:0;padding-right:22px;">{''.join(realestate_lines)}</ul>
+    </div>
+
+    <a href="/portal" class="glass-btn back-btn">⬅ رجوع</a>
+</div>
+"""
 
 
 def inventory_company_label(company: str) -> str:
@@ -4680,6 +5431,11 @@ def delete_quote(request: Request, quote_id: int, company: str = ""):
     conn = get_db()
     contracts = conn.execute("SELECT id FROM contracts WHERE quote_id = ?", (quote_id,)).fetchall()
     for contract in contracts:
+        conn.execute(
+            "DELETE FROM contract_appendix_items WHERE appendix_id IN (SELECT id FROM contract_appendices WHERE parent_contract_id = ?)",
+            (contract['id'],),
+        )
+        conn.execute("DELETE FROM contract_appendices WHERE parent_contract_id = ?", (contract['id'],))
         conn.execute("DELETE FROM projects WHERE contract_id = ?", (contract['id'],))
     conn.execute("DELETE FROM contracts WHERE quote_id = ?", (quote_id,))
     conn.execute("DELETE FROM quote_items WHERE quote_id = ?", (quote_id,))
@@ -5184,6 +5940,217 @@ def download_contract_attachment(request: Request, attachment_id: int):
         filename=attachment["file_name"] or os.path.basename(file_path),
     )
 
+
+@app.get("/contract-appendix/new/{contract_id}", response_class=HTMLResponse)
+def new_contract_appendix_form(request: Request, contract_id: int, company: str = "works"):
+    access_result = ensure_company_access(request, company)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    if normalize_access_value(company) != "works":
+        return HTMLResponse("<h2>هذه الميزة متاحة لشركة المقاولات فقط</h2>", status_code=403)
+
+    conn = get_db()
+    contract = conn.execute(
+        "SELECT * FROM contracts WHERE id = ? AND company = ?",
+        (contract_id, company),
+    ).fetchone()
+    if not contract:
+        conn.close()
+        return HTMLResponse("<h2>العقد الأساسي غير موجود</h2>", status_code=404)
+    project = get_contract_project(conn, contract)
+    quote = None
+    if contract["quote_id"]:
+        quote = conn.execute(
+            "SELECT * FROM quotes WHERE id = ?",
+            (contract["quote_id"],),
+        ).fetchone()
+    conn.close()
+
+    if not project:
+        return HTMLResponse("<h2>لا يوجد مشروع مرتبط بالعقد الأساسي</h2>", status_code=400)
+
+    client_name = (project["client"] or "").strip() or ((quote["client"] or "").strip() if quote else "")
+    project_name = (project["name"] or "").strip() or f"مشروع رقم {project['id']}"
+    item_rows = ""
+    for index in range(1, 7):
+        item_rows += f"""
+        <tr>
+            <td><textarea name="item_description" rows="3" style="width:100%;resize:vertical;" {'required' if index == 1 else ''}></textarea></td>
+            <td><input type="number" name="item_qty" step="0.01" min="0" value="1" {'required' if index == 1 else ''}></td>
+            <td><input type="number" name="item_unit_price" step="0.01" min="0" {'required' if index == 1 else ''}></td>
+        </tr>
+        """
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h2>ملحق عقد</h2>
+    <div class="inventory-note" style="margin:18px auto;text-align:right;max-width:900px;">
+        <strong>العقد الأساسي:</strong> {contract_id}<br>
+        <strong>المشروع:</strong> {escape(project_name)}<br>
+        <strong>العميل:</strong> {escape(client_name or "-")}
+    </div>
+
+    <form action="/contract-appendix/save/{contract_id}" method="post" style="max-width:1000px;margin:auto;text-align:right;">
+        <input type="hidden" name="company" value="{company}">
+
+        <label>تاريخ الملحق</label>
+        <input type="date" name="appendix_date" value="{date.today().isoformat()}">
+
+        <label>وصف مختصر للعمل الإضافي</label>
+        <textarea name="short_description" rows="4" style="width:100%;resize:vertical;" required></textarea>
+
+        <h3>بنود العمل الإضافي</h3>
+        <table class="table" border="1" style="width:100%;text-align:center;background:white;">
+            <tr>
+                <th>البيان</th>
+                <th>الكمية</th>
+                <th>سعر الوحدة</th>
+            </tr>
+            {item_rows}
+        </table>
+
+        <label>ملاحظات أو شروط الملحق</label>
+        <textarea name="notes" rows="4" style="width:100%;resize:vertical;"></textarea>
+
+        <br><br>
+        <button type="submit" class="glass-btn gold-text">تحويل إلى ملحق عقد</button>
+    </form>
+
+    <br>
+    <a href="/contracts?company={company}" class="glass-btn back-btn">⬅ رجوع</a>
+</div>
+"""
+
+
+@app.post("/contract-appendix/save/{contract_id}")
+def save_contract_appendix(
+    request: Request,
+    contract_id: int,
+    company: str = Form("works"),
+    appendix_date: str = Form(""),
+    short_description: str = Form(...),
+    notes: str = Form(""),
+    item_description: list[str] = Form([]),
+    item_qty: list[str] = Form([]),
+    item_unit_price: list[str] = Form([]),
+):
+    access_result = ensure_company_access(request, company)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    if normalize_access_value(company) != "works":
+        return HTMLResponse("<h2>هذه الميزة متاحة لشركة المقاولات فقط</h2>", status_code=403)
+
+    conn = get_db()
+    try:
+        contract = conn.execute(
+            "SELECT * FROM contracts WHERE id = ? AND company = ?",
+            (contract_id, company),
+        ).fetchone()
+        if not contract:
+            return HTMLResponse("<h2>العقد الأساسي غير موجود</h2>", status_code=404)
+        project = get_contract_project(conn, contract)
+        if not project:
+            return HTMLResponse("<h2>لا يوجد مشروع مرتبط بالعقد الأساسي</h2>", status_code=400)
+
+        cleaned_items = []
+        max_len = max(len(item_description), len(item_qty), len(item_unit_price))
+        for index in range(max_len):
+            description = (item_description[index] if index < len(item_description) else "").strip()
+            qty = safe_float(item_qty[index] if index < len(item_qty) else 0)
+            unit_price = safe_float(item_unit_price[index] if index < len(item_unit_price) else 0)
+            if not description and qty <= 0 and unit_price <= 0:
+                continue
+            if not description:
+                continue
+            cleaned_items.append((description, qty, unit_price))
+
+        if not cleaned_items:
+            return RedirectResponse(url=f"/contract-appendix/new/{contract_id}?company={company}", status_code=303)
+
+        total = sum(qty * unit_price for _, qty, unit_price in cleaned_items)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO contract_appendices (
+                company, parent_contract_id, project_id, client, appendix_date,
+                short_description, notes, total, status, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                company,
+                contract_id,
+                project["id"],
+                project["client"] or "",
+                appendix_date or date.today().isoformat(),
+                short_description.strip(),
+                notes.strip(),
+                total,
+                "ساري",
+                datetime.now().strftime("%Y-%m-%d %H:%M"),
+            ),
+        )
+        appendix_id = cur.lastrowid
+        conn.executemany(
+            """
+            INSERT INTO contract_appendix_items (appendix_id, description, qty, unit_price)
+            VALUES (?, ?, ?, ?)
+            """,
+            [(appendix_id, description, qty, unit_price) for description, qty, unit_price in cleaned_items],
+        )
+        conn.commit()
+        return RedirectResponse(url=f"/contracts?company={company}", status_code=303)
+    except Exception as exc:
+        conn.rollback()
+        logger.exception("Failed to save contract appendix for contract %s", contract_id, exc_info=exc)
+        return HTMLResponse("<h2>تعذر حفظ ملحق العقد</h2>", status_code=500)
+    finally:
+        conn.close()
+
+
+@app.get("/contract-appendix-pdf/{appendix_id}")
+def contract_appendix_pdf(request: Request, appendix_id: int, company: str = "works"):
+    access_result = ensure_company_access(request, company)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    if normalize_access_value(company) != "works":
+        return HTMLResponse("<h2>هذه الميزة متاحة لشركة المقاولات فقط</h2>", status_code=403)
+
+    conn = get_db()
+    appendix = conn.execute(
+        "SELECT * FROM contract_appendices WHERE id = ? AND company = ?",
+        (appendix_id, company),
+    ).fetchone()
+    if not appendix:
+        conn.close()
+        return HTMLResponse("<h2>ملحق العقد غير موجود</h2>", status_code=404)
+    parent_contract = conn.execute(
+        "SELECT * FROM contracts WHERE id = ? AND company = ?",
+        (appendix["parent_contract_id"], company),
+    ).fetchone()
+    project = conn.execute(
+        "SELECT * FROM projects WHERE id = ? AND company = ?",
+        (appendix["project_id"], company),
+    ).fetchone()
+    items = conn.execute(
+        "SELECT * FROM contract_appendix_items WHERE appendix_id = ? ORDER BY id",
+        (appendix_id,),
+    ).fetchall()
+    conn.close()
+
+    file_path, file_name = build_contract_appendix_pdf(appendix, parent_contract, project, items)
+    return FileResponse(path=file_path, filename=file_name, media_type="application/pdf")
+
 @app.get("/contracts", response_class=HTMLResponse)
 def contracts_page(request: Request, company: str = ""):
     access_result = ensure_company_access(request, company)
@@ -5202,13 +6169,27 @@ def contracts_page(request: Request, company: str = ""):
             contracts.manual_project_id,
             quotes.client AS quote_client,
             projects.name AS project_name,
-            projects.client AS project_client
+            projects.client AS project_client,
+            projects.id AS linked_project_id
         FROM contracts
         LEFT JOIN quotes ON contracts.quote_id = quotes.id
-        LEFT JOIN projects ON projects.id = contracts.manual_project_id
+        LEFT JOIN projects ON projects.id = contracts.manual_project_id OR projects.contract_id = contracts.id
         WHERE contracts.company = ?
         ORDER BY contracts.id DESC
     """, (company,)).fetchall()
+    appendices = conn.execute(
+        """
+        SELECT
+            contract_appendices.*,
+            projects.name AS project_name,
+            projects.client AS project_client
+        FROM contract_appendices
+        LEFT JOIN projects ON projects.id = contract_appendices.project_id
+        WHERE contract_appendices.company = ?
+        ORDER BY contract_appendices.id DESC
+        """,
+        (company,),
+    ).fetchall()
     attachments_map = get_contract_attachment_rows(
         conn,
         CONTRACT_ATTACHMENT_SOURCE_WORKS,
@@ -5244,6 +6225,15 @@ def contracts_page(request: Request, company: str = ""):
             if is_manual_project_contract
             else f'<a href="/contract/{c["id"]}?company={company}">{c["id"]}</a>'
         )
+        appendix_button_html = ""
+        if (
+            normalize_access_value(company) == "works"
+            and not is_read_only_works_partner
+            and c["linked_project_id"]
+        ):
+            appendix_button_html = f'<a href="/contract-appendix/new/{c["id"]}?company={company}" class="action-btn">ملحق عقد</a>'
+        if appendix_button_html:
+            manage_html = f"{manage_html} {appendix_button_html}" if manage_html != "-" else appendix_button_html
         rows += f"""
         <tr>
             <td>
@@ -5253,6 +6243,25 @@ def contracts_page(request: Request, company: str = ""):
             <td>{c['status']}</td>
             <td>{attachments_html}</td>
             <td>{manage_html}</td>
+        </tr>
+        """
+
+    for appendix in appendices:
+        appendix_label = f"ملحق عقد رقم {appendix['id']}"
+        parent_label = f"تابع للعقد رقم {appendix['parent_contract_id']}"
+        project_label = appendix["project_name"] or "-"
+        client_label = appendix["client"] or appendix["project_client"] or "-"
+        rows += f"""
+        <tr>
+            <td>
+                <strong>{escape(appendix_label)}</strong><br>
+                <span>{escape(parent_label)}</span><br>
+                <span>{escape(str(project_label))}</span>
+            </td>
+            <td>{escape(str(client_label))}</td>
+            <td>{escape(appendix["status"] or "ساري")}<br>{format_currency(safe_float(appendix["total"]))} ريال</td>
+            <td>-</td>
+            <td><a href="/contract-appendix-pdf/{appendix['id']}?company={company}" class="action-btn">تحميل PDF</a></td>
         </tr>
         """
 
@@ -5972,11 +6981,9 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
         "SELECT * FROM project_expenses WHERE project_id = ?",
         (project_id,)
     ).fetchall()
+    contract_total = calculate_project_contract_total(conn, project)
     conn.close()
 
-    contract_total = sum(safe_float(i["qty"]) * safe_float(i["unit_price"]) for i in items)
-    if contract_total <= 0 and "contract_value" in project.keys():
-        contract_total = safe_float(project["contract_value"])
     expenses_total = sum(safe_float(e["amount"]) for e in expenses)
     profit = contract_total - expenses_total
     works_structured_details = ""
@@ -6156,13 +7163,10 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
             (project_id,)
         ).fetchall()
 
-    conn.close()
-
     rows = ""
     total = 0.0
-    contract_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
-    if contract_total <= 0 and project and "contract_value" in project.keys():
-        contract_total = safe_float(project["contract_value"])
+    contract_total = calculate_project_contract_total(conn, project) if project else 0.0
+    conn.close()
     collected_amount = sum(safe_float(collection["amount"]) for collection in collections)
     remaining = contract_total - sum(safe_float(e["amount"]) for e in expenses)
     spend_ratio = (sum(safe_float(e["amount"]) for e in expenses) / contract_total * 100) if contract_total > 0 else 0.0
@@ -6682,13 +7686,15 @@ def save_expense(
         )
     conn = get_db()
     attachment_path = save_project_expense_attachment(attachment)
+    now_value = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     conn.execute(
         """
         INSERT INTO project_expenses (
             project_id, title, amount, date, category, other_type, vendor,
-            payment_method, payment_status, invoice_reference, attachment_path, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            payment_method, payment_status, invoice_reference, attachment_path, notes,
+            created_at, created_by_user_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             project_id,
@@ -6703,6 +7709,8 @@ def save_expense(
             invoice_reference.strip(),
             attachment_path,
             notes.strip(),
+            now_value,
+            access_result["id"],
         )
     )
 
@@ -6836,11 +7844,8 @@ def project_expenses_report(request: Request, project_id: int, company: str = ""
         "SELECT * FROM project_collections WHERE project_id = ? ORDER BY date DESC, id DESC",
         (project_id,)
     ).fetchall()
+    contract_total = calculate_project_contract_total(conn, project)
     conn.close()
-
-    contract_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
-    if contract_total <= 0 and "contract_value" in project.keys():
-        contract_total = safe_float(project["contract_value"])
 
     file_path, file_name = build_project_expenses_report_pdf(
         project,
@@ -7621,10 +8626,14 @@ def save_daily(
 
     conn = get_db()
     attachment_path = save_project_daily_attachment(attachment)
+    now_value = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     conn.execute(
-        "INSERT INTO project_daily (project_id, report, workers, date, attachment_path) VALUES (?, ?, ?, DATE('now'), ?)",
-        (project_id, report, workers, attachment_path)
+        """
+        INSERT INTO project_daily (project_id, report, workers, date, attachment_path, created_at, created_by_user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (project_id, report, workers, date.today().isoformat(), attachment_path, now_value, access_result["id"])
     )
 
     conn.commit()
@@ -9127,6 +10136,14 @@ def delete_company_contract(request: Request, contract_id: int, company: str = "
     conn.execute(
         "UPDATE projects SET contract_id = NULL WHERE contract_id = ? AND company = ?",
         (contract_id, company)
+    )
+    conn.execute(
+        "DELETE FROM contract_appendix_items WHERE appendix_id IN (SELECT id FROM contract_appendices WHERE parent_contract_id = ?)",
+        (contract_id,),
+    )
+    conn.execute(
+        "DELETE FROM contract_appendices WHERE parent_contract_id = ? AND company = ?",
+        (contract_id, company),
     )
     conn.execute(
         "DELETE FROM contracts WHERE id = ? AND company = ?",
@@ -12236,9 +13253,9 @@ def save_property_expense(
         """
         INSERT INTO property_expenses (
             property_id, unit_id, maintenance_request_id, expense_type, category, amount,
-            expense_date, vendor_or_payee, notes, created_at
+            expense_date, vendor_or_payee, notes, created_at, created_by_user_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             property_id,
@@ -12250,7 +13267,8 @@ def save_property_expense(
             expense_date or date.today().isoformat(),
             vendor_or_payee,
             notes,
-            datetime.now().strftime("%Y-%m-%d %H:%M")
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+            access_result["id"],
         )
     )
     conn.commit()
@@ -13858,9 +14876,10 @@ def save_property_maintenance(
         """
         INSERT INTO maintenance_requests (
             property_id, unit_id, tenant_id, request_source, maintenance_type, title, description,
-            priority, status, estimated_cost, assigned_to, created_at, updated_at, admin_notes
+            priority, status, estimated_cost, assigned_to, created_at, updated_at,
+            created_by_user_id, updated_by_user_id, admin_notes
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             property_id,
@@ -13876,6 +14895,8 @@ def save_property_maintenance(
             assigned_to,
             datetime.now().strftime("%Y-%m-%d %H:%M"),
             datetime.now().strftime("%Y-%m-%d %H:%M"),
+            access_result["id"],
+            access_result["id"],
             ""
         )
     )
@@ -13901,12 +14922,14 @@ def update_property_maintenance_status(request: Request, maintenance_id: int, st
     conn.execute(
         """
         UPDATE maintenance_requests
-        SET status = ?, updated_at = ?, completed_date = CASE WHEN ? = 'completed' THEN ? ELSE completed_date END
+        SET status = ?, updated_at = ?, updated_by_user_id = ?,
+            completed_date = CASE WHEN ? = 'completed' THEN ? ELSE completed_date END
         WHERE id = ?
         """,
         (
             status,
             datetime.now().strftime("%Y-%m-%d %H:%M"),
+            access_result["id"],
             status,
             datetime.now().strftime("%Y-%m-%d"),
             maintenance_id
@@ -14056,7 +15079,8 @@ def update_property_maintenance(
         """
         UPDATE maintenance_requests
         SET unit_id = ?, tenant_id = ?, maintenance_type = ?, title = ?, description = ?,
-            priority = ?, estimated_cost = ?, actual_cost = ?, status = ?, assigned_to = ?, updated_at = ?
+            priority = ?, estimated_cost = ?, actual_cost = ?, status = ?, assigned_to = ?,
+            updated_at = ?, updated_by_user_id = ?
         WHERE id = ?
         """,
         (
@@ -14071,6 +15095,7 @@ def update_property_maintenance(
             status,
             assigned_to,
             datetime.now().strftime("%Y-%m-%d %H:%M"),
+            access_result["id"],
             maintenance_id
         )
     )
