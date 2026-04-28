@@ -579,6 +579,41 @@ CREATE TABLE IF NOT EXISTS project_daily (
 """)
 
 conn.execute("""
+CREATE TABLE IF NOT EXISTS daily_report_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER,
+    task_date TEXT,
+    task_text TEXT,
+    task_key TEXT,
+    is_active INTEGER DEFAULT 1,
+    created_by INTEGER,
+    created_at TEXT,
+    updated_at TEXT
+)
+""")
+
+conn.execute("""
+CREATE TABLE IF NOT EXISTS daily_report_task_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER,
+    report_id INTEGER,
+    is_done INTEGER,
+    completed_by INTEGER,
+    completed_at TEXT
+)
+""")
+
+conn.execute("""
+CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_report_tasks_unique
+ON daily_report_tasks(project_id, task_date, task_key)
+""")
+
+conn.execute("""
+CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_report_task_results_unique
+ON daily_report_task_results(task_id, report_id)
+""")
+
+conn.execute("""
 CREATE TABLE IF NOT EXISTS project_equipment (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER,
@@ -8494,8 +8529,71 @@ def delete_project_collection(request: Request, collection_id: int, project_id: 
         status_code=303
     )
 
+def normalize_daily_task_text(value: str = "") -> str:
+    return re.sub(r"\s+", " ", (value or "").strip())
+
+
+def get_daily_task_key(value: str = "") -> str:
+    return normalize_daily_task_text(value).casefold()
+
+
+def normalize_daily_report_date(value: str = "") -> str:
+    clean_value = (value or "").strip()
+    if not clean_value:
+        return date.today().isoformat()
+    try:
+        return date.fromisoformat(clean_value).isoformat()
+    except ValueError:
+        return date.today().isoformat()
+
+
+def get_project_for_daily(conn, project_id: int, company: str):
+    return conn.execute(
+        "SELECT * FROM projects WHERE id = ? AND company = ?",
+        (project_id, normalize_access_value(company)),
+    ).fetchone()
+
+
+def get_active_daily_tasks(conn, project_id: int, task_date: str):
+    return conn.execute(
+        """
+        SELECT *
+        FROM daily_report_tasks
+        WHERE project_id = ? AND task_date = ? AND COALESCE(is_active, 1) = 1
+        ORDER BY id ASC
+        """,
+        (project_id, task_date),
+    ).fetchall()
+
+
+def build_daily_task_report(tasks, done_task_ids, supervisor_note: str = "") -> str:
+    done_ids = {int(task_id) for task_id in done_task_ids or []}
+    done_tasks = []
+    pending_tasks = []
+    for task in tasks:
+        task_text = normalize_daily_task_text(task["task_text"])
+        if not task_text:
+            continue
+        if int(task["id"]) in done_ids:
+            done_tasks.append(f"تم تنفيذ {task_text}")
+        else:
+            pending_tasks.append(f"لم يتم تنفيذ {task_text}")
+
+    note = (supervisor_note or "").strip() or "-"
+    executed_text = " - ".join(done_tasks) if done_tasks else "لا يوجد"
+    not_executed_text = " - ".join(pending_tasks) if pending_tasks else "لا يوجد"
+    return f"""الأعمال المنفذة:
+{executed_text}
+
+الأعمال غير المنفذة:
+{not_executed_text}
+
+ملاحظات المشرف:
+{note}"""
+
+
 @app.get("/project-daily", response_class=HTMLResponse)
-def project_daily(request: Request, project_id: int, company: str = ""):
+def project_daily(request: Request, project_id: int, company: str = "", report_date: str = ""):
     access_result = ensure_employee_section_access(request, company, "daily_log")
     if not isinstance(access_result, sqlite3.Row):
         return access_result
@@ -8509,12 +8607,21 @@ def project_daily(request: Request, project_id: int, company: str = ""):
             back_url = f"/projects?company={company}"
             back_label = "⬅ رجوع للمشاريع"
 
+    selected_report_date = normalize_daily_report_date(report_date)
     conn = get_db()
+    project = get_project_for_daily(conn, project_id, company)
+    if not project:
+        conn.close()
+        return access_denied_response(
+            "المشروع غير موجود أو غير مصرح لك بالوصول إليه",
+            back_url=f"/projects?company={company}",
+        )
 
     reports = conn.execute(
         "SELECT * FROM project_daily WHERE project_id = ? ORDER BY id DESC",
         (project_id,)
     ).fetchall()
+    daily_tasks = get_active_daily_tasks(conn, project_id, selected_report_date)
 
     conn.close()
 
@@ -8536,19 +8643,102 @@ def project_daily(request: Request, project_id: int, company: str = ""):
         <tr>
             <td>{r['date']}</td>
             <td>{r['workers']}</td>
-            <td>{r['report']}</td>
+            <td class="report-cell daily-report-text"><div class="report-card">{r['report']}</div></td>
             <td>{attachment_html}</td>
             <td>{"-" if is_read_only_works_partner else f'''<a href="/edit-project-daily/{r['id']}?project_id={project_id}&company={company}" class="action-btn">تعديل</a><a href="/delete-project-daily/{r['id']}?project_id={project_id}&company={company}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا السجل اليومي؟')">حذف</a>'''}</td>
         </tr>
         """
 
+    task_date_selector_html = f"""
+<form action="/project-daily" method="get" style="margin:0 0 18px;">
+<input type="hidden" name="project_id" value="{project_id}">
+<input type="hidden" name="company" value="{escape(company)}">
+<label>التاريخ</label>
+<input type="date" name="report_date" value="{selected_report_date}">
+<button type="submit" class="glass-btn">عرض</button>
+</form>
+"""
+
+    admin_tasks_html = ""
+    if is_admin(access_result):
+        current_task_lines = escape("\n".join(task["task_text"] or "" for task in daily_tasks))
+        admin_tasks_html = f"""
+<div class="daily-task-card" style="margin:18px auto;padding:18px;max-width:680px;text-align:right;">
+<h3 style="margin-top:0;">إضافة مهام يومية</h3>
+<form action="/save-daily-tasks" method="post">
+<input type="hidden" name="project_id" value="{project_id}">
+<input type="hidden" name="company" value="{escape(company)}">
+<label>المشروع الحالي</label>
+<input type="text" value="{escape(project['name'] or '')}" disabled>
+<label>التاريخ</label>
+<input type="date" name="task_date" value="{selected_report_date}" required>
+<label>قائمة المهام</label>
+<textarea name="task_lines" rows="5" style="width:400px">{current_task_lines}</textarea>
+<br><br>
+<button type="submit" class="glass-btn gold-text">حفظ مهام اليوم</button>
+</form>
+</div>
+"""
+
+    task_inputs_html = ""
+    for task in daily_tasks:
+        task_inputs_html += f"""
+<label style="display:block;margin:8px 0;">
+<input type="checkbox" name="done_task_ids" value="{task['id']}">
+{escape(task['task_text'] or '')}
+</label>
+"""
+
     daily_form_html = ""
     if not is_read_only_works_partner:
-        daily_form_html = f"""
+        if daily_tasks:
+            daily_form_html = f"""
 <form action="/save-daily" method="post" enctype="multipart/form-data">
 
 <input type="hidden" name="project_id" value="{project_id}">
-<input type="hidden" name="company" value="{company}">
+<input type="hidden" name="company" value="{escape(company)}">
+<input type="hidden" name="report_date" value="{selected_report_date}">
+
+<div class="daily-report-entry-card">
+
+عدد العمال:
+<input type="number" name="workers" required>
+
+<br><br>
+
+<div style="max-width:520px;margin:auto;text-align:right;">
+{task_inputs_html}
+</div>
+
+<br>
+
+ملاحظات المشرف:
+<br>
+<textarea name="supervisor_note" rows="3" style="width:400px"></textarea>
+<input type="hidden" name="report" value="">
+
+<br><br>
+
+المرفق:
+<input type="file" name="attachment">
+
+<br><br>
+
+<button type="submit" class="glass-btn gold-text">حفظ التقرير</button>
+
+</div>
+
+</form>
+"""
+        else:
+            daily_form_html = f"""
+<form action="/save-daily" method="post" enctype="multipart/form-data">
+
+<input type="hidden" name="project_id" value="{project_id}">
+<input type="hidden" name="company" value="{escape(company)}">
+<input type="hidden" name="report_date" value="{selected_report_date}">
+
+<div class="daily-report-entry-card">
 
 عدد العمال:
 <input type="number" name="workers" required>
@@ -8568,6 +8758,8 @@ def project_daily(request: Request, project_id: int, company: str = ""):
 
 <button type="submit" class="glass-btn gold-text">حفظ التقرير</button>
 
+</div>
+
 </form>
 """
 
@@ -8583,11 +8775,16 @@ def project_daily(request: Request, project_id: int, company: str = ""):
 
 {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
 
+{task_date_selector_html}
+
+{admin_tasks_html}
+
 {daily_form_html}
 
 <br><br>
 
-<table border="1" style="background:white;margin:auto;width:80%">
+<div class="daily-report-table-card">
+<table class="daily-report-table" border="1">
 
 <tr>
 <th>التاريخ</th>
@@ -8600,6 +8797,7 @@ def project_daily(request: Request, project_id: int, company: str = ""):
 {rows if rows else "<tr><td colspan='5'>لا يوجد تقارير</td></tr>"}
 
 </table>
+</div>
 
 <br>
 
@@ -8608,13 +8806,92 @@ def project_daily(request: Request, project_id: int, company: str = ""):
 </div>
 """
 
+@app.post("/save-daily-tasks")
+def save_daily_tasks(
+    request: Request,
+    project_id: int = Form(...),
+    company: str = Form(...),
+    task_date: str = Form(""),
+    task_lines: str = Form(""),
+):
+    access_result = ensure_employee_section_access(request, company, "daily_log")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    if not is_admin(access_result):
+        return access_denied_response(
+            "الأدمن فقط يستطيع إضافة أو تعديل مهام اليوم",
+            back_url=f"/project-daily?project_id={project_id}&company={company}",
+        )
+
+    selected_date = normalize_daily_report_date(task_date)
+    conn = get_db()
+    project = get_project_for_daily(conn, project_id, company)
+    if not project:
+        conn.close()
+        return access_denied_response(
+            "المشروع غير موجود أو غير مصرح لك بالوصول إليه",
+            back_url=f"/projects?company={company}",
+        )
+
+    now_value = datetime.now().strftime("%Y-%m-%d %H:%M")
+    unique_tasks = []
+    seen_keys = set()
+    for line in (task_lines or "").splitlines():
+        task_text = normalize_daily_task_text(line)
+        task_key = get_daily_task_key(task_text)
+        if not task_text or task_key in seen_keys:
+            continue
+        seen_keys.add(task_key)
+        unique_tasks.append((task_text, task_key))
+
+    existing_rows = conn.execute(
+        """
+        SELECT task.*, result.id AS result_id
+        FROM daily_report_tasks task
+        LEFT JOIN daily_report_task_results result ON result.task_id = task.id
+        WHERE task.project_id = ? AND task.task_date = ?
+        """,
+        (project_id, selected_date),
+    ).fetchall()
+    wanted_keys = {task_key for _, task_key in unique_tasks}
+
+    for task_text, task_key in unique_tasks:
+        conn.execute(
+            """
+            INSERT INTO daily_report_tasks
+                (project_id, task_date, task_text, task_key, is_active, created_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+            ON CONFLICT(project_id, task_date, task_key)
+            DO UPDATE SET task_text = excluded.task_text, is_active = 1, updated_at = excluded.updated_at
+            """,
+            (project_id, selected_date, task_text, task_key, access_result["id"], now_value, now_value),
+        )
+
+    for row in existing_rows:
+        if row["task_key"] not in wanted_keys and not row["result_id"]:
+            conn.execute(
+                "UPDATE daily_report_tasks SET is_active = 0, updated_at = ? WHERE id = ?",
+                (now_value, row["id"]),
+            )
+
+    conn.commit()
+    conn.close()
+    return RedirectResponse(
+        url=f"/project-daily?project_id={project_id}&company={company}&report_date={selected_date}",
+        status_code=303,
+    )
+
+
 @app.post("/save-daily")
 def save_daily(
     request: Request,
     project_id: int = Form(...),
     company: str = Form(...),
     workers: int = Form(...),
-    report: str = Form(...),
+    report: str = Form(""),
+    report_date: str = Form(""),
+    supervisor_note: str = Form(""),
+    done_task_ids: list[int] = Form([]),
     attachment: UploadFile = File(None)
 ):
     access_result = ensure_employee_section_access(request, company, "daily_log")
@@ -8624,23 +8901,95 @@ def save_daily(
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
 
+    selected_date = normalize_daily_report_date(report_date)
     conn = get_db()
+    project = get_project_for_daily(conn, project_id, company)
+    if not project:
+        conn.close()
+        return access_denied_response(
+            "المشروع غير موجود أو غير مصرح لك بالوصول إليه",
+            back_url=f"/projects?company={company}",
+        )
+
+    daily_tasks = get_active_daily_tasks(conn, project_id, selected_date)
     attachment_path = save_project_daily_attachment(attachment)
     now_value = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    conn.execute(
-        """
-        INSERT INTO project_daily (project_id, report, workers, date, attachment_path, created_at, created_by_user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (project_id, report, workers, date.today().isoformat(), attachment_path, now_value, access_result["id"])
-    )
+    if daily_tasks:
+        valid_task_ids = {int(task["id"]) for task in daily_tasks}
+        selected_done_ids = {int(task_id) for task_id in (done_task_ids or []) if int(task_id) in valid_task_ids}
+        generated_report = build_daily_task_report(daily_tasks, selected_done_ids, supervisor_note)
+        existing_report = conn.execute(
+            """
+            SELECT project_daily.*
+            FROM project_daily
+            JOIN daily_report_task_results result ON result.report_id = project_daily.id
+            JOIN daily_report_tasks task ON task.id = result.task_id
+            WHERE project_daily.project_id = ?
+              AND project_daily.date = ?
+              AND project_daily.created_by_user_id = ?
+              AND task.task_date = ?
+            ORDER BY project_daily.id DESC
+            LIMIT 1
+            """,
+            (project_id, selected_date, access_result["id"], selected_date),
+        ).fetchone()
+
+        if existing_report:
+            if not attachment_path:
+                attachment_path = existing_report["attachment_path"] or ""
+            report_id = existing_report["id"]
+            conn.execute(
+                """
+                UPDATE project_daily
+                SET report = ?, workers = ?, attachment_path = ?, created_at = ?
+                WHERE id = ? AND project_id = ?
+                """,
+                (generated_report, workers, attachment_path, now_value, report_id, project_id),
+            )
+            conn.execute("DELETE FROM daily_report_task_results WHERE report_id = ?", (report_id,))
+        else:
+            cursor = conn.execute(
+                """
+                INSERT INTO project_daily (project_id, report, workers, date, attachment_path, created_at, created_by_user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (project_id, generated_report, workers, selected_date, attachment_path, now_value, access_result["id"]),
+            )
+            report_id = cursor.lastrowid
+
+        for task in daily_tasks:
+            conn.execute(
+                """
+                INSERT INTO daily_report_task_results (task_id, report_id, is_done, completed_by, completed_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(task_id, report_id)
+                DO UPDATE SET is_done = excluded.is_done,
+                              completed_by = excluded.completed_by,
+                              completed_at = excluded.completed_at
+                """,
+                (
+                    task["id"],
+                    report_id,
+                    1 if int(task["id"]) in selected_done_ids else 0,
+                    access_result["id"],
+                    now_value,
+                ),
+            )
+    else:
+        conn.execute(
+            """
+            INSERT INTO project_daily (project_id, report, workers, date, attachment_path, created_at, created_by_user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (project_id, report, workers, selected_date, attachment_path, now_value, access_result["id"])
+        )
 
     conn.commit()
     conn.close()
 
     return RedirectResponse(
-        url=f"/project-daily?project_id={project_id}&company={company}",
+        url=f"/project-daily?project_id={project_id}&company={company}&report_date={selected_date}",
         status_code=303
     )
 

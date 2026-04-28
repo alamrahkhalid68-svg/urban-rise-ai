@@ -1187,6 +1187,109 @@ body {
     text-align: right;
 }
 
+.daily-task-card {
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(200, 170, 120, 0.35);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
+    border-radius: 16px;
+    color: #24324a;
+}
+
+.daily-report-entry-card {
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(200, 170, 120, 0.35);
+    border-radius: 22px;
+    padding: 24px;
+    max-width: 760px;
+    margin: 24px auto;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
+    color: #5a4633;
+    -webkit-text-fill-color: #5a4633;
+    text-align: right;
+}
+
+.daily-report-entry-card input,
+.daily-report-entry-card textarea {
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(200, 170, 120, 0.35);
+    color: #5a4633;
+    -webkit-text-fill-color: #5a4633;
+}
+
+.daily-report-entry-card textarea {
+    width: min(100%, 460px);
+}
+
+.daily-report-entry-card input[type="checkbox"],
+.daily-report-entry-card input[type="file"] {
+    -webkit-text-fill-color: initial;
+}
+
+.daily-report-table-card {
+    width: min(1100px, 92%);
+    margin: 0 auto;
+    padding: 18px;
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(200, 170, 120, 0.35);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
+    border-radius: 16px;
+    overflow-x: auto;
+}
+
+.daily-report-table {
+    width: 100%;
+    margin: 0;
+    border-collapse: collapse;
+    background: rgba(255, 255, 255, 0.82);
+    color: #5f4b32;
+}
+
+.daily-report-table th,
+.daily-report-table td {
+    padding: 12px 14px;
+    border: 1px solid rgba(200, 170, 120, 0.28);
+    color: #5f4b32;
+    -webkit-text-fill-color: #5f4b32;
+    vertical-align: top;
+}
+
+.daily-report-table th {
+    background: rgba(255, 255, 255, 0.7);
+    font-weight: 800;
+}
+
+.daily-report-text {
+    min-width: 280px;
+    white-space: pre-wrap;
+    line-height: 1.9;
+    text-align: right;
+}
+
+.report-cell {
+    background: transparent !important;
+}
+
+.report-card {
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(200, 170, 120, 0.35);
+    border-radius: 14px;
+    padding: 12px 14px;
+    color: #5a4633;
+    -webkit-text-fill-color: #5a4633;
+    font-weight: 600;
+    line-height: 1.8;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
+    white-space: pre-line;
+}
+
 .success-note {
     border-color: rgba(74, 222, 128, 0.55);
 }
