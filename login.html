@@ -1,0 +1,40 @@
+﻿<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark login-page" dir="rtl">
+<div class="system-topbar">
+    <div class="system-topbar-actions">
+        <a href="/" class="glass-btn">الرئيسية</a>
+        <button type="button" class="glass-btn back-btn" onclick="goBack()">رجوع</button>
+    </div>
+</div>
+<div class="dashboard" style="max-width:540px;">
+    <div class="inventory-panel inventory-table-panel" style="padding:32px;">
+        <div style="text-align:center;margin-bottom:24px;">
+            <h1 class="system-title" style="margin-bottom:10px;">تسجيل الدخول</h1>
+            <p style="margin:0;color:#d7dde8;">بوابة داخلية خاصة للوصول إلى نظام Urban Rise AI</p>
+        </div>
+
+        {% if error %}
+        <div class="inventory-warning-panel" style="margin-bottom:18px;"><p style="margin:0;">{{ error }}</p></div>
+        {% endif %}
+
+        <form action="/login" method="post">
+            <label>اسم المستخدم</label>
+            <input type="text" name="username" value="{{ username }}" required>
+
+            <label>كلمة المرور</label>
+            <input type="password" name="password" required>
+
+            <button type="submit" class="glass-btn gold-text" style="width:100%;margin-top:12px;">دخول</button>
+        </form>
+    </div>
+</div>
+<script>
+function goBack() {
+    if (window.history.length > 1) {
+        window.history.back();
+    } else {
+        window.location.href = "/";
+    }
+}
+</script>
