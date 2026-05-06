@@ -3,6 +3,7 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from auth import get_current_user, get_user_by_id, is_admin, is_employee, is_owner, is_partner, is_project_manager, is_tenant, password_matches, require_login, require_role
 from admin_users import router as admin_users_router
 from access_control import ensure_company_access, ensure_employee_any_section_access, ensure_employee_section_access, ensure_property_access, ensure_request_belongs_to_tenant, ensure_tenant_access, get_accessible_property_ids, get_employee_allowed_sections, get_primary_tenant_id, get_user_company_access_rows, get_user_tenant_access_ids, normalize_access_value, user_has_company_access, user_has_property_access, user_has_tenant_access
@@ -13,11 +14,9 @@ import json
 import logging
 import os
 import re
-import shutil
 import sqlite3
 import urllib.error
 import urllib.request
-import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import date, datetime, time, timedelta
 from starlette.middleware.sessions import SessionMiddleware
@@ -43,7 +42,19 @@ app.add_middleware(
     secret_key=os.getenv("URBANRISE_SESSION_SECRET", "urban-rise-ai-internal-session-secret"),
     same_site="lax",
 )
-app.mount("/static", StaticFiles(directory="static"), name="static")
+class UploadFallbackStaticFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and str(path).replace("\\", "/").startswith("uploads/"):
+                resolved_path = resolve_upload_path(f"/static/{path}")
+                if resolved_path:
+                    return FileResponse(resolved_path)
+            raise
+
+
+app.mount("/static", UploadFallbackStaticFiles(directory="static"), name="static")
 
 AUTH_ROLES = {"admin", "partner", "employee", "project_manager", "owner", "tenant"}
 PROTECTED_ROUTE_PREFIXES = (
@@ -1138,7 +1149,133 @@ def normalize_arabic_digits(value: str) -> str:
     return (value or "").translate(translation)
 
 
-UPLOADS_DIR = os.path.join("static", "uploads")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LEGACY_UPLOADS_DIR = os.path.join(BASE_DIR, "static", "uploads")
+RENDER_DATA_DIR = "/opt/render/project/src/data"
+UPLOAD_CATEGORIES = (
+    "contracts",
+    "expenses",
+    "collections",
+    "maintenance",
+    "project_daily",
+    "property",
+    "misc",
+)
+
+
+def get_uploads_root() -> str:
+    is_render_runtime = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+    if is_render_runtime and os.path.isdir(RENDER_DATA_DIR):
+        return os.path.join(RENDER_DATA_DIR, "uploads")
+    return os.path.join(BASE_DIR, "data", "uploads")
+
+
+UPLOADS_DIR = get_uploads_root()
+
+
+def ensure_upload_dirs() -> None:
+    uploads_root = get_uploads_root()
+    os.makedirs(uploads_root, exist_ok=True)
+    for category in UPLOAD_CATEGORIES:
+        os.makedirs(os.path.join(uploads_root, category), exist_ok=True)
+
+
+def normalize_upload_category(category: str) -> str:
+    category_value = (category or "misc").strip().lower()
+    return category_value if category_value in UPLOAD_CATEGORIES else "misc"
+
+
+def build_safe_upload_name(original_name: str, category: str) -> str:
+    base_name = os.path.basename(original_name or "").strip()
+    stem, extension = os.path.splitext(base_name)
+    safe_stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._") or "file"
+    safe_ext = re.sub(r"[^A-Za-z0-9.]+", "", extension)[:12]
+    return f"{category}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{safe_ext}"
+
+
+def save_upload_file(file: UploadFile | None, category: str) -> str:
+    if not file or not getattr(file, "filename", ""):
+        return ""
+
+    normalized_category = normalize_upload_category(category)
+    ensure_upload_dirs()
+    unique_name = build_safe_upload_name(file.filename or "", normalized_category)
+    destination_path = os.path.join(get_uploads_root(), normalized_category, unique_name)
+
+    file.file.seek(0)
+    file_bytes = file.file.read()
+    if not file_bytes:
+        return ""
+
+    with open(destination_path, "wb") as output_file:
+        output_file.write(file_bytes)
+
+    return f"/uploads/{normalized_category}/{unique_name}"
+
+
+def is_path_inside(child_path: str, parent_path: str) -> bool:
+    try:
+        return os.path.commonpath([os.path.abspath(child_path), os.path.abspath(parent_path)]) == os.path.abspath(parent_path)
+    except ValueError:
+        return False
+
+
+def resolve_upload_path(path: str) -> str:
+    if not path:
+        return ""
+
+    ensure_upload_dirs()
+    normalized_path = str(path).split("?", 1)[0].replace("\\", "/").strip()
+    uploads_root = os.path.abspath(get_uploads_root())
+    legacy_root = os.path.abspath(LEGACY_UPLOADS_DIR)
+
+    candidates = []
+    if os.path.isabs(normalized_path):
+        candidates.append(normalized_path)
+
+    relative_path = normalized_path.lstrip("/")
+    if relative_path.startswith("uploads/"):
+        upload_relative = relative_path[len("uploads/"):]
+        candidates.append(os.path.join(uploads_root, upload_relative.replace("/", os.sep)))
+    elif relative_path.startswith("static/uploads/"):
+        legacy_relative = relative_path[len("static/uploads/"):]
+        candidates.append(os.path.join(legacy_root, legacy_relative.replace("/", os.sep)))
+        candidates.append(os.path.join(uploads_root, legacy_relative.replace("/", os.sep)))
+    elif relative_path.startswith("data/uploads/"):
+        data_relative = relative_path[len("data/uploads/"):]
+        candidates.append(os.path.join(uploads_root, data_relative.replace("/", os.sep)))
+    else:
+        candidates.append(os.path.join(uploads_root, relative_path.replace("/", os.sep)))
+        candidates.append(os.path.join(legacy_root, relative_path.replace("/", os.sep)))
+
+    for candidate in candidates:
+        absolute_candidate = os.path.abspath(candidate)
+        if not (
+            is_path_inside(absolute_candidate, uploads_root)
+            or is_path_inside(absolute_candidate, legacy_root)
+        ):
+            continue
+        if os.path.isfile(absolute_candidate):
+            return absolute_candidate
+    return ""
+
+
+def delete_upload_file(path: str) -> None:
+    resolved_path = resolve_upload_path(path)
+    if resolved_path and os.path.exists(resolved_path):
+        os.remove(resolved_path)
+
+
+ensure_upload_dirs()
+
+
+@app.get("/uploads/{file_path:path}")
+def serve_uploaded_file(file_path: str):
+    resolved_path = resolve_upload_path(f"/uploads/{file_path}")
+    if not resolved_path:
+        return HTMLResponse("<h2>الملف غير موجود</h2>", status_code=404)
+    return FileResponse(resolved_path, filename=os.path.basename(resolved_path))
+
 
 PROJECT_EXPENSE_CATEGORIES = [
     "مواد",
@@ -1201,79 +1338,22 @@ WORKS_COMPANY_PROFILE = {
 
 
 def save_project_daily_attachment(attachment: UploadFile | None) -> str:
-    if not attachment or not getattr(attachment, "filename", ""):
-        return ""
-
-    original_name = os.path.basename(str(attachment.filename or "")).strip()
-    if not original_name:
-        return ""
-
-    _, ext = os.path.splitext(original_name)
-    safe_ext = re.sub(r"[^a-zA-Z0-9.]", "", ext)[:10]
-    safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", os.path.splitext(original_name)[0]).strip("_") or "attachment"
-    unique_name = f"project_daily_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{safe_ext}"
-
-    os.makedirs(UPLOADS_DIR, exist_ok=True)
-    file_path = os.path.join(UPLOADS_DIR, unique_name)
-
-    attachment.file.seek(0)
-    file_bytes = attachment.file.read()
-    if not file_bytes:
-        return ""
-
-    with open(file_path, "wb") as output_file:
-        output_file.write(file_bytes)
-
-    return f"/static/uploads/{unique_name}"
+    return save_upload_file(attachment, "project_daily")
 
 
 def save_project_expense_attachment(attachment: UploadFile | None) -> str:
-    if not attachment or not getattr(attachment, "filename", ""):
-        return ""
+    return save_upload_file(attachment, "expenses")
 
-    original_name = os.path.basename(str(attachment.filename or "")).strip()
-    if not original_name:
-        return ""
 
-    _, ext = os.path.splitext(original_name)
-    safe_ext = re.sub(r"[^a-zA-Z0-9.]", "", ext)[:10]
-    safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", os.path.splitext(original_name)[0]).strip("_") or "expense"
-    unique_name = f"project_expense_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{safe_ext}"
-
-    os.makedirs(UPLOADS_DIR, exist_ok=True)
-    file_path = os.path.join(UPLOADS_DIR, unique_name)
-
-    attachment.file.seek(0)
-    file_bytes = attachment.file.read()
-    if not file_bytes:
-        return ""
-
-    with open(file_path, "wb") as output_file:
-        output_file.write(file_bytes)
-
-    return f"/static/uploads/{unique_name}"
+def save_project_collection_attachment(attachment: UploadFile | None) -> str:
+    return save_upload_file(attachment, "collections")
 
 
 def delete_project_daily_attachment_file(attachment_path: str) -> None:
-    if not attachment_path:
-        return
-
-    normalized_path = str(attachment_path).replace("\\", "/")
-    expected_prefix = "/static/uploads/"
-    if not normalized_path.startswith(expected_prefix):
-        return
-
-    local_relative_path = normalized_path.lstrip("/").replace("/", os.sep)
-    local_path = os.path.abspath(local_relative_path)
-    uploads_root = os.path.abspath(UPLOADS_DIR)
-    if not local_path.startswith(uploads_root):
-        return
-
-    if os.path.exists(local_path):
-        try:
-            os.remove(local_path)
-        except OSError:
-            pass
+    try:
+        delete_upload_file(attachment_path)
+    except OSError:
+        pass
 
 
 def build_project_expense_category_options(selected_value: str = "") -> str:
@@ -1465,12 +1545,13 @@ def calculate_percentage_amount(total, percentage) -> Decimal:
     return (total_decimal * percentage_decimal / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def build_simple_arabic_table(data, col_widths, header_background="#dfeaf3", body_row_backgrounds=None):
+def build_simple_arabic_table(data, col_widths, header_background="#1F2A22", body_row_backgrounds=None):
     table = Table(data, colWidths=col_widths, repeatRows=1, hAlign="RIGHT")
     style_commands = [
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(header_background)),
-        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#F2D892")),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8C294")),
         ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ("LEFTPADDING", (0, 0), (-1, -1), 6),
@@ -1483,11 +1564,20 @@ def build_simple_arabic_table(data, col_widths, header_background="#dfeaf3", bod
     return table
 
 
+def draw_pdf_luxury_page_background(canvas, doc):
+    canvas.saveState()
+    canvas.setFillColor(colors.HexColor("#F6F1E7"))
+    canvas.rect(0, 0, doc.pagesize[0], doc.pagesize[1], stroke=0, fill=1)
+    canvas.restoreState()
+
+
 def draw_works_contract_pdf_frame(canvas, doc):
     canvas.saveState()
+    canvas.setFillColor(colors.HexColor("#F6F1E7"))
+    canvas.rect(0, 0, doc.pagesize[0], doc.pagesize[1], stroke=0, fill=1)
     canvas.setFont(get_pdf_report_font_name(), 10)
-    canvas.setFillColor(colors.HexColor("#44576b"))
-    canvas.setStrokeColor(colors.HexColor("#d7dee7"))
+    canvas.setFillColor(colors.HexColor("#2F3A2D"))
+    canvas.setStrokeColor(colors.HexColor("#BFA06A"))
     footer_y = 12 * mm
     line_y = footer_y + 7 * mm
     canvas.line(doc.leftMargin, line_y, doc.pagesize[0] - doc.rightMargin, line_y)
@@ -1548,7 +1638,7 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
         fontSize=18,
         leading=24,
         alignment=TA_RIGHT,
-        textColor=colors.HexColor("#0f2940"),
+        textColor=colors.HexColor("#D8B35E"),
         spaceAfter=6,
     )
     subtitle_style = ParagraphStyle(
@@ -1558,7 +1648,7 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
         fontSize=10,
         leading=14,
         alignment=TA_RIGHT,
-        textColor=colors.HexColor("#4b5f73"),
+        textColor=colors.HexColor("#2F3A2D"),
     )
     section_style = ParagraphStyle(
         "ExpenseReportSection",
@@ -1567,7 +1657,7 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
         fontSize=13,
         leading=18,
         alignment=TA_RIGHT,
-        textColor=colors.HexColor("#11466b"),
+        textColor=colors.HexColor("#D8B35E"),
         spaceAfter=8,
         spaceBefore=8,
     )
@@ -1578,8 +1668,9 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
         fontSize=10,
         leading=14,
         alignment=TA_RIGHT,
-        textColor=colors.HexColor("#1e293b"),
+        textColor=colors.HexColor("#1F2A22"),
     )
+    table_header_style = ParagraphStyle("ExpenseReportTableHeader", parent=body_style, textColor=colors.HexColor("#F2D892"))
 
     story = [
         Paragraph(format_arabic_pdf_text(report_company_name), title_style),
@@ -1629,10 +1720,10 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
         summary_widths = [55 * mm, 60 * mm, 65 * mm, 60 * mm]
     summary_table = Table(summary_data, colWidths=summary_widths, hAlign="RIGHT")
     summary_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eaf1f7")),
-        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#f8fafc")),
-        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d7dee7")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEE4CF")),
+        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#F6F1E7")),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D8C294")),
         ("TOPPADDING", (0, 0), (-1, -1), 10),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
         ("LEFTPADDING", (0, 0), (-1, -1), 10),
@@ -1642,13 +1733,13 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
     story.extend([summary_table, Spacer(1, 10), Paragraph(format_arabic_pdf_text("تفاصيل المصروفات"), section_style)])
 
     table_rows = [[
-        Paragraph(format_arabic_pdf_text("التاريخ"), body_style),
-        Paragraph(format_arabic_pdf_text("البيان"), body_style),
-        Paragraph(format_arabic_pdf_text("التصنيف"), body_style),
-        Paragraph(format_arabic_pdf_text("المورد"), body_style),
-        Paragraph(format_arabic_pdf_text("طريقة الدفع"), body_style),
-        Paragraph(format_arabic_pdf_text("حالة السداد"), body_style),
-        Paragraph(format_arabic_pdf_text("المبلغ"), body_style),
+        Paragraph(format_arabic_pdf_text("التاريخ"), table_header_style),
+        Paragraph(format_arabic_pdf_text("البيان"), table_header_style),
+        Paragraph(format_arabic_pdf_text("التصنيف"), table_header_style),
+        Paragraph(format_arabic_pdf_text("المورد"), table_header_style),
+        Paragraph(format_arabic_pdf_text("طريقة الدفع"), table_header_style),
+        Paragraph(format_arabic_pdf_text("حالة السداد"), table_header_style),
+        Paragraph(format_arabic_pdf_text("المبلغ"), table_header_style),
     ]]
 
     for expense in expenses:
@@ -1680,12 +1771,12 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
         hAlign="RIGHT",
     )
     expenses_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf3")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#14344f")),
-        ("BACKGROUND", (0, 1), (-1, -1), colors.white),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
-        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2A22")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#F2D892")),
+        ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F6F1E7")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#F6F1E7"), colors.HexColor("#EEE4CF")]),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8C294")),
         ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ("LEFTPADDING", (0, 0), (-1, -1), 6),
@@ -1698,13 +1789,13 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
         story.extend([Spacer(1, 10), Paragraph(format_arabic_pdf_text("تفاصيل التحصيلات"), section_style)])
 
         collections_rows = [[
-            Paragraph(format_arabic_pdf_text("التاريخ"), body_style),
-            Paragraph(format_arabic_pdf_text("البيان"), body_style),
-            Paragraph(format_arabic_pdf_text("الجهة"), body_style),
-            Paragraph(format_arabic_pdf_text("طريقة الدفع"), body_style),
-            Paragraph(format_arabic_pdf_text("الحالة"), body_style),
-            Paragraph(format_arabic_pdf_text("المرجع"), body_style),
-            Paragraph(format_arabic_pdf_text("المبلغ"), body_style),
+            Paragraph(format_arabic_pdf_text("التاريخ"), table_header_style),
+            Paragraph(format_arabic_pdf_text("البيان"), table_header_style),
+            Paragraph(format_arabic_pdf_text("الجهة"), table_header_style),
+            Paragraph(format_arabic_pdf_text("طريقة الدفع"), table_header_style),
+            Paragraph(format_arabic_pdf_text("الحالة"), table_header_style),
+            Paragraph(format_arabic_pdf_text("المرجع"), table_header_style),
+            Paragraph(format_arabic_pdf_text("المبلغ"), table_header_style),
         ]]
 
         for collection in collections:
@@ -1736,12 +1827,12 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
             hAlign="RIGHT",
         )
         collections_table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf3")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#14344f")),
-            ("BACKGROUND", (0, 1), (-1, -1), colors.white),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
-            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
-            ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2A22")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#F2D892")),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F6F1E7")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#F6F1E7"), colors.HexColor("#EEE4CF")]),
+            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8C294")),
             ("TOPPADDING", (0, 0), (-1, -1), 8),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
             ("LEFTPADDING", (0, 0), (-1, -1), 6),
@@ -1769,7 +1860,7 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
         story.append(Paragraph(format_arabic_pdf_text(line), body_style))
         story.append(Spacer(1, 3))
 
-    doc.build(story)
+    doc.build(story, onFirstPage=draw_pdf_luxury_page_background, onLaterPages=draw_pdf_luxury_page_background)
     return file_path, file_name
 
 
@@ -1785,13 +1876,14 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
         total += safe_float(item["qty"]) * safe_float(item["unit_price"])
 
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("QuoteReportTitle", parent=styles["Heading1"], fontName=font_name, fontSize=18, leading=24, alignment=TA_RIGHT, textColor=colors.HexColor("#0f2940"))
-    subtitle_style = ParagraphStyle("QuoteReportSubtitle", parent=styles["Normal"], fontName=font_name, fontSize=10, leading=14, alignment=TA_RIGHT, textColor=colors.HexColor("#4b5f73"))
-    section_style = ParagraphStyle("QuoteReportSection", parent=styles["Heading2"], fontName=font_name, fontSize=13, leading=18, alignment=TA_RIGHT, textColor=colors.HexColor("#11466b"), spaceAfter=6, spaceBefore=6)
-    body_style = ParagraphStyle("QuoteReportBody", parent=styles["Normal"], fontName=font_name, fontSize=10, leading=16, alignment=TA_RIGHT, textColor=colors.HexColor("#1e293b"))
+    title_style = ParagraphStyle("QuoteReportTitle", parent=styles["Heading1"], fontName=font_name, fontSize=18, leading=24, alignment=TA_RIGHT, textColor=colors.HexColor("#D8B35E"))
+    subtitle_style = ParagraphStyle("QuoteReportSubtitle", parent=styles["Normal"], fontName=font_name, fontSize=10, leading=14, alignment=TA_RIGHT, textColor=colors.HexColor("#2F3A2D"))
+    section_style = ParagraphStyle("QuoteReportSection", parent=styles["Heading2"], fontName=font_name, fontSize=13, leading=18, alignment=TA_RIGHT, textColor=colors.HexColor("#D8B35E"), spaceAfter=6, spaceBefore=6)
+    body_style = ParagraphStyle("QuoteReportBody", parent=styles["Normal"], fontName=font_name, fontSize=10, leading=16, alignment=TA_RIGHT, textColor=colors.HexColor("#1F2A22"))
     items_section_style = ParagraphStyle("QuoteReportItemsSection", parent=section_style, keepWithNext=True)
     description_style = ParagraphStyle("QuoteReportDescription", parent=body_style, leading=14, alignment=TA_RIGHT, wordWrap="RTL")
-    centered_style = ParagraphStyle("QuoteReportCentered", parent=body_style, alignment=1, fontSize=15, leading=20, textColor=colors.HexColor("#102235"))
+    centered_style = ParagraphStyle("QuoteReportCentered", parent=body_style, alignment=1, fontSize=15, leading=20, textColor=colors.HexColor("#D8B35E"))
+    table_header_style = ParagraphStyle("QuoteReportTableHeader", parent=body_style, textColor=colors.HexColor("#F2D892"))
     intro_text = "السلام عليكم ورحمة الله وبركاته، نفيدكم بتقديم عرض السعر التالي حسب البيانات والبنود الموضحة أدناه."
     footer_text = "هذا العرض صالح للاعتماد وفق البنود والأسعار الموضحة أعلاه، ويسعدنا خدمتكم والإجابة عن أي استفسار."
 
@@ -1826,10 +1918,10 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
         ],
     ], colWidths=[45 * mm, 45 * mm, 85 * mm, 65 * mm], hAlign="RIGHT")
     summary_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eaf1f7")),
-        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#f8fafc")),
-        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d7dee7")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEE4CF")),
+        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#F6F1E7")),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D8C294")),
         ("TOPPADDING", (0, 0), (-1, -1), 10),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
     ]))
@@ -1837,10 +1929,10 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
 
     description_col_width = 130 * mm
     items_rows = [[
-        Paragraph(format_arabic_pdf_text("الإجمالي"), body_style),
-        Paragraph(format_arabic_pdf_text("سعر الوحدة"), body_style),
-        Paragraph(format_arabic_pdf_text("الكمية"), body_style),
-        Paragraph(format_arabic_pdf_text("الوصف"), body_style),
+        Paragraph(format_arabic_pdf_text("الإجمالي"), table_header_style),
+        Paragraph(format_arabic_pdf_text("سعر الوحدة"), table_header_style),
+        Paragraph(format_arabic_pdf_text("الكمية"), table_header_style),
+        Paragraph(format_arabic_pdf_text("الوصف"), table_header_style),
     ]]
     for item in items:
         line_total = safe_float(item["qty"]) * safe_float(item["unit_price"])
@@ -1875,11 +1967,12 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
         hAlign="RIGHT",
     )
     items_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf3")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f8fafc")]),
-        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eef4f8")),
-        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2A22")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#F2D892")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.HexColor("#F6F1E7"), colors.HexColor("#EEE4CF")]),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E8D8B8")),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8C294")),
         ("ALIGN", (3, 0), (3, -1), "RIGHT"),
         ("VALIGN", (3, 0), (3, -1), "TOP"),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
@@ -1890,9 +1983,9 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
     story.extend([items_table, Spacer(1, 10), Paragraph(format_arabic_pdf_text("جدول الدفعات"), section_style)])
 
     payment_rows = [[
-        Paragraph(format_arabic_pdf_text("المبلغ"), body_style),
-        Paragraph(format_arabic_pdf_text("النسبة"), body_style),
-        Paragraph(format_arabic_pdf_text("اسم الدفعة"), body_style),
+        Paragraph(format_arabic_pdf_text("المبلغ"), table_header_style),
+        Paragraph(format_arabic_pdf_text("النسبة"), table_header_style),
+        Paragraph(format_arabic_pdf_text("اسم الدفعة"), table_header_style),
     ]]
     for payment in payments:
         amount = calculate_percentage_amount(total, payment["percentage"])
@@ -1909,10 +2002,11 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
         ])
     payments_table = Table(payment_rows, colWidths=[55 * mm, 45 * mm, 110 * mm], repeatRows=1, hAlign="RIGHT")
     payments_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf3")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
-        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2A22")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#F2D892")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#F6F1E7"), colors.HexColor("#EEE4CF")]),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8C294")),
         ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
@@ -1925,7 +2019,7 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
     ])
 
     doc = SimpleDocTemplate(file_path, pagesize=landscape(A4), rightMargin=16 * mm, leftMargin=16 * mm, topMargin=16 * mm, bottomMargin=14 * mm)
-    doc.build(story)
+    doc.build(story, onFirstPage=draw_pdf_luxury_page_background, onLaterPages=draw_pdf_luxury_page_background)
     return file_path, file_name
 
 
@@ -1949,13 +2043,13 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     duration_text = (quote["duration"] or "").strip() or ""
 
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("ContractReportTitle", parent=styles["Heading1"], fontName=font_name, fontSize=18, leading=24, alignment=TA_RIGHT, textColor=colors.HexColor("#213547"), spaceAfter=4)
-    subtitle_style = ParagraphStyle("ContractReportSubtitle", parent=styles["Normal"], fontName=font_name, fontSize=9.5, leading=14, alignment=TA_RIGHT, textColor=colors.HexColor("#6b7280"))
-    body_style = ParagraphStyle("ContractReportBody", parent=styles["Normal"], fontName=font_name, fontSize=10.5, leading=18, alignment=TA_RIGHT, textColor=colors.HexColor("#2b3440"))
-    section_style = ParagraphStyle("ContractReportSection", parent=body_style, fontSize=11.5, leading=19, textColor=colors.HexColor("#1f2937"), spaceBefore=4, spaceAfter=0)
-    centered_style = ParagraphStyle("ContractReportCentered", parent=body_style, alignment=1, fontSize=18, leading=26, textColor=colors.HexColor("#1f2d3d"))
-    small_label_style = ParagraphStyle("ContractReportSmallLabel", parent=body_style, fontSize=9.2, leading=13, textColor=colors.HexColor("#7a6851"))
-    card_value_style = ParagraphStyle("ContractReportCardValue", parent=body_style, fontSize=11, leading=17, textColor=colors.HexColor("#243445"))
+    title_style = ParagraphStyle("ContractReportTitle", parent=styles["Heading1"], fontName=font_name, fontSize=18, leading=24, alignment=TA_RIGHT, textColor=colors.HexColor("#F2D892"), spaceAfter=4)
+    subtitle_style = ParagraphStyle("ContractReportSubtitle", parent=styles["Normal"], fontName=font_name, fontSize=9.5, leading=14, alignment=TA_RIGHT, textColor=colors.HexColor("#2F3A2D"))
+    body_style = ParagraphStyle("ContractReportBody", parent=styles["Normal"], fontName=font_name, fontSize=10.5, leading=18, alignment=TA_RIGHT, textColor=colors.HexColor("#1F2A22"))
+    section_style = ParagraphStyle("ContractReportSection", parent=body_style, fontSize=11.5, leading=19, textColor=colors.HexColor("#D8B35E"), spaceBefore=4, spaceAfter=0)
+    centered_style = ParagraphStyle("ContractReportCentered", parent=body_style, alignment=1, fontSize=18, leading=26, textColor=colors.HexColor("#F2D892"))
+    small_label_style = ParagraphStyle("ContractReportSmallLabel", parent=body_style, fontSize=9.2, leading=13, textColor=colors.HexColor("#D8B35E"))
+    card_value_style = ParagraphStyle("ContractReportCardValue", parent=body_style, fontSize=11, leading=17, textColor=colors.HexColor("#1F2A22"))
 
     contract_page_width = 166 * mm
     contract_column_width = 62 * mm
@@ -1995,9 +2089,9 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
         contract_paragraph("عقد تنفيذ أعمال مقاولات عامة", centered_style, 83 * mm),
     ]], colWidths=[65 * mm, 95 * mm], hAlign="RIGHT")
     header_band.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f5efe6")),
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#d6c4ab")),
-        ("LINEBEFORE", (1, 0), (1, 0), 0.5, colors.HexColor("#ddcfba")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#1F2A22")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#BFA06A")),
+        ("LINEBEFORE", (1, 0), (1, 0), 0.5, colors.HexColor("#BFA06A")),
         ("TOPPADDING", (0, 0), (-1, -1), 12),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
         ("LEFTPADDING", (0, 0), (-1, -1), 12),
@@ -2020,9 +2114,9 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
         ]
     ], colWidths=[78 * mm, 78 * mm], hAlign="RIGHT")
     meta_cards.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fbf8f3")),
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#e2d6c5")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#ede3d6")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F6F1E7")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#D8C294")),
         ("TOPPADDING", (0, 0), (-1, -1), 10),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
         ("LEFTPADDING", (0, 0), (-1, -1), 12),
@@ -2033,9 +2127,9 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     def build_section_heading(text: str):
         heading = Table([[contract_paragraph(text, section_style, contract_page_width - 12)]], colWidths=[166 * mm], hAlign="RIGHT")
         heading.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f4eee7")),
-            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#d8c9b5")),
-            ("LINEAFTER", (0, 0), (0, 0), 3, colors.HexColor("#b79a75")),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#EEE4CF")),
+            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+            ("LINEAFTER", (0, 0), (0, 0), 3, colors.HexColor("#D8B35E")),
             ("TOPPADDING", (0, 0), (-1, -1), 7),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
             ("LEFTPADDING", (0, 0), (-1, -1), 10),
@@ -2069,9 +2163,9 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
         ]
     ], colWidths=[82 * mm, 82 * mm], hAlign="RIGHT")
     parties_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fcfaf7")),
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#ddd1c0")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#ece2d7")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F6F1E7")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D8C294")),
         ("TOPPADDING", (0, 0), (-1, -1), 10),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
         ("LEFTPADDING", (0, 0), (-1, -1), 10),
@@ -2087,8 +2181,8 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
         ]
     ]], colWidths=[166 * mm], hAlign="RIGHT")
     contract_value_card.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f7f2eb")),
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#d8c9b5")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#EEE4CF")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#BFA06A")),
         ("TOPPADDING", (0, 0), (-1, -1), 10),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
         ("LEFTPADDING", (0, 0), (-1, -1), 12),
@@ -2189,9 +2283,9 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
         ]
     ], colWidths=[80 * mm, 80 * mm], hAlign="CENTER")
     signature_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fcfaf7")),
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#ddd1c0")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#ece2d7")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F6F1E7")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D8C294")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("LEFTPADDING", (0, 0), (-1, -1), 10),
@@ -2221,14 +2315,15 @@ def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tu
     project_name = (project["name"] or "").strip() if project else ""
 
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("AppendixReportTitle", parent=styles["Heading1"], fontName=font_name, fontSize=18, leading=24, alignment=TA_RIGHT, textColor=colors.HexColor("#213547"), spaceAfter=4)
-    subtitle_style = ParagraphStyle("AppendixReportSubtitle", parent=styles["Normal"], fontName=font_name, fontSize=9.5, leading=14, alignment=TA_RIGHT, textColor=colors.HexColor("#6b7280"))
-    body_style = ParagraphStyle("AppendixReportBody", parent=styles["Normal"], fontName=font_name, fontSize=10.5, leading=18, alignment=TA_RIGHT, textColor=colors.HexColor("#2b3440"))
-    section_style = ParagraphStyle("AppendixReportSection", parent=body_style, fontSize=11.5, leading=19, textColor=colors.HexColor("#1f2937"), spaceBefore=4, spaceAfter=0)
-    centered_style = ParagraphStyle("AppendixReportCentered", parent=body_style, alignment=1, fontSize=18, leading=26, textColor=colors.HexColor("#1f2d3d"))
-    small_label_style = ParagraphStyle("AppendixReportSmallLabel", parent=body_style, fontSize=9.2, leading=13, textColor=colors.HexColor("#7a6851"))
-    card_value_style = ParagraphStyle("AppendixReportCardValue", parent=body_style, fontSize=11, leading=17, textColor=colors.HexColor("#243445"))
+    title_style = ParagraphStyle("AppendixReportTitle", parent=styles["Heading1"], fontName=font_name, fontSize=18, leading=24, alignment=TA_RIGHT, textColor=colors.HexColor("#F2D892"), spaceAfter=4)
+    subtitle_style = ParagraphStyle("AppendixReportSubtitle", parent=styles["Normal"], fontName=font_name, fontSize=9.5, leading=14, alignment=TA_RIGHT, textColor=colors.HexColor("#2F3A2D"))
+    body_style = ParagraphStyle("AppendixReportBody", parent=styles["Normal"], fontName=font_name, fontSize=10.5, leading=18, alignment=TA_RIGHT, textColor=colors.HexColor("#1F2A22"))
+    section_style = ParagraphStyle("AppendixReportSection", parent=body_style, fontSize=11.5, leading=19, textColor=colors.HexColor("#D8B35E"), spaceBefore=4, spaceAfter=0)
+    centered_style = ParagraphStyle("AppendixReportCentered", parent=body_style, alignment=1, fontSize=18, leading=26, textColor=colors.HexColor("#F2D892"))
+    small_label_style = ParagraphStyle("AppendixReportSmallLabel", parent=body_style, fontSize=9.2, leading=13, textColor=colors.HexColor("#D8B35E"))
+    card_value_style = ParagraphStyle("AppendixReportCardValue", parent=body_style, fontSize=11, leading=17, textColor=colors.HexColor("#1F2A22"))
     description_style = ParagraphStyle("AppendixReportDescription", parent=body_style, leading=14, alignment=TA_RIGHT, wordWrap="RTL")
+    table_header_style = ParagraphStyle("AppendixReportTableHeader", parent=body_style, textColor=colors.HexColor("#F2D892"))
 
     page_width = 166 * mm
 
@@ -2241,9 +2336,9 @@ def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tu
     def build_section_heading(text: str):
         heading = Table([[appendix_paragraph(text, section_style, page_width - 12)]], colWidths=[166 * mm], hAlign="RIGHT")
         heading.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f4eee7")),
-            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#d8c9b5")),
-            ("LINEAFTER", (0, 0), (0, 0), 3, colors.HexColor("#b79a75")),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#EEE4CF")),
+            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+            ("LINEAFTER", (0, 0), (0, 0), 3, colors.HexColor("#D8B35E")),
             ("TOPPADDING", (0, 0), (-1, -1), 7),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
             ("LEFTPADDING", (0, 0), (-1, -1), 10),
@@ -2256,9 +2351,9 @@ def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tu
         appendix_paragraph("ملحق عقد", centered_style, 83 * mm),
     ]], colWidths=[65 * mm, 95 * mm], hAlign="RIGHT")
     header_band.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f5efe6")),
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#d6c4ab")),
-        ("LINEBEFORE", (1, 0), (1, 0), 0.5, colors.HexColor("#ddcfba")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#1F2A22")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#BFA06A")),
+        ("LINEBEFORE", (1, 0), (1, 0), 0.5, colors.HexColor("#BFA06A")),
         ("TOPPADDING", (0, 0), (-1, -1), 12),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
         ("LEFTPADDING", (0, 0), (-1, -1), 12),
@@ -2274,9 +2369,9 @@ def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tu
         ]
     ], colWidths=[54 * mm, 54 * mm, 54 * mm], hAlign="RIGHT")
     meta_cards.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fbf8f3")),
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#e2d6c5")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#ede3d6")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F6F1E7")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#D8C294")),
         ("TOPPADDING", (0, 0), (-1, -1), 10),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
         ("LEFTPADDING", (0, 0), (-1, -1), 10),
@@ -2291,9 +2386,9 @@ def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tu
         ],
     ], colWidths=[82 * mm, 82 * mm], hAlign="RIGHT")
     party_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fcfaf7")),
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#ddd1c0")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#ece2d7")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F6F1E7")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D8C294")),
         ("TOPPADDING", (0, 0), (-1, -1), 10),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
         ("LEFTPADDING", (0, 0), (-1, -1), 10),
@@ -2303,10 +2398,10 @@ def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tu
 
     description_col_width = 86 * mm
     item_rows = [[
-        Paragraph(format_arabic_pdf_text("الإجمالي"), body_style),
-        Paragraph(format_arabic_pdf_text("سعر الوحدة"), body_style),
-        Paragraph(format_arabic_pdf_text("الكمية"), body_style),
-        Paragraph(format_arabic_pdf_text("البيان"), body_style),
+        Paragraph(format_arabic_pdf_text("الإجمالي"), table_header_style),
+        Paragraph(format_arabic_pdf_text("سعر الوحدة"), table_header_style),
+        Paragraph(format_arabic_pdf_text("الكمية"), table_header_style),
+        Paragraph(format_arabic_pdf_text("البيان"), table_header_style),
     ]]
     for item in items:
         line_total = safe_float(item["qty"]) * safe_float(item["unit_price"])
@@ -2341,11 +2436,12 @@ def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tu
         hAlign="RIGHT",
     )
     items_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeaf3")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f8fafc")]),
-        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#eef4f8")),
-        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cfd8e3")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e2e8f0")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2A22")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#F2D892")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.HexColor("#F6F1E7"), colors.HexColor("#EEE4CF")]),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E8D8B8")),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8C294")),
         ("ALIGN", (3, 0), (3, -1), "RIGHT"),
         ("VALIGN", (3, 0), (3, -1), "TOP"),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
@@ -2398,9 +2494,9 @@ def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tu
         ]
     ], colWidths=[80 * mm, 80 * mm], hAlign="CENTER")
     signature_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#fcfaf7")),
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#ddd1c0")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#ece2d7")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F6F1E7")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D8C294")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("LEFTPADDING", (0, 0), (-1, -1), 10),
@@ -2415,30 +2511,7 @@ def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tu
 
 
 def save_maintenance_image(image: UploadFile | None) -> str:
-    if not image or not getattr(image, "filename", ""):
-        return ""
-
-    original_name = os.path.basename(str(image.filename or "")).strip()
-    if not original_name:
-        return ""
-
-    _, ext = os.path.splitext(original_name)
-    safe_ext = re.sub(r"[^a-zA-Z0-9.]", "", ext)[:10]
-    safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", os.path.splitext(original_name)[0]).strip("_") or "maintenance"
-    unique_name = f"maintenance_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_stem}{safe_ext}"
-
-    os.makedirs(UPLOADS_DIR, exist_ok=True)
-    file_path = os.path.join(UPLOADS_DIR, unique_name)
-
-    image.file.seek(0)
-    file_bytes = image.file.read()
-    if not file_bytes:
-        return ""
-
-    with open(file_path, "wb") as output_file:
-        output_file.write(file_bytes)
-
-    return f"/static/uploads/{unique_name}"
+    return save_upload_file(image, "maintenance")
 
 
 def cascade_delete_project_records(project_id: int, company: str = "") -> None:
@@ -3280,7 +3353,6 @@ CONTRACT_ATTACHMENT_SOURCE_PROPERTY = "property_contract"
 CONTRACT_ATTACHMENT_SOURCE_INVESTMENT = "investment_contract"
 CONTRACT_RECORD_SOURCE_QUOTE = "quote_conversion"
 CONTRACT_RECORD_SOURCE_MANUAL_PROJECT = "manual_project"
-CONTRACT_ATTACHMENT_UPLOAD_DIR = os.path.join("static", "uploads", "contracts")
 
 
 def get_contract_record_source(contract_row: sqlite3.Row | None) -> str:
@@ -3753,10 +3825,10 @@ def render_internal_portal(user) -> HTMLResponse:
 <style>
 .system-topbar .glass-btn,
 .system-topbar-auth .glass-btn {{
-    background: rgba(245, 248, 250, 0.82);
-    border: 1px solid rgba(178, 137, 57, 0.42);
-    color: #3b2610;
-    box-shadow: 0 10px 24px rgba(34, 24, 12, 0.13), inset 0 1px 0 rgba(255,255,255,0.42);
+    background: linear-gradient(135deg, rgba(46, 59, 32, 0.86), rgba(11, 13, 9, 0.90));
+    border: 1px solid rgba(216, 179, 94, 0.44);
+    color: #F2D892;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(230, 202, 130, 0.09);
 }}
 .portal-shell {{
     width: min(1040px, calc(100% - 36px));
@@ -3772,18 +3844,19 @@ def render_internal_portal(user) -> HTMLResponse:
     line-height: 1;
     font-weight: 900;
     letter-spacing: 0.4px;
-    color: #3b250c;
-    background: linear-gradient(135deg, #2f1d08 0%, #6b4717 48%, #a1762e 100%);
+    color: #E7C977;
+    background: linear-gradient(135deg, #F6E3A4 0%, #E7C977 32%, #D8B35E 62%, #C89B3C 100%);
     -webkit-background-clip: text;
     background-clip: text;
-    text-shadow: 0 1px 0 rgba(255,255,255,0.48), 0 10px 24px rgba(32, 22, 10, 0.22);
+    -webkit-text-fill-color: transparent;
+    text-shadow: 0 0 10px rgba(231, 201, 119, 0.22), 0 8px 26px rgba(0, 0, 0, 0.34);
 }}
 .portal-kicker {{
     margin: 10px 0 0;
-    color: #4a3217;
+    color: #F2D892;
     font-size: 15px;
     font-weight: 800;
-    text-shadow: 0 1px 0 rgba(255,255,255,0.35);
+    text-shadow: 0 0 10px rgba(231, 201, 119, 0.14);
 }}
 .portal-admin-actions {{
     min-height: 42px;
@@ -3800,20 +3873,20 @@ def render_internal_portal(user) -> HTMLResponse:
     min-height: 36px;
     padding: 7px 15px;
     border-radius: 999px;
-    background: rgba(245, 248, 250, 0.84);
-    border: 1px solid rgba(178, 137, 57, 0.48);
-    color: #3a250d;
+    background: linear-gradient(135deg, rgba(46, 59, 32, 0.86), rgba(11, 13, 9, 0.90));
+    border: 1px solid rgba(216, 179, 94, 0.44);
+    color: #F2D892;
     text-decoration: none;
     font-weight: 800;
     font-size: 13px;
-    box-shadow: 0 12px 28px rgba(35, 24, 10, 0.14), inset 0 1px 0 rgba(255,255,255,0.45);
-    backdrop-filter: blur(18px);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(230, 202, 130, 0.09);
+    backdrop-filter: blur(9px);
     transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
 }}
 .portal-admin-btn:hover {{
     transform: translateY(-1px);
-    border-color: rgba(178, 137, 57, 0.72);
-    box-shadow: 0 14px 30px rgba(35, 24, 10, 0.18), 0 0 22px rgba(212,175,55,0.22), inset 0 1px 0 rgba(255,255,255,0.50);
+    border-color: rgba(242, 216, 146, 0.64);
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.42), 0 0 18px rgba(216, 179, 94, 0.10);
 }}
 .portal-company-grid {{
     direction: rtl;
@@ -3848,12 +3921,12 @@ def render_internal_portal(user) -> HTMLResponse:
     justify-content: space-between;
     padding: 24px 24px 22px;
     border-radius: 20px;
-    background: linear-gradient(135deg, rgba(245, 248, 250, 0.92), rgba(238, 231, 217, 0.82));
-    border: 1px solid rgba(212, 175, 55, 0.42);
-    box-shadow: 0 18px 44px rgba(30, 22, 12, 0.18), inset 0 1px 0 rgba(255,255,255,0.54), inset 0 0 0 1px rgba(255,255,255,0.22);
-    color: #3a250d;
+    background: linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)), linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+    border: 1px solid rgba(196, 161, 77, 0.34);
+    box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(196, 161, 77, 0.08), inset 0 1px 0 rgba(230, 202, 130, 0.08);
+    color: #d6d0bf;
     text-decoration: none;
-    backdrop-filter: blur(18px);
+    backdrop-filter: blur(9px);
     transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease;
     animation: premium-fade-up 0.8s cubic-bezier(.22,1,.36,1) both;
     animation-delay: var(--portal-delay, 0s);
@@ -3863,7 +3936,7 @@ def render_internal_portal(user) -> HTMLResponse:
     position: absolute;
     inset: 0;
     z-index: 1;
-    background: linear-gradient(115deg, transparent 0%, rgba(255,255,255,0.42) 38%, rgba(212,175,55,0.12) 48%, transparent 62%);
+    background: linear-gradient(115deg, transparent 0%, rgba(246, 227, 164, 0.16) 38%, rgba(216, 179, 94, 0.12) 48%, transparent 62%);
     transform: translateX(115%);
     opacity: 0;
     pointer-events: none;
@@ -3880,7 +3953,7 @@ def render_internal_portal(user) -> HTMLResponse:
     left: 28px;
     right: 28px;
     height: 3px;
-    background: linear-gradient(90deg, transparent, rgba(178, 137, 57, 0.92), transparent);
+    background: linear-gradient(90deg, transparent, rgba(246, 227, 164, 0.72), rgba(216, 179, 94, 0.42), transparent);
     pointer-events: none;
 }}
 .portal-company-card > * {{
@@ -3889,8 +3962,8 @@ def render_internal_portal(user) -> HTMLResponse:
 }}
 .portal-company-card:hover {{
     transform: translateY(-4px);
-    border-color: rgba(178, 137, 57, 0.68);
-    box-shadow: 0 20px 44px rgba(30, 22, 12, 0.22), 0 0 30px rgba(212, 175, 55, 0.22), inset 0 1px 0 rgba(255,255,255,0.62), inset 0 0 0 1px rgba(255,255,255,0.30);
+    border-color: rgba(230, 202, 130, 0.52);
+    box-shadow: 0 32px 76px rgba(0, 0, 0, 0.54), 0 0 26px rgba(196, 161, 77, 0.12), inset 0 1px 0 rgba(230, 202, 130, 0.12);
 }}
 .portal-company-card:hover::before {{
     transform: translateX(-115%);
@@ -3899,30 +3972,34 @@ def render_internal_portal(user) -> HTMLResponse:
 }}
 .portal-company-card.is-featured {{
     transform: translateY(-5px);
-    background: linear-gradient(135deg, rgba(248, 250, 251, 0.96), rgba(236, 226, 204, 0.88));
-    border-color: rgba(178, 137, 57, 0.56);
+    background: linear-gradient(145deg, rgba(230, 202, 130, 0.105), rgba(230, 202, 130, 0.028) 40%, rgba(0, 0, 0, 0.14)), linear-gradient(180deg, rgba(31, 41, 24, 0.84), rgba(10, 12, 9, 0.90));
+    border-color: rgba(230, 202, 130, 0.52);
 }}
 .portal-company-card.is-featured:hover {{
     transform: translateY(-8px);
 }}
 .portal-company-title {{
     margin: 8px 0 8px;
-    color: #31200d;
+    color: #E7C977;
+    background: linear-gradient(135deg, #F6E3A4 0%, #E7C977 32%, #D8B35E 62%, #C89B3C 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
     font-size: clamp(20px, 2vw, 27px);
     line-height: 1.12;
     font-weight: 800;
     letter-spacing: 0;
-    text-shadow: 0 1px 0 rgba(255,255,255,0.48), 0 4px 10px rgba(0,0,0,0.14);
+    text-shadow: 0 0 10px rgba(231, 201, 119, 0.22), 0 8px 26px rgba(0, 0, 0, 0.34);
 }}
 .portal-company-subtitle {{
     margin: 0;
-    color: #5d3f1c;
+    color: #F2D892;
     font-size: 15px;
     font-weight: 800;
 }}
 .portal-company-desc {{
     margin: 12px auto 16px;
-    color: #604a2c;
+    color: #d6d0bf;
     font-size: 13px;
     font-weight: 700;
     line-height: 1.8;
@@ -3932,11 +4009,11 @@ def render_internal_portal(user) -> HTMLResponse:
     min-width: 98px;
     padding: 8px 18px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.48);
-    border: 1px solid rgba(178, 137, 57, 0.48);
-    color: #3a250d;
+    background: rgba(28, 38, 21, 0.76);
+    border: 1px solid rgba(216, 179, 94, 0.44);
+    color: #F2D892;
     font-weight: 900;
-    box-shadow: 0 10px 24px rgba(42, 29, 12, 0.12), inset 0 1px 0 rgba(255,255,255,0.48);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(230, 202, 130, 0.09);
 }}
 @media (max-width: 860px) {{
     .portal-company-grid {{
@@ -4200,21 +4277,60 @@ def daily_activity_report(request: Request):
     margin: 8px 0;
     backdrop-filter: blur(10px);
     box-shadow: 0 10px 26px rgba(48, 35, 22, 0.10);
+    color: #F6E7BC;
 }}
 .daily-activity-good {{
     background: rgba(209, 232, 214, 0.72);
     border-color: rgba(75, 126, 84, 0.34);
-    color: #1f5b32;
+    color: #F6E7BC;
 }}
 .daily-activity-warning {{
     background: rgba(238, 217, 172, 0.78);
     border-color: rgba(156, 115, 45, 0.36);
-    color: #5f421b;
+    color: #F6E7BC;
 }}
 .daily-activity-problem {{
     background: rgba(244, 205, 199, 0.74);
     border-color: rgba(147, 61, 51, 0.34);
-    color: #7a241f;
+    color: #F6E7BC;
+}}
+.dashboard > h1 {{
+    color: #F2D892;
+}}
+.dashboard > p,
+.inventory-panel ul,
+.inventory-panel li {{
+    color: #E8D7A5;
+}}
+.inventory-panel h3 {{
+    color: #F2D892;
+}}
+.daily-activity-alert,
+.daily-activity-alert *,
+.daily-activity-good,
+.daily-activity-good *,
+.daily-activity-warning,
+.daily-activity-warning *,
+.daily-activity-problem,
+.daily-activity-problem *,
+.inventory-panel li.daily-activity-good,
+.inventory-panel li.daily-activity-warning,
+.inventory-panel li.daily-activity-problem {{
+    color: #FFF1C7 !important;
+    -webkit-text-fill-color: #FFF1C7 !important;
+}}
+.inventory-panel [class*="activity-"],
+.inventory-panel [class*="daily-"],
+.inventory-panel [class*="report-"],
+.inventory-panel [class*="status-"],
+.inventory-panel [class*="empty-"],
+.inventory-panel [class*="alert-"] {{
+    color: #FFF1C7 !important;
+    -webkit-text-fill-color: #FFF1C7 !important;
+}}
+.dashboard > p {{
+    color: #F2D892 !important;
+    -webkit-text-fill-color: #F2D892 !important;
 }}
 </style>
 <body class="system-dark">
@@ -4722,6 +4838,9 @@ def company_page(request: Request, company: str):
         "logistics": "Urban Rise Logistics"
     }
 
+    body_class = "system-dark logistics-page" if company == "logistics" else "system-dark"
+    company_card_class = f"company-card {company}{' glass-card' if company == 'logistics' else ''}"
+
     arabic = {
         "works": "المقاولات",
         "logistics": "اللوجستيات"
@@ -4744,7 +4863,7 @@ function toggleNewTenantFields(mode) {{
     }});
 }}
 </script>
-<body class="system-dark">
+<body class="{body_class}">
 {HOME_BUTTON}
 <div class="dashboard">
 <h1>{names.get(company, "")}</h1>
@@ -4752,23 +4871,23 @@ function toggleNewTenantFields(mode) {{
 
 <div class="companies">
 
-<a href="/projects?company={company}" class="company-card {company}">
+<a href="/projects?company={company}" class="{company_card_class}">
 <h2>المشاريع</h2>
 </a>
 
-<a href="/quotes?company={company}" class="company-card {company}">
+<a href="/quotes?company={company}" class="{company_card_class}">
 <h2>عروض الأسعار</h2>
 </a>
 
-<a href="/employees?company={company}" class="company-card {company}">
+<a href="/employees?company={company}" class="{company_card_class}">
 <h2>الموظفين</h2>
 </a>
 
-<a href="/contracts?company={company}" class="company-card {company}">
+<a href="/contracts?company={company}" class="{company_card_class}">
 <h2>العقود</h2>
 </a>
 
-{f'<a href="/equipment?company={company}" class="company-card {company}"><h2>المعدات</h2></a>' if company == 'logistics' else ''}
+{f'<a href="/equipment?company={company}" class="{company_card_class}"><h2>المعدات</h2></a>' if company == 'logistics' else ''}
 
 </div>
 
@@ -5911,16 +6030,16 @@ def upload_contract_attachment(
             status_code=303,
         )
 
-    _, extension = os.path.splitext(original_name)
-    unique_name = f"{uuid.uuid4().hex}{extension}"
-    os.makedirs(CONTRACT_ATTACHMENT_UPLOAD_DIR, exist_ok=True)
-    saved_path = os.path.join(CONTRACT_ATTACHMENT_UPLOAD_DIR, unique_name)
-
     try:
-        with open(saved_path, "wb") as output_file:
-            shutil.copyfileobj(attachment_file.file, output_file)
+        saved_path = save_upload_file(attachment_file, "contracts")
     finally:
         attachment_file.file.close()
+
+    if not saved_path:
+        return RedirectResponse(
+            url=build_redirect_url(back_url, error="تعذر حفظ المرفق"),
+            status_code=303,
+        )
 
     conn = get_db()
     conn.execute(
@@ -5966,8 +6085,8 @@ def download_contract_attachment(request: Request, attachment_id: int):
     if not isinstance(access_result, sqlite3.Row):
         return access_result
 
-    file_path = attachment["file_path"] or ""
-    if not file_path or not os.path.exists(file_path):
+    file_path = resolve_upload_path(attachment["file_path"] or "")
+    if not file_path:
         return HTMLResponse("<h2>الملف غير موجود</h2>", status_code=404)
 
     return FileResponse(
@@ -7811,7 +7930,7 @@ def save_project_collection(
         )
 
     conn = get_db()
-    attachment_path = save_project_expense_attachment(attachment)
+    attachment_path = save_project_collection_attachment(attachment)
     conn.execute(
         """
         INSERT INTO project_collections (
@@ -8462,7 +8581,7 @@ def update_project_collection(
         (collection_id, project_id)
     ).fetchone()
     attachment_path = current_record["attachment_path"] if current_record and "attachment_path" in current_record.keys() else ""
-    new_attachment_path = save_project_expense_attachment(attachment)
+    new_attachment_path = save_project_collection_attachment(attachment)
     if new_attachment_path:
         delete_project_daily_attachment_file(attachment_path or "")
         attachment_path = new_attachment_path
@@ -9812,12 +9931,12 @@ def development_project_detail(project_id: int):
     }}
 
     .development-hero {{
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)), linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+        border: 1px solid rgba(196, 161, 77, 0.34);
         border-radius: 30px;
         padding: 28px;
         box-shadow: 0 20px 40px rgba(0, 0, 0, 0.28);
-        backdrop-filter: blur(18px);
+        backdrop-filter: blur(9px);
         margin-bottom: 24px;
     }}
 
@@ -9830,7 +9949,7 @@ def development_project_detail(project_id: int):
     }}
 
     .development-eyebrow {{
-        color: rgba(255, 255, 255, 0.72);
+        color: #b9ad8f;
         font-size: 14px;
         margin: 0 0 10px 0;
     }}
@@ -9838,12 +9957,12 @@ def development_project_detail(project_id: int):
     .development-hero h1 {{
         margin: 0;
         font-size: 38px;
-        color: #ffffff;
+        color: #F2D892;
     }}
 
     .development-location {{
         margin: 10px 0 0 0;
-        color: rgba(255, 255, 255, 0.92);
+        color: #b9ad8f;
         font-size: 18px;
     }}
 
@@ -9871,41 +9990,41 @@ def development_project_detail(project_id: int):
     }}
 
     .development-stat-card {{
-        background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
-        border: 1px solid rgba(180, 150, 100, 0.15);
+        background: linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)), linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+        border: 1px solid rgba(196, 161, 77, 0.34);
         border-radius: 24px;
         padding: 24px 20px;
         text-align: right;
-        box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
+        box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(230, 202, 130, 0.08);
+        backdrop-filter: blur(9px);
+        -webkit-backdrop-filter: blur(9px);
         transition: transform 0.36s cubic-bezier(.22,1,.36,1), box-shadow 0.36s cubic-bezier(.22,1,.36,1), border-color 0.36s cubic-bezier(.22,1,.36,1), background 0.36s cubic-bezier(.22,1,.36,1);
         isolation: isolate;
     }}
 
     .development-stat-label {{
         margin: 0 0 10px 0;
-        color: rgba(255, 255, 255, 0.72);
+        color: #b9ad8f;
         font-size: 14px;
     }}
 
     .development-stat-value {{
         margin: 0;
-        color: #ffffff;
+        color: #F2D892;
         font-size: 34px;
         line-height: 1;
     }}
 
     .development-section-card {{
-        background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
-        border: 1px solid rgba(180, 150, 100, 0.15);
+        background: linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)), linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+        border: 1px solid rgba(196, 161, 77, 0.34);
         border-radius: 28px;
         padding: 28px;
-        box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
+        box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(230, 202, 130, 0.08);
         margin-bottom: 24px;
         overflow: hidden;
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
+        backdrop-filter: blur(9px);
+        -webkit-backdrop-filter: blur(9px);
         transition: transform 0.36s cubic-bezier(.22,1,.36,1), box-shadow 0.36s cubic-bezier(.22,1,.36,1), border-color 0.36s cubic-bezier(.22,1,.36,1), background 0.36s cubic-bezier(.22,1,.36,1);
         isolation: isolate;
     }}
@@ -9921,13 +10040,13 @@ def development_project_detail(project_id: int):
 
     .development-section-head h2 {{
         margin: 0;
-        color: #ffffff;
+        color: #F2D892;
         font-size: 24px;
     }}
 
     .development-section-head p {{
         margin: 6px 0 0 0;
-        color: rgba(255, 255, 255, 0.72);
+        color: #b9ad8f;
         font-size: 15px;
     }}
 
@@ -9945,7 +10064,7 @@ def development_project_detail(project_id: int):
     .development-sale-form label {{
         display: block;
         margin-bottom: 8px;
-        color: #ffffff;
+        color: #b9ad8f;
         font-weight: 700;
         font-size: 14px;
     }}
@@ -9955,9 +10074,9 @@ def development_project_detail(project_id: int):
         width: 100%;
         height: 48px;
         border-radius: 14px;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        background: rgba(255, 255, 255, 0.96);
-        color: #0f172a;
+        border: 1px solid rgba(196, 161, 77, 0.28);
+        background: rgba(8, 10, 7, 0.58);
+        color: #d6d0bf;
         padding: 0 14px;
         box-sizing: border-box;
         font-size: 15px;
@@ -9970,13 +10089,13 @@ def development_project_detail(project_id: int):
     }}
 
     .development-unit-card {{
-        background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
-        border: 1px solid rgba(180, 150, 100, 0.15);
+        background: linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)), linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+        border: 1px solid rgba(196, 161, 77, 0.34);
         border-radius: 22px;
         padding: 20px;
-        box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
+        box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(230, 202, 130, 0.08);
+        backdrop-filter: blur(9px);
+        -webkit-backdrop-filter: blur(9px);
         transition: transform 0.36s cubic-bezier(.22,1,.36,1), box-shadow 0.36s cubic-bezier(.22,1,.36,1), border-color 0.36s cubic-bezier(.22,1,.36,1), background 0.36s cubic-bezier(.22,1,.36,1);
         isolation: isolate;
     }}
@@ -9984,9 +10103,9 @@ def development_project_detail(project_id: int):
     .development-section-card:hover,
     .development-unit-card:hover {{
         transform: translateY(-10px) scale(1.02);
-        box-shadow: 0 28px 52px rgba(0,0,0,0.14), 0 0 0 1px rgba(214, 195, 163, 0.34), inset 0 1px 0 rgba(255,255,255,0.56);
-        border-color: rgba(184, 155, 109, 0.34);
-        background: linear-gradient(180deg, rgba(255, 252, 247, 0.82), rgba(238, 226, 208, 0.74));
+        box-shadow: 0 32px 76px rgba(0, 0, 0, 0.54), 0 0 26px rgba(196, 161, 77, 0.12), inset 0 1px 0 rgba(230, 202, 130, 0.12);
+        border-color: rgba(230, 202, 130, 0.52);
+        background: linear-gradient(145deg, rgba(230, 202, 130, 0.105), rgba(230, 202, 130, 0.028) 40%, rgba(0, 0, 0, 0.14)), linear-gradient(180deg, rgba(31, 41, 24, 0.84), rgba(10, 12, 9, 0.90));
         z-index: 2;
     }}
 
@@ -10000,13 +10119,13 @@ def development_project_detail(project_id: int):
 
     .development-unit-top h3 {{
         margin: 0 0 6px 0;
-        color: #ffffff;
+        color: #F2D892;
         font-size: 20px;
     }}
 
     .development-unit-top p {{
         margin: 0;
-        color: rgba(255, 255, 255, 0.72);
+        color: #b9ad8f;
         font-size: 14px;
     }}
 
@@ -10016,7 +10135,7 @@ def development_project_detail(project_id: int):
         justify-content: center;
         padding: 6px 12px;
         border-radius: 999px;
-        color: #ffffff;
+        color: #F2D892;
         font-size: 13px;
         font-weight: 700;
         white-space: nowrap;
@@ -10027,12 +10146,12 @@ def development_project_detail(project_id: int):
         justify-content: space-between;
         align-items: center;
         gap: 10px;
-        color: rgba(255, 255, 255, 0.78);
+        color: #b9ad8f;
         font-size: 14px;
     }}
 
     .development-unit-meta strong {{
-        color: #ffffff;
+        color: #F2D892;
         font-size: 15px;
     }}
 
@@ -10040,14 +10159,14 @@ def development_project_detail(project_id: int):
     .development-empty-note {{
         padding: 22px;
         border-radius: 20px;
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px dashed rgba(255, 255, 255, 0.18);
-        color: rgba(255, 255, 255, 0.86);
+        background: rgba(28, 38, 21, 0.62);
+        border: 1px dashed rgba(196, 161, 77, 0.26);
+        color: #b9ad8f;
     }}
 
     .development-empty-state h3 {{
         margin: 0 0 10px 0;
-        color: #ffffff;
+        color: #F2D892;
     }}
 
     .development-empty-state p,
@@ -11526,14 +11645,14 @@ def build_realestate_owner_property_dashboard(
 <style>
 .owner-page {{ }}
 .owner-dashboard {{ position: relative; padding: 30px 0 56px; }}
-.owner-dashboard::before {{ content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at 12% 0%, rgba(245, 235, 218, 0.26), transparent 28%), radial-gradient(circle at 88% 0%, rgba(228, 214, 194, 0.22), transparent 24%), linear-gradient(180deg, rgba(70, 55, 38, 0.10), rgba(70, 55, 38, 0)); }}
+.owner-dashboard::before {{ content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at 12% 0%, rgba(230, 202, 130, 0.10), transparent 28%), radial-gradient(circle at 88% 0%, rgba(61, 78, 40, 0.16), transparent 24%), linear-gradient(180deg, rgba(8, 9, 7, 0.12), rgba(8, 9, 7, 0)); }}
 .owner-shell {{ position: relative; display: grid; gap: 24px; }}
-.owner-hero {{ position: relative; overflow: hidden; border-radius: 30px; padding: 32px; border: 1px solid rgba(240, 225, 204, 0.30); background: linear-gradient(135deg, rgba(255,255,255,0.18), rgba(187, 169, 145, 0.18)), radial-gradient(circle at top left, rgba(248, 239, 225, 0.24), transparent 36%); box-shadow: 0 18px 42px rgba(181, 153, 120, 0.12), 0 34px 70px rgba(138, 112, 83, 0.10); }}
-.owner-hero::after {{ content: ""; position: absolute; left: -40px; bottom: -90px; width: 260px; height: 260px; border-radius: 999px; background: radial-gradient(circle, rgba(255, 248, 239, 0.28), transparent 68%); }}
+.owner-hero {{ position: relative; overflow: hidden; border-radius: 30px; padding: 32px; border: 1px solid rgba(196, 161, 77, 0.34); background: linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)), linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86)); box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(196, 161, 77, 0.08), inset 0 1px 0 rgba(230, 202, 130, 0.08); }}
+.owner-hero::after {{ content: ""; position: absolute; left: -40px; bottom: -90px; width: 260px; height: 260px; border-radius: 999px; background: radial-gradient(circle, rgba(230, 202, 130, 0.10), transparent 68%); }}
 .owner-hero-top {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; margin-bottom: 24px; }}
 .owner-hero-copy h1 {{ margin: 0 0 10px; font-size: clamp(2.1rem, 4vw, 3.2rem); line-height: 1.02; letter-spacing: -0.04em; }}
-.owner-hero-copy p {{ margin: 0; color: rgba(102, 84, 65, 0.88); }}
-.owner-page .owner-dashboard h1 {{ color: #5f4b32 !important; }}
+.owner-hero-copy p {{ margin: 0; color: #b9ad8f; }}
+.owner-page .owner-dashboard h1 {{ color: #E7C977 !important; background: linear-gradient(135deg, #F6E3A4 0%, #E7C977 32%, #D8B35E 62%, #C89B3C 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }}
 .owner-page .owner-dashboard h2,
 .owner-page .owner-dashboard h3,
 .owner-page .owner-dashboard h4,
@@ -11542,7 +11661,7 @@ def build_realestate_owner_property_dashboard(
 .owner-page .owner-dashboard .owner-badge,
 .owner-page .owner-dashboard .owner-kpi-card span,
 .owner-page .owner-dashboard .finance-chart-card h3,
-.owner-page .owner-dashboard .inventory-panel h3 {{ color: #7a6447 !important; }}
+.owner-page .owner-dashboard .inventory-panel h3 {{ color: #F2D892 !important; }}
 .owner-page .owner-dashboard p,
 .owner-page .owner-dashboard small,
 .owner-page .owner-dashboard .finance-chart-note,
@@ -11551,7 +11670,7 @@ def build_realestate_owner_property_dashboard(
 .owner-page .owner-dashboard .inventory-note,
 .owner-page .owner-dashboard .owner-section-header p,
 .owner-page .owner-dashboard .owner-hero-copy p,
-.owner-page .owner-dashboard .empty-state {{ color: #8f7a5c !important; }}
+.owner-page .owner-dashboard .empty-state {{ color: #b9ad8f !important; }}
 .owner-page .owner-dashboard td,
 .owner-page .owner-dashboard span,
 .owner-page .owner-dashboard label,
@@ -11560,52 +11679,52 @@ def build_realestate_owner_property_dashboard(
 .owner-page .owner-dashboard .owner-table td,
 .owner-page .owner-dashboard .owner-table-wrap *,
 .owner-page .owner-dashboard .owner-badge strong,
-.owner-page .owner-dashboard .inventory-note strong {{ color: #6b573d; }}
+.owner-page .owner-dashboard .inventory-note strong {{ color: #F2D892; }}
 .owner-hero-badges {{ display: flex; flex-wrap: wrap; gap: 12px; }}
-.owner-badge {{ display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px; border: 1px solid rgba(235, 220, 198, 0.34); background: linear-gradient(180deg, rgba(255,255,255,0.22), rgba(216, 198, 173, 0.16)); color: #5e4b39; box-shadow: inset 0 1px 0 rgba(255,255,255,0.46), 0 10px 24px rgba(180, 151, 116, 0.10); }}
-.owner-badge strong {{ color: #7b644d; }}
+.owner-badge {{ display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px; border: 1px solid rgba(196, 161, 77, 0.30); background: rgba(28, 38, 21, 0.76); color: #F2D892; box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(230, 202, 130, 0.09); }}
+.owner-badge strong {{ color: #F6E3A4; }}
 .owner-kpi-section {{ margin-top: 30px; display: grid; gap: 20px; }}
 .owner-kpi-grid, .container-cards {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }}
 .row-bottom {{ display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }}
 .row-bottom .owner-kpi-card, .row-bottom .card {{ width: 250px; max-width: 100%; }}
-.owner-kpi-card, .card {{ position: relative; overflow: hidden; min-height: 120px; padding: 25px; border-radius: 20px; border: 1px solid rgba(180, 150, 100, 0.15); background: rgba(245, 240, 230, 0.68); box-shadow: 0 10px 25px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.4); display: flex; flex-direction: column; justify-content: space-between; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }}
-.owner-kpi-card:hover, .card:hover {{ transform: translateY(-10px) scale(1.02); box-shadow: 0 28px 52px rgba(0,0,0,0.14), 0 0 0 1px rgba(214, 195, 163, 0.34), inset 0 1px 0 rgba(255,255,255,0.56); border-color: rgba(184, 155, 109, 0.34); background: rgba(248, 243, 234, 0.82); z-index: 2; }}
-.owner-kpi-card::after {{ content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(to right, #d6c3a3, #b89b6d); border-radius: 20px 20px 0 0; opacity: 0.6; pointer-events: none; }}
-.owner-kpi-card::before {{ content: ""; position: absolute; inset: 0 auto auto 0; width: 100%; height: 4px; opacity: 0.85; box-shadow: 0 0 18px rgba(231, 214, 188, 0.24); }}
-.owner-kpi-card span {{ position: relative; z-index: 1; color: #8c7a5a; font-size: 0.94rem; }}
-.owner-kpi-card strong {{ position: relative; z-index: 1; color: #4e3f2a; text-shadow: 0 1px 12px rgba(255, 255, 255, 0.22); font-size: clamp(1.55rem, 2.7vw, 2.3rem); line-height: 1.06; letter-spacing: -0.04em; }}
-.owner-kpi-card-soft::before {{ background: linear-gradient(90deg, #eadcca, #c8b091); }}
-.owner-kpi-card-soft {{ background: rgba(245, 240, 230, 0.68); }}
-.owner-kpi-card-gold::before {{ background: linear-gradient(90deg, #e7d7bf, #c7a982); }}
-.owner-kpi-card-gold {{ background: rgba(245, 240, 230, 0.68); }}
-.owner-kpi-card-emerald::before {{ background: linear-gradient(90deg, #ddd7c2, #b4ac8f); }}
-.owner-kpi-card-emerald {{ background: rgba(245, 240, 230, 0.68); }}
-.owner-kpi-card-ruby::before {{ background: linear-gradient(90deg, #e5d1bf, #c6a38b); }}
-.owner-kpi-card-ruby {{ background: rgba(245, 240, 230, 0.68); }}
+.owner-kpi-card, .card {{ position: relative; overflow: hidden; min-height: 120px; padding: 25px; border-radius: 20px; border: 1px solid rgba(196, 161, 77, 0.34); background: linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)), linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86)); box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(230, 202, 130, 0.08); display: flex; flex-direction: column; justify-content: space-between; backdrop-filter: blur(9px); -webkit-backdrop-filter: blur(9px); }}
+.owner-kpi-card:hover, .card:hover {{ transform: translateY(-10px) scale(1.02); box-shadow: 0 32px 76px rgba(0, 0, 0, 0.54), 0 0 26px rgba(196, 161, 77, 0.12), inset 0 1px 0 rgba(230, 202, 130, 0.12); border-color: rgba(230, 202, 130, 0.52); background: linear-gradient(145deg, rgba(230, 202, 130, 0.105), rgba(230, 202, 130, 0.028) 40%, rgba(0, 0, 0, 0.14)), linear-gradient(180deg, rgba(31, 41, 24, 0.84), rgba(10, 12, 9, 0.90)); z-index: 2; }}
+.owner-kpi-card::after {{ content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, transparent, rgba(246, 227, 164, 0.72), rgba(216, 179, 94, 0.42), transparent); border-radius: 20px 20px 0 0; opacity: 0.86; pointer-events: none; }}
+.owner-kpi-card::before {{ content: ""; position: absolute; inset: 0 auto auto 0; width: 100%; height: 4px; opacity: 0.85; box-shadow: 0 0 18px rgba(231, 201, 119, 0.16); }}
+.owner-kpi-card span {{ position: relative; z-index: 1; color: #F2D892; font-size: 0.94rem; }}
+.owner-kpi-card strong {{ position: relative; z-index: 1; color: #E7C977; text-shadow: 0 0 10px rgba(231, 201, 119, 0.20), 0 8px 26px rgba(0, 0, 0, 0.34); font-size: clamp(1.55rem, 2.7vw, 2.3rem); line-height: 1.06; letter-spacing: -0.04em; }}
+.owner-kpi-card-soft::before {{ background: linear-gradient(90deg, #F6E3A4, #D8B35E); }}
+.owner-kpi-card-soft {{ background: linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86)); }}
+.owner-kpi-card-gold::before {{ background: linear-gradient(90deg, #F6E3A4, #C89B3C); }}
+.owner-kpi-card-gold {{ background: linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86)); }}
+.owner-kpi-card-emerald::before {{ background: linear-gradient(90deg, #E7C977, #7f8a58); }}
+.owner-kpi-card-emerald {{ background: linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86)); }}
+.owner-kpi-card-ruby::before {{ background: linear-gradient(90deg, #D8B35E, #8c4f3f); }}
+.owner-kpi-card-ruby {{ background: linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86)); }}
 .system-topbar {{ z-index: 24; }}
-.owner-section {{ border-radius: 28px; padding: 24px; border: 1px solid rgba(236, 220, 201, 0.30); background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(234, 223, 206, 0.66)); box-shadow: 0 18px 44px rgba(176, 146, 112, 0.10), 0 1px 0 rgba(255,255,255,0.72) inset; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }}
-.owner-section:hover {{ transform: translateY(-10px) scale(1.02); box-shadow: 0 28px 52px rgba(0,0,0,0.14), 0 0 0 1px rgba(214, 195, 163, 0.30), 0 1px 0 rgba(255,255,255,0.72) inset; border-color: rgba(184, 155, 109, 0.32); transition: transform 0.36s cubic-bezier(.22,1,.36,1), box-shadow 0.36s cubic-bezier(.22,1,.36,1), border-color 0.36s cubic-bezier(.22,1,.36,1); z-index: 2; }}
+.owner-section {{ border-radius: 28px; padding: 24px; border: 1px solid rgba(196, 161, 77, 0.34); background: linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)), linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86)); box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(230, 202, 130, 0.08); backdrop-filter: blur(9px); -webkit-backdrop-filter: blur(9px); }}
+.owner-section:hover {{ transform: translateY(-10px) scale(1.02); box-shadow: 0 32px 76px rgba(0, 0, 0, 0.54), 0 0 26px rgba(196, 161, 77, 0.12), inset 0 1px 0 rgba(230, 202, 130, 0.12); border-color: rgba(230, 202, 130, 0.52); transition: transform 0.36s cubic-bezier(.22,1,.36,1), box-shadow 0.36s cubic-bezier(.22,1,.36,1), border-color 0.36s cubic-bezier(.22,1,.36,1); z-index: 2; }}
 .owner-section-header {{ display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 18px; }}
-.owner-section-header h3 {{ margin: 0; font-size: 1.28rem; color: #7a6447; }}
-.owner-section-header p {{ margin: 6px 0 0; color: #8f7a5c; }}
-.owner-section-pill {{ padding: 9px 14px; border-radius: 999px; background: rgba(255,255,255,0.16); border: 1px solid rgba(233, 216, 196, 0.26); color: #7a6447; font-weight: 700; white-space: nowrap; }}
+.owner-section-header h3 {{ margin: 0; font-size: 1.28rem; color: #F2D892; }}
+.owner-section-header p {{ margin: 6px 0 0; color: #b9ad8f; }}
+.owner-section-pill {{ padding: 9px 14px; border-radius: 999px; background: rgba(28, 38, 21, 0.76); border: 1px solid rgba(196, 161, 77, 0.30); color: #F2D892; font-weight: 700; white-space: nowrap; }}
 .owner-chart-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }}
-.owner-chart-card {{ min-height: 360px; border: 1px solid rgba(236, 220, 199, 0.28) !important; background: linear-gradient(180deg, rgba(255,255,255,0.76), rgba(236, 223, 205, 0.68)) !important; box-shadow: 0 18px 40px rgba(176, 146, 112, 0.10), 0 1px 0 rgba(255,255,255,0.68) inset !important; }}
-.owner-chart-card:hover {{ transform: translateY(-10px) scale(1.02); box-shadow: 0 28px 52px rgba(0,0,0,0.14), 0 0 0 1px rgba(214, 195, 163, 0.34), 0 1px 0 rgba(255,255,255,0.68) inset !important; border-color: rgba(184, 155, 109, 0.34) !important; z-index: 2; }}
-.owner-table-wrap {{ overflow-x: auto; border-radius: 22px; border: 1px solid rgba(236, 220, 201, 0.28); background: linear-gradient(180deg, rgba(255,255,255,0.78), rgba(238, 227, 210, 0.72)); box-shadow: 0 16px 34px rgba(176, 146, 112, 0.10), 0 1px 0 rgba(255,255,255,0.68) inset; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }}
+.owner-chart-card {{ min-height: 360px; border: 1px solid rgba(196, 161, 77, 0.34) !important; background: linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)), linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86)) !important; box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(230, 202, 130, 0.08) !important; }}
+.owner-chart-card:hover {{ transform: translateY(-10px) scale(1.02); box-shadow: 0 32px 76px rgba(0, 0, 0, 0.54), 0 0 26px rgba(196, 161, 77, 0.12), inset 0 1px 0 rgba(230, 202, 130, 0.12) !important; border-color: rgba(230, 202, 130, 0.52) !important; z-index: 2; }}
+.owner-table-wrap {{ overflow-x: auto; border-radius: 22px; border: 1px solid rgba(196, 161, 77, 0.24); background: linear-gradient(180deg, rgba(22, 30, 18, 0.76), rgba(8, 9, 7, 0.84)); box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38); backdrop-filter: blur(9px); -webkit-backdrop-filter: blur(9px); }}
 .owner-table {{ width: 100%; border-collapse: collapse; }}
-.owner-table th {{ text-align: right; padding: 14px 16px; background: linear-gradient(180deg, rgba(255, 251, 246, 0.82), rgba(241, 232, 217, 0.64)); color: #7a6447; border-bottom: 1px solid rgba(230, 212, 191, 0.24); box-shadow: 0 -1px 0 rgba(255,255,255,0.38) inset; }}
-.owner-table td {{ padding: 14px 16px; color: #6b573d; border-bottom: 1px solid rgba(228, 212, 191, 0.12); background: rgba(252, 248, 242, 0.76); }}
-.owner-table tr:nth-child(even) td {{ background: rgba(245, 238, 228, 0.66); }}
-.owner-table tr:hover td {{ background: rgba(239, 229, 214, 0.82); }}
-.owner-status-badge {{ display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(230, 213, 191, 0.22); background: rgba(255,255,255,0.72); font-size: 0.88rem; }}
-.owner-status-badge-warning {{ color: #6b573d; }}
-.owner-status-badge-danger {{ color: #6b573d; }}
-.owner-status-badge-info {{ color: #6b573d; }}
-.owner-dashboard .finance-chart-note {{ color: #8f7a5c; }}
-.owner-dashboard .inventory-note {{ color: #8f7a5c; border-color: rgba(231, 214, 191, 0.28); background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(239, 229, 214, 0.68)); box-shadow: 0 10px 24px rgba(175, 147, 116, 0.08); }}
-.owner-dashboard .action-btn, .owner-dashboard .glass-btn {{ background: linear-gradient(180deg, rgba(255,255,255,0.22), rgba(231, 216, 196, 0.20)) !important; color: #5b4838 !important; border: 1px solid rgba(232, 214, 191, 0.28) !important; box-shadow: 0 10px 20px rgba(178, 149, 116, 0.08), inset 0 1px 0 rgba(255,255,255,0.62); }}
-.owner-dashboard .action-btn:hover, .owner-dashboard .glass-btn:hover {{ background: linear-gradient(180deg, rgba(255,255,255,0.30), rgba(236, 222, 202, 0.24)) !important; color: #4c3b2d !important; }}
+.owner-table th {{ text-align: right; padding: 14px 16px; background: rgba(28, 38, 21, 0.86); color: #F2D892; border-bottom: 1px solid rgba(196, 161, 77, 0.20); box-shadow: inset 0 -1px 0 rgba(230, 202, 130, 0.05); }}
+.owner-table td {{ padding: 14px 16px; color: #b9ad8f; border-bottom: 1px solid rgba(196, 161, 77, 0.14); background: rgba(8, 10, 7, 0.34); }}
+.owner-table tr:nth-child(even) td {{ background: rgba(28, 38, 21, 0.34); }}
+.owner-table tr:hover td {{ background: rgba(54, 70, 37, 0.38); }}
+.owner-status-badge {{ display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(196, 161, 77, 0.30); background: rgba(28, 38, 21, 0.76); font-size: 0.88rem; }}
+.owner-status-badge-warning {{ color: #F2D892; }}
+.owner-status-badge-danger {{ color: #d9a187; }}
+.owner-status-badge-info {{ color: #F2D892; }}
+.owner-dashboard .finance-chart-note {{ color: #b9ad8f; }}
+.owner-dashboard .inventory-note {{ color: #b9ad8f; border-color: rgba(196, 161, 77, 0.30); background: rgba(28, 38, 21, 0.76); box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28); }}
+.owner-dashboard .action-btn, .owner-dashboard .glass-btn {{ background: linear-gradient(135deg, rgba(46, 59, 32, 0.88), rgba(11, 13, 9, 0.92)) !important; color: #F2D892 !important; border: 1px solid rgba(216, 179, 94, 0.44) !important; box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(230, 202, 130, 0.09); }}
+.owner-dashboard .action-btn:hover, .owner-dashboard .glass-btn:hover {{ background: linear-gradient(135deg, rgba(77, 65, 31, 0.94), rgba(31, 39, 22, 0.94)) !important; color: #F6E3A4 !important; }}
 .owner-reveal {{ opacity: 1; transform: translateY(0); animation: premium-fade-up 0.75s cubic-bezier(.22,1,.36,1) both; animation-delay: var(--owner-delay, 0s); will-change: opacity, transform; }}
 .owner-reveal.is-visible {{ opacity: 1; transform: translateY(0); }}
 @media (max-width: 960px) {{ .owner-kpi-grid, .container-cards {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
@@ -11858,9 +11977,10 @@ function ownerCreateRevenueChart(canvasId, config) {{
                 backgroundColor(context) {{
                     const area = context.chart.chartArea;
                     const palettes = [
-                        ['rgba(243, 232, 216, 0.96)', 'rgba(196, 171, 139, 0.96)'],
-                        ['rgba(233, 225, 209, 0.96)', 'rgba(168, 153, 126, 0.96)'],
-                        ['rgba(242, 228, 220, 0.96)', 'rgba(181, 152, 130, 0.96)']
+                        ['rgba(216, 179, 94, 0.96)', 'rgba(242, 216, 146, 0.88)'],
+                        ['rgba(111, 122, 74, 0.96)', 'rgba(151, 160, 101, 0.86)'],
+                        ['rgba(168, 119, 58, 0.96)', 'rgba(201, 138, 90, 0.88)'],
+                        ['rgba(184, 155, 114, 0.96)', 'rgba(216, 179, 94, 0.78)']
                     ];
                     const palette = palettes[context.dataIndex % palettes.length];
                     if (!area) return palette[0];
@@ -11875,6 +11995,11 @@ function ownerCreateRevenueChart(canvasId, config) {{
                 legend: {{ display: false }},
                 tooltip: {{
                     rtl: true,
+                    backgroundColor: 'rgba(8, 10, 7, 0.92)',
+                    titleColor: '#F2D892',
+                    bodyColor: '#d6d0bf',
+                    borderColor: 'rgba(216, 179, 94, 0.34)',
+                    borderWidth: 1,
                     callbacks: {{
                         label(context) {{
                             return `${{Number(context.raw).toLocaleString('en-US')}} ريال`;
@@ -11884,12 +12009,12 @@ function ownerCreateRevenueChart(canvasId, config) {{
             }},
             scales: {{
                 x: {{
-                    ticks: {{ color: '#6b5a49' }},
+                    ticks: {{ color: '#D8B35E' }},
                     grid: {{ display: false }}
                 }},
                 y: {{
-                    ticks: {{ color: '#6b5a49' }},
-                    grid: {{ color: 'rgba(186, 163, 133, 0.14)' }}
+                    ticks: {{ color: '#B89B72' }},
+                    grid: {{ color: 'rgba(216, 179, 94, 0.16)' }}
                 }}
             }}
         }},
@@ -11901,10 +12026,11 @@ function ownerCreateDoughnutChart(canvasId, config) {{
     const canvas = document.getElementById(canvasId);
     if (!canvas || !config.values || !config.values.length) return;
     const palettes = [
-        ['rgba(243, 232, 216, 0.96)', 'rgba(196, 171, 139, 0.96)'],
-        ['rgba(233, 225, 209, 0.96)', 'rgba(168, 153, 126, 0.96)'],
-        ['rgba(242, 228, 220, 0.96)', 'rgba(181, 152, 130, 0.96)'],
-        ['rgba(234, 221, 204, 0.96)', 'rgba(159, 134, 111, 0.96)']
+        ['rgba(216, 179, 94, 0.96)', 'rgba(242, 216, 146, 0.88)'],
+        ['rgba(111, 122, 74, 0.96)', 'rgba(151, 160, 101, 0.86)'],
+        ['rgba(168, 119, 58, 0.96)', 'rgba(201, 138, 90, 0.88)'],
+        ['rgba(184, 155, 114, 0.96)', 'rgba(216, 179, 94, 0.78)'],
+        ['rgba(201, 138, 90, 0.96)', 'rgba(168, 119, 58, 0.86)']
     ];
     new Chart(canvas, {{
         type: 'doughnut',
@@ -11914,7 +12040,7 @@ function ownerCreateDoughnutChart(canvasId, config) {{
                 data: config.values,
                 hoverOffset: 12,
                 borderWidth: 2,
-                borderColor: 'rgba(255,255,255,0.16)',
+                borderColor: 'rgba(8, 10, 7, 0.62)',
                 backgroundColor(context) {{
                     const area = context.chart.chartArea;
                     const palette = palettes[context.dataIndex % palettes.length];
@@ -11932,13 +12058,18 @@ function ownerCreateDoughnutChart(canvasId, config) {{
                     position: 'bottom',
                     rtl: true,
                     labels: {{
-                        color: '#6b5a49',
+                        color: '#F2D892',
                         usePointStyle: true,
                         padding: 18
                     }}
                 }},
                 tooltip: {{
                     rtl: true,
+                    backgroundColor: 'rgba(8, 10, 7, 0.92)',
+                    titleColor: '#F2D892',
+                    bodyColor: '#d6d0bf',
+                    borderColor: 'rgba(216, 179, 94, 0.34)',
+                    borderWidth: 1,
                     callbacks: {{
                         label(context) {{
                             return `${{context.label}}: ${{Number(context.raw).toLocaleString('en-US')}}`;

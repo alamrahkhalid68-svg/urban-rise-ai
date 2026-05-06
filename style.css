@@ -2,6 +2,26 @@
    Dark System Theme
 ========================= */
 
+/* ==========================================================================
+   System Dark
+   Global dark-system shell, shared colors, topbar, and page backdrop helpers.
+   ========================================================================== */
+
+
+/* =========================
+   DESIGN TOKENS (SAFE LAYER)
+   ========================= */
+
+:root {
+    --color-bg-glass: rgba(255, 255, 255, 0.65);
+    --color-border-gold: rgba(201, 162, 39, 0.4);
+    --color-text-main: #6b573d;
+    --color-text-dark: #111;
+    --shadow-soft: 0 10px 25px rgba(0,0,0,0.08);
+    --shadow-deep: 0 20px 40px rgba(0,0,0,0.15);
+    --radius-main: 30px;
+}
+
 body.system-dark{
 
     background-image: url("/static/images/bg.jpg");
@@ -167,7 +187,8 @@ body.system-dark .page-title,
 body.system-dark .form-title,
 body.system-dark legend,
 body.system-dark th {
-    color: #5f4b32;
+    color: #F2D892;
+    -webkit-text-fill-color: #F2D892;
 }
 
 body.system-dark p,
@@ -200,8 +221,8 @@ body.system-dark .company-card *,
 body.system-dark .glass-btn,
 body.system-dark .action-btn,
 body.system-dark .back-btn {
-    color: #6b573d;
-    -webkit-text-fill-color: #6b573d;
+    color: #b9ad8f;
+    -webkit-text-fill-color: #b9ad8f;
 }
 
 body.system-dark input::placeholder,
@@ -268,19 +289,12 @@ body.system-dark .dashboard {
     }
 }
 
-.system-dark .company-card {
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
-    box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
-}
-
-
 .glass-btn {
-    background: rgba(255, 255, 255, 0.72);
+    background: linear-gradient(135deg, rgba(46, 59, 32, 0.86), rgba(11, 13, 9, 0.90)) !important;
     backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: #6b573d;
+    border: 1px solid rgba(216, 179, 94, 0.44) !important;
+    color: #F2D892 !important;
+    -webkit-text-fill-color: #F2D892 !important;
     padding: 10px 18px;
     border-radius: 12px;
     cursor: pointer;
@@ -296,34 +310,44 @@ body.system-dark .dashboard {
 }
 
 .glass-btn:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: linear-gradient(135deg, rgba(77, 65, 31, 0.92), rgba(31, 39, 22, 0.92)) !important;
+    border-color: rgba(242, 216, 146, 0.64) !important;
+    color: #F6E3A4 !important;
+    -webkit-text-fill-color: #F6E3A4 !important;
 }
 
-.gold-text {
-    background: linear-gradient(135deg, #f5d27a, #ffffff);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: #f5d27a;
-    text-shadow: 0 0 6px rgba(245, 210, 122, 0.3);
+.gold-text:not(.glass-btn),
+.portal-title,
+.portal-company-title,
+.company-card h2,
+.company-card h3,
+.company-card strong {
+    background: linear-gradient(135deg, #F6E3A4 0%, #E7C977 32%, #D8B35E 62%, #C89B3C 100%) !important;
+    -webkit-background-clip: text !important;
+    background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    color: #E7C977 !important;
+    text-shadow: 0 0 10px rgba(231, 201, 119, 0.22), 0 8px 26px rgba(0, 0, 0, 0.34);
 }
 
 .action-btn {
-    background: #111 !important;
-    color: #6b573d !important;
+    background: linear-gradient(135deg, rgba(46, 59, 32, 0.88), rgba(11, 13, 9, 0.92)) !important;
+    color: #F2D892 !important;
     border-radius: 8px;
     padding: 6px 12px;
     text-decoration: none;
     display: inline-block;
     font-size: 13px;
-    border: 1px solid #111 !important;
+    border: 1px solid rgba(196, 161, 77, 0.38) !important;
     backdrop-filter: none !important;
-    -webkit-text-fill-color: #6b573d !important;
+    -webkit-text-fill-color: #F2D892 !important;
     text-shadow: none !important;
     margin: 0 4px;
 }
 
 .action-btn:hover {
-    background: #000 !important;
+    background: linear-gradient(135deg, rgba(77, 65, 31, 0.94), rgba(31, 39, 22, 0.94)) !important;
+    border-color: rgba(230, 202, 130, 0.64) !important;
 }
 
 .delete-btn {
@@ -336,7 +360,8 @@ body.system-dark .dashboard {
 }
 
 .back-btn {
-    color: #6b573d !important;
+    color: #F2D892 !important;
+    -webkit-text-fill-color: #F2D892 !important;
 }
 
 .home-button {
@@ -368,6 +393,11 @@ body.system-dark .dashboard {
     display: none;
 }
 
+
+/* ==========================================================================
+   Base
+   Global body, dashboard spacing, and basic page typography.
+   ========================================================================== */
 
 /* =========================
    ط§ظ„ط£ط³ط§ط³ظٹط§طھ
@@ -410,6 +440,11 @@ body {
     margin: auto;
 }
 
+/* ==========================================================================
+   Components
+   Shared cards, buttons, forms, panels, badges, and reusable UI blocks.
+   ========================================================================== */
+
 /* =========================
    ط§ظ„ظƒط±طھ ط§ظ„ط£ط³ط§ط³ظٹ
 ========================= */
@@ -424,11 +459,13 @@ body {
     position: relative;
     overflow: hidden;
     isolation: isolate;
-    background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(180, 150, 100, 0.15);
-    box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
+    background:
+        linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)),
+        linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+    backdrop-filter: blur(9px);
+    -webkit-backdrop-filter: blur(9px);
+    border: 1px solid rgba(196, 161, 77, 0.34);
+    box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(196, 161, 77, 0.08), inset 0 1px 0 rgba(230, 202, 130, 0.08);
     transition: transform 0.36s cubic-bezier(.22,1,.36,1), box-shadow 0.36s cubic-bezier(.22,1,.36,1), border-color 0.36s cubic-bezier(.22,1,.36,1), background 0.36s cubic-bezier(.22,1,.36,1);
 }
 
@@ -446,9 +483,9 @@ body {
     left: 0;
     right: 0;
     height: 3px;
-    background: linear-gradient(to right, #d6c3a3, #b89b6d);
+    background: linear-gradient(90deg, transparent, rgba(230, 202, 130, 0.72), rgba(170, 138, 69, 0.42), transparent);
     border-radius: inherit;
-    opacity: 0.55;
+    opacity: 0.86;
     pointer-events: none;
 }
 
@@ -462,8 +499,8 @@ body {
     text-decoration: none;
     font-size: 24px;
     font-weight: bold;
-    color: #ffffff;
-    box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
+    color: #d6d0bf;
+    box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(196, 161, 77, 0.08), inset 0 1px 0 rgba(230, 202, 130, 0.08);
 }
 
 .company-card:hover,
@@ -475,9 +512,11 @@ body {
 .admin-users-landing-card:hover,
 .glass-card:hover {
     transform: translateY(-10px) scale(1.02);
-    box-shadow: 0 28px 52px rgba(0,0,0,0.14), 0 0 0 1px rgba(214, 195, 163, 0.34), inset 0 1px 0 rgba(255,255,255,0.56);
-    border-color: rgba(184, 155, 109, 0.34);
-    background: linear-gradient(180deg, rgba(255, 252, 247, 0.82), rgba(238, 226, 208, 0.74));
+    box-shadow: 0 32px 76px rgba(0, 0, 0, 0.54), 0 0 26px rgba(196, 161, 77, 0.12), inset 0 1px 0 rgba(230, 202, 130, 0.12);
+    border-color: rgba(230, 202, 130, 0.52);
+    background:
+        linear-gradient(145deg, rgba(230, 202, 130, 0.105), rgba(230, 202, 130, 0.028) 40%, rgba(0, 0, 0, 0.14)),
+        linear-gradient(180deg, rgba(31, 41, 24, 0.84), rgba(10, 12, 9, 0.90));
     z-index: 2;
 }
 
@@ -490,8 +529,8 @@ body {
 .admin-users-landing-card:focus-within,
 .glass-card:focus-within {
     transform: translateY(-4px) scale(1.005);
-    box-shadow: 0 20px 40px rgba(0,0,0,0.10), 0 0 0 1px rgba(184, 155, 109, 0.26), inset 0 1px 0 rgba(255,255,255,0.5);
-    border-color: rgba(184, 155, 109, 0.28);
+    box-shadow: 0 24px 54px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(196, 161, 77, 0.18), inset 0 1px 0 rgba(230, 202, 130, 0.10);
+    border-color: rgba(230, 202, 130, 0.42);
 }
 
 /* =========================
@@ -500,23 +539,25 @@ body {
 
 /* ط§ظ„ظ…ظ‚ط§ظˆظ„ط§طھ */
 .company-card.works {
-    color: #ffffff;
+    color: #F6E7BC;
 }
 
 /* ط§ظ„طھط·ظˆظٹط± ط§ظ„ط¹ظ‚ط§ط±ظٹ */
 .company-card.realestate {
-    color: #ffffff;
+    color: #d6d0bf;
 }
 
 /* ط§ظ„ظ„ظˆط¬ط³طھظٹط§طھ */
 .company-card.logistics {
-    background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
-    color: #111;
+    background:
+        linear-gradient(150deg, rgba(230, 202, 130, 0.09), rgba(230, 202, 130, 0.024) 42%, rgba(0, 0, 0, 0.20)),
+        linear-gradient(180deg, rgba(33, 43, 25, 0.86), rgba(9, 11, 8, 0.88));
+    color: #d6d0bf;
 }
 
 /* ط§ظ„طµظپط­ط§طھ ط§ظ„ط¯ط§ط®ظ„ظٹط© (ط¹ظ‚ظˆط¯ â€“ ط¹ط±ظˆط¶ ط£ط³ط¹ط§ط± â€“ ط¥ظ„ط®) */
 .company-card:not(.works):not(.realestate):not(.logistics) {
-    color: #ffffff;
+    color: #d6d0bf;
 }
 
 /* =========================
@@ -525,19 +566,11 @@ body {
 .company-card h2 {
     margin: 0;
     line-height: 1.4;
-    background: linear-gradient(135deg, #f5d27a, #ffffff);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: #f5d27a;
-    text-shadow: 0 0 6px rgba(245, 210, 122, 0.3);
 }
 
 .company-card h3 {
-    background: linear-gradient(135deg, #f5d27a, #ffffff);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: #f5d27a;
-    text-shadow: 0 0 6px rgba(245, 210, 122, 0.3);
+    margin: 0;
+    line-height: 1.4;
 }
 
 .company-card p {
@@ -545,6 +578,19 @@ body {
     font-size: 17px;
     font-weight: normal;
     opacity: 0.9;
+    color: #F2D892 !important;
+    -webkit-text-fill-color: #F2D892 !important;
+}
+
+.portal-company-subtitle,
+.portal-enter-btn {
+    color: #F2D892 !important;
+    -webkit-text-fill-color: #F2D892 !important;
+}
+
+.portal-company-desc {
+    color: #d6d0bf !important;
+    -webkit-text-fill-color: #d6d0bf !important;
 }
 
 /* =========================
@@ -571,18 +617,20 @@ body {
 }
 
 .inventory-panel {
-    background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
-    backdrop-filter: blur(10px);
-    border: 1px solid rgba(180, 150, 100, 0.15);
+    background:
+        linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)),
+        linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+    backdrop-filter: blur(9px);
+    border: 1px solid rgba(196, 161, 77, 0.34);
     border-radius: 24px;
     padding: 24px;
-    box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
+    box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(196, 161, 77, 0.08), inset 0 1px 0 rgba(230, 202, 130, 0.08);
     text-align: right;
 }
 
 .inventory-panel h3 {
     margin-top: 0;
-    color: #ffffff;
+    color: #F2D892;
 }
 
 .inventory-panel form {
@@ -590,8 +638,16 @@ body {
     gap: 12px;
 }
 
+body.system-dark:not(.login-page) form[style*="background:white"],
+body.system-dark:not(.login-page) div[style*="background:white"][class*="dashboard"] {
+    background: linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)), linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86)) !important;
+    border: 1px solid rgba(196, 161, 77, 0.34);
+    box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(230, 202, 130, 0.08);
+    color: #b9ad8f;
+}
+
 .inventory-panel label {
-    color: #ffffff;
+    color: #b9ad8f;
     font-weight: 600;
 }
 
@@ -601,9 +657,9 @@ body {
     width: 100%;
     padding: 12px 14px;
     border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: rgba(255, 255, 255, 0.92);
-    color: #111;
+    border: 1px solid rgba(196, 161, 77, 0.28);
+    background: rgba(8, 10, 7, 0.58);
+    color: #d6d0bf;
     box-sizing: border-box;
     font-family: inherit;
 }
@@ -620,16 +676,16 @@ body {
 }
 
 .expense-page {
-    --expense-surface: rgba(247, 250, 252, 0.9);
-    --expense-surface-strong: rgba(255, 255, 255, 0.96);
-    --expense-border: rgba(148, 163, 184, 0.2);
-    --expense-shadow: 0 18px 38px rgba(15, 23, 42, 0.12);
-    --expense-text: #102235;
-    --expense-muted: #5f7285;
-    --expense-blue: #3f7a97;
-    --expense-teal: #1f8a8a;
-    --expense-green: #34856f;
-    --expense-amber: #b7823e;
+    --expense-surface: rgba(22, 30, 18, 0.78);
+    --expense-surface-strong: rgba(10, 12, 9, 0.86);
+    --expense-border: rgba(196, 161, 77, 0.30);
+    --expense-shadow: 0 24px 62px rgba(0, 0, 0, 0.46);
+    --expense-text: #d6d0bf;
+    --expense-muted: #b9ad8f;
+    --expense-blue: #D8B35E;
+    --expense-teal: #9b8946;
+    --expense-green: #7f8a58;
+    --expense-amber: #aa8a45;
 }
 
 .expense-page .finance-page-header {
@@ -637,13 +693,13 @@ body {
 }
 
 .expense-page .finance-page-header h1 {
-    color: #ffffff;
+    color: #F2D892;
     margin-bottom: 6px;
 }
 
 .expense-page .finance-page-header p {
     margin: 0;
-    color: rgba(255, 255, 255, 0.84);
+    color: #b9ad8f;
     font-size: 15px;
 }
 
@@ -656,10 +712,12 @@ body {
 }
 
 .expense-summary-card {
-    background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
-    border: 1px solid rgba(180, 150, 100, 0.15);
+    background:
+        linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)),
+        linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+    border: 1px solid rgba(196, 161, 77, 0.34);
     border-radius: 24px;
-    box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
+    box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(230, 202, 130, 0.08);
     position: relative;
     overflow: hidden;
 }
@@ -707,11 +765,13 @@ body {
 
 .expense-form-panel,
 .expense-table-panel {
-    background: rgba(247, 250, 252, 0.78);
-    border: 1px solid rgba(255, 255, 255, 0.14);
+    background:
+        linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)),
+        linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+    border: 1px solid rgba(196, 161, 77, 0.34);
     border-radius: 28px;
-    box-shadow: 0 20px 48px rgba(15, 23, 42, 0.14);
-    backdrop-filter: blur(10px);
+    box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(230, 202, 130, 0.08);
+    backdrop-filter: blur(9px);
 }
 
 .expense-panel-head {
@@ -728,7 +788,7 @@ body {
 
 .expense-panel-head p {
     margin: 0;
-    color: rgba(255, 255, 255, 0.76);
+    color: #9f946f;
     font-size: 14px;
     line-height: 1.7;
 }
@@ -739,7 +799,7 @@ body {
 }
 
 .expense-page .inventory-panel label {
-    color: rgba(255, 255, 255, 0.94);
+    color: #b9ad8f;
     font-size: 14px;
     margin-bottom: 4px;
 }
@@ -748,9 +808,9 @@ body {
 .expense-page .inventory-panel select,
 .expense-page .inventory-panel textarea {
     border-radius: 16px;
-    border: 1px solid rgba(191, 204, 214, 0.56);
-    background: rgba(255, 255, 255, 0.97);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+    border: 1px solid rgba(196, 161, 77, 0.28);
+    background: rgba(8, 10, 7, 0.58);
+    box-shadow: inset 0 1px 0 rgba(230, 202, 130, 0.04);
     padding: 13px 15px;
 }
 
@@ -758,8 +818,8 @@ body {
 .expense-page .inventory-panel select:focus,
 .expense-page .inventory-panel textarea:focus {
     outline: none;
-    border-color: rgba(63, 122, 151, 0.55);
-    box-shadow: 0 0 0 4px rgba(63, 122, 151, 0.12);
+    border-color: rgba(230, 202, 130, 0.58);
+    box-shadow: 0 0 0 4px rgba(196, 161, 77, 0.12);
 }
 
 .expense-category-field {
@@ -782,9 +842,9 @@ body {
 }
 
 .expense-category-chip {
-    border: 1px solid rgba(191, 204, 214, 0.82);
-    background: rgba(255, 255, 255, 0.84);
-    color: #234154;
+    border: 1px solid rgba(196, 161, 77, 0.30);
+    background: rgba(28, 38, 21, 0.76);
+    color: #F2D892;
     border-radius: 999px;
     padding: 10px 16px;
     font-size: 14px;
@@ -842,8 +902,8 @@ body {
 }
 
 .expense-other-type-card {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px dashed rgba(255, 255, 255, 0.2);
+    background: rgba(28, 38, 21, 0.62);
+    border: 1px dashed rgba(196, 161, 77, 0.26);
     border-radius: 18px;
     padding: 14px;
     transition: 0.2s ease;
@@ -857,14 +917,14 @@ body {
 .expense-suggestion-shell {
     display: grid;
     gap: 10px;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(28, 38, 21, 0.62);
+    border: 1px solid rgba(196, 161, 77, 0.24);
     border-radius: 20px;
     padding: 14px;
 }
 
 .expense-suggestion-empty {
-    color: rgba(255, 255, 255, 0.78);
+    color: #9f946f;
     font-size: 13px;
 }
 
@@ -875,9 +935,9 @@ body {
 }
 
 .expense-suggestion-chip {
-    border: 1px solid rgba(191, 204, 214, 0.3);
-    background: rgba(255, 255, 255, 0.14);
-    color: #ffffff;
+    border: 1px solid rgba(196, 161, 77, 0.30);
+    background: rgba(28, 38, 21, 0.76);
+    color: #F2D892;
     border-radius: 999px;
     padding: 9px 13px;
     cursor: pointer;
@@ -899,16 +959,16 @@ body {
     min-width: 170px;
     border-radius: 16px;
     padding: 12px 20px;
-    background: linear-gradient(135deg, rgba(37, 99, 132, 0.96), rgba(47, 124, 137, 0.96));
-    border-color: rgba(255, 255, 255, 0.14);
-    color: #ffffff !important;
-    -webkit-text-fill-color: #ffffff !important;
+    background: linear-gradient(135deg, rgba(46, 59, 32, 0.88), rgba(11, 13, 9, 0.92));
+    border-color: rgba(196, 161, 77, 0.38);
+    color: #F2D892 !important;
+    -webkit-text-fill-color: #F2D892 !important;
     text-shadow: none !important;
     box-shadow: 0 14px 28px rgba(15, 23, 42, 0.2);
 }
 
 .expense-primary-btn:hover {
-    background: linear-gradient(135deg, rgba(31, 85, 114, 0.98), rgba(40, 107, 118, 0.98));
+    background: linear-gradient(135deg, rgba(77, 65, 31, 0.94), rgba(31, 39, 22, 0.94));
 }
 
 .expense-collected-panel {
@@ -923,7 +983,7 @@ body {
 }
 
 .expense-collected-label {
-    color: rgba(255, 255, 255, 0.94);
+    color: #b9ad8f;
     font-weight: 700;
     white-space: nowrap;
 }
@@ -934,11 +994,16 @@ body {
 }
 
 .expense-inline-hint {
-    color: rgba(255, 255, 255, 0.78);
+    color: #9f946f;
     font-size: 13px;
     display: inline-block;
     margin-top: 8px;
 }
+
+/* ==========================================================================
+   Tables
+   Inventory, expense, report, warning, finance, and print-table surfaces.
+   ========================================================================== */
 
 .inventory-table-panel {
     max-width: 1100px;
@@ -960,10 +1025,10 @@ body {
 }
 
 .expense-table-count {
-    color: rgba(255, 255, 255, 0.86);
+    color: #F2D892;
     font-size: 14px;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(28, 38, 21, 0.76);
+    border: 1px solid rgba(196, 161, 77, 0.30);
     border-radius: 999px;
     padding: 8px 14px;
 }
@@ -972,28 +1037,53 @@ body {
     overflow-x: auto;
 }
 
+body.system-dark:not(.login-page) table[border] {
+    background: linear-gradient(180deg, rgba(22, 30, 18, 0.76), rgba(8, 9, 7, 0.84)) !important;
+    border-color: rgba(196, 161, 77, 0.24);
+    color: #b9ad8f;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
+}
+
+body.system-dark:not(.login-page) table[border] th {
+    background: rgba(28, 38, 21, 0.86);
+    color: #F2D892;
+    -webkit-text-fill-color: #F2D892;
+    border-color: rgba(196, 161, 77, 0.20);
+}
+
+body.system-dark:not(.login-page) table[border] td {
+    background: rgba(8, 10, 7, 0.34);
+    color: #b9ad8f;
+    -webkit-text-fill-color: #b9ad8f;
+    border-color: rgba(196, 161, 77, 0.14);
+}
+
+body.system-dark:not(.login-page) table[border] tr:hover td {
+    background: rgba(54, 70, 37, 0.38);
+}
+
 .expense-table {
-    background: rgba(255, 255, 255, 0.97);
+    background: linear-gradient(180deg, rgba(22, 30, 18, 0.76), rgba(8, 9, 7, 0.84));
     border-radius: 22px;
     overflow: hidden;
 }
 
 .expense-table th,
 .expense-table td {
-    border-bottom: 1px solid rgba(226, 232, 240, 0.95);
+    border-bottom: 1px solid rgba(196, 161, 77, 0.14);
     padding: 15px 14px;
     vertical-align: middle;
 }
 
 .expense-table th {
-    background: linear-gradient(180deg, rgba(241, 245, 249, 0.96), rgba(248, 250, 252, 0.96));
-    color: #30475b;
+    background: rgba(28, 38, 21, 0.86);
+    color: #F2D892;
     font-size: 13px;
     font-weight: 800;
 }
 
 .expense-table-row:hover td {
-    background: rgba(248, 250, 252, 0.98);
+    background: rgba(54, 70, 37, 0.38);
 }
 
 .expense-cell-date,
@@ -1002,12 +1092,12 @@ body {
 }
 
 .expense-cell-title strong {
-    color: #102235;
+    color: #d6d0bf;
     font-size: 14px;
 }
 
 .expense-cell-meta {
-    color: #74879a;
+    color: #9f946f;
     font-size: 12px;
     line-height: 1.7;
 }
@@ -1181,43 +1271,49 @@ body {
     margin: 0 auto 20px auto;
     padding: 14px 18px;
     border-radius: 16px;
-    background: rgba(255, 255, 255, 0.14);
-    border: 1px solid rgba(255, 255, 255, 0.22);
-    color: #fff;
+    background: rgba(28, 38, 21, 0.76);
+    border: 1px solid rgba(196, 161, 77, 0.30);
+    color: #b9ad8f;
     text-align: right;
 }
 
+/* ==========================================================================
+   Page-specific
+   Daily reports, inventory warnings, finance, property, admin, maintenance,
+   and quote/contract page-specific styling. Keep scoped when adding new CSS.
+   ========================================================================== */
+
 .daily-task-card {
-    background: rgba(255, 255, 255, 0.75);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(200, 170, 120, 0.35);
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
+    background: linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+    backdrop-filter: blur(9px);
+    -webkit-backdrop-filter: blur(9px);
+    border: 1px solid rgba(196, 161, 77, 0.34);
+    box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46);
     border-radius: 16px;
-    color: #24324a;
+    color: #d6d0bf;
 }
 
 .daily-report-entry-card {
-    background: rgba(255, 255, 255, 0.75);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(200, 170, 120, 0.35);
+    background: linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+    backdrop-filter: blur(9px);
+    -webkit-backdrop-filter: blur(9px);
+    border: 1px solid rgba(196, 161, 77, 0.34);
     border-radius: 22px;
     padding: 24px;
     max-width: 760px;
     margin: 24px auto;
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
-    color: #5a4633;
-    -webkit-text-fill-color: #5a4633;
+    box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46);
+    color: #F6E7BC;
+    -webkit-text-fill-color: #F6E7BC;
     text-align: right;
 }
 
 .daily-report-entry-card input,
 .daily-report-entry-card textarea {
-    background: rgba(255, 255, 255, 0.9);
-    border: 1px solid rgba(200, 170, 120, 0.35);
-    color: #5a4633;
-    -webkit-text-fill-color: #5a4633;
+    background: rgba(8, 10, 7, 0.58);
+    border: 1px solid rgba(196, 161, 77, 0.28);
+    color: #F6E7BC;
+    -webkit-text-fill-color: #F6E7BC;
 }
 
 .daily-report-entry-card textarea {
@@ -1233,11 +1329,11 @@ body {
     width: min(1100px, 92%);
     margin: 0 auto;
     padding: 18px;
-    background: rgba(255, 255, 255, 0.75);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(200, 170, 120, 0.35);
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
+    background: linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+    backdrop-filter: blur(9px);
+    -webkit-backdrop-filter: blur(9px);
+    border: 1px solid rgba(196, 161, 77, 0.34);
+    box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46);
     border-radius: 16px;
     overflow-x: auto;
 }
@@ -1246,21 +1342,23 @@ body {
     width: 100%;
     margin: 0;
     border-collapse: collapse;
-    background: rgba(255, 255, 255, 0.82);
-    color: #5f4b32;
+    background: linear-gradient(180deg, rgba(22, 30, 18, 0.76), rgba(8, 9, 7, 0.84));
+    color: #E8D7A5;
 }
 
 .daily-report-table th,
 .daily-report-table td {
     padding: 12px 14px;
-    border: 1px solid rgba(200, 170, 120, 0.28);
-    color: #5f4b32;
-    -webkit-text-fill-color: #5f4b32;
+    border: 1px solid rgba(196, 161, 77, 0.14);
+    color: #E8D7A5;
+    -webkit-text-fill-color: #E8D7A5;
     vertical-align: top;
 }
 
 .daily-report-table th {
-    background: rgba(255, 255, 255, 0.7);
+    background: rgba(28, 38, 21, 0.86);
+    color: #F2D892;
+    -webkit-text-fill-color: #F2D892;
     font-weight: 800;
 }
 
@@ -1276,17 +1374,17 @@ body {
 }
 
 .report-card {
-    background: rgba(255, 255, 255, 0.75);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(200, 170, 120, 0.35);
+    background: linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+    backdrop-filter: blur(9px);
+    -webkit-backdrop-filter: blur(9px);
+    border: 1px solid rgba(196, 161, 77, 0.34);
     border-radius: 14px;
     padding: 12px 14px;
-    color: #5a4633;
-    -webkit-text-fill-color: #5a4633;
+    color: #F6E7BC;
+    -webkit-text-fill-color: #F6E7BC;
     font-weight: 600;
     line-height: 1.8;
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46);
     white-space: pre-line;
 }
 
@@ -1357,7 +1455,7 @@ body {
 .inventory-warning-table {
     width: 100%;
     border-collapse: collapse;
-    background: rgba(255, 255, 255, 0.58);
+    background: linear-gradient(180deg, rgba(22, 30, 18, 0.76), rgba(8, 9, 7, 0.84));
     border-radius: 18px;
     overflow: hidden;
 }
@@ -1365,13 +1463,16 @@ body {
 .inventory-warning-table th,
 .inventory-warning-table td {
     padding: 12px 14px;
-    border-bottom: 1px solid rgba(248, 113, 113, 0.18);
+    border-bottom: 1px solid rgba(196, 161, 77, 0.14);
+    color: #b9ad8f;
+    -webkit-text-fill-color: #b9ad8f;
     text-align: right;
 }
 
 .inventory-warning-table th {
-    background: rgba(254, 242, 242, 0.88);
-    color: #7f1d1d;
+    background: rgba(28, 38, 21, 0.86);
+    color: #F2D892;
+    -webkit-text-fill-color: #F2D892;
 }
 
 .inventory-warning-table tr:last-child td {
@@ -1417,26 +1518,28 @@ body {
 }
 
 .finance-card {
-    background: linear-gradient(180deg, rgba(255, 251, 245, 0.76), rgba(236, 224, 206, 0.68));
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(180, 150, 100, 0.15);
+    background:
+        linear-gradient(145deg, rgba(230, 202, 130, 0.075), rgba(230, 202, 130, 0.018) 38%, rgba(0, 0, 0, 0.18)),
+        linear-gradient(180deg, rgba(22, 30, 18, 0.78), rgba(10, 12, 9, 0.86));
+    backdrop-filter: blur(9px);
+    -webkit-backdrop-filter: blur(9px);
+    border: 1px solid rgba(196, 161, 77, 0.34);
     border-radius: 24px;
     padding: 22px;
     text-align: right;
-    box-shadow: 0 14px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.42);
+    box-shadow: 0 24px 62px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(230, 202, 130, 0.08);
 }
 
 .finance-card span {
     display: block;
-    color: rgba(255, 255, 255, 0.88);
+    color: #b9ad8f;
     font-size: 14px;
     margin-bottom: 10px;
 }
 
 .finance-card strong {
     display: block;
-    color: #ffffff;
+    color: #F2D892;
     font-size: 30px;
     line-height: 1.4;
 }
@@ -1478,7 +1581,7 @@ body {
 
 .finance-chart-note {
     margin-bottom: 18px !important;
-    color: rgba(255, 255, 255, 0.82) !important;
+    color: #9f946f !important;
     font-size: 14px !important;
 }
 
@@ -1488,10 +1591,10 @@ body {
     padding: 18px;
     border-radius: 28px;
     background:
-        radial-gradient(circle at top, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.06) 48%, rgba(15, 23, 42, 0.18) 100%),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(15, 23, 42, 0.18));
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 28px 55px rgba(15, 23, 42, 0.22);
+        radial-gradient(circle at top, rgba(230, 202, 130, 0.12), rgba(230, 202, 130, 0.04) 48%, rgba(8, 9, 7, 0.22) 100%),
+        linear-gradient(180deg, rgba(28, 38, 21, 0.58), rgba(8, 9, 7, 0.76));
+    border: 1px solid rgba(196, 161, 77, 0.24);
+    box-shadow: inset 0 1px 0 rgba(230, 202, 130, 0.08), 0 28px 55px rgba(0, 0, 0, 0.34);
 }
 
 .finance-pie-shell::after {
@@ -1522,9 +1625,9 @@ body {
     min-height: 320px;
     padding: 16px;
     border-radius: 24px;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(15, 23, 42, 0.18));
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 20px 40px rgba(15, 23, 42, 0.16);
+    background: linear-gradient(180deg, rgba(28, 38, 21, 0.58), rgba(8, 9, 7, 0.76));
+    border: 1px solid rgba(196, 161, 77, 0.24);
+    box-shadow: inset 0 1px 0 rgba(230, 202, 130, 0.08), 0 20px 40px rgba(0, 0, 0, 0.32);
 }
 
 .finance-line-stage canvas {
@@ -1547,21 +1650,21 @@ body {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    color: #ffffff;
+    color: #b9ad8f;
     font-size: 14px;
 }
 
 .finance-bar-meta strong {
     font-size: 15px;
-    color: #ffffff;
+    color: #F2D892;
 }
 
 .finance-bar-track {
     height: 14px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.14);
+    background: rgba(28, 38, 21, 0.76);
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(196, 161, 77, 0.24);
 }
 
 .finance-bar-fill {
@@ -1584,7 +1687,7 @@ body {
 .finance-table {
     width: 100%;
     border-collapse: collapse;
-    background: rgba(255, 255, 255, 0.88);
+    background: linear-gradient(180deg, rgba(22, 30, 18, 0.76), rgba(8, 9, 7, 0.84));
     overflow: hidden;
     border-radius: 18px;
 }
@@ -1593,13 +1696,13 @@ body {
 .finance-table td {
     padding: 12px 14px;
     text-align: right;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.22);
-    color: #0f172a;
+    border-bottom: 1px solid rgba(196, 161, 77, 0.14);
+    color: #b9ad8f;
 }
 
 .finance-table th {
-    background: rgba(226, 232, 240, 0.75);
-    color: #0f172a;
+    background: rgba(28, 38, 21, 0.86);
+    color: #F2D892;
 }
 
 .finance-table tr:last-child td {
@@ -1641,12 +1744,16 @@ body {
 
 .property-site-card h3 {
     margin: 0 0 10px 0;
+    color: #F2D892;
+    -webkit-text-fill-color: #F2D892;
 }
 
 .property-site-card p {
     margin: 4px 0;
     font-size: 15px;
     line-height: 1.6;
+    color: #b9ad8f;
+    -webkit-text-fill-color: #b9ad8f;
 }
 
 .admin-users-landing-page {
@@ -1720,7 +1827,7 @@ body {
     margin: 0 !important;
     font-size: 15px !important;
     line-height: 1.9 !important;
-    color: rgba(255, 255, 255, 0.92) !important;
+    color: #b9ad8f !important;
 }
 
 @media (max-width: 700px) {
@@ -1931,6 +2038,11 @@ body {
 }
 
 
+/* ==========================================================================
+   Print
+   Print-only page sizing, quote-page print overrides, and watermark output.
+   ========================================================================== */
+
 
 @page {
     size: A4;
@@ -2006,4 +2118,3 @@ body.login-page::before {
     width: 500px;
     height: 500px;
 }
-

@@ -4,7 +4,8 @@ import sqlite3
 
 SOURCE_DB = "urbanrise.db"
 DISK_DB = "/opt/render/project/src/data/urbanrise.db"
-DB_PATH = DISK_DB
+IS_RENDER_RUNTIME = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+DB_PATH = DISK_DB if IS_RENDER_RUNTIME else SOURCE_DB
 
 
 def disk_db_has_zero_users() -> bool:
@@ -26,6 +27,9 @@ def disk_db_has_zero_users() -> bool:
 
 
 def bootstrap_disk_db():
+    if not IS_RENDER_RUNTIME:
+        return
+
     # One-time bootstrap for production disk seeding: copy the packaged/local
     # SQLite database onto the Render persistent disk only when the disk file
     # does not exist yet, so existing persistent data is never overwritten.
