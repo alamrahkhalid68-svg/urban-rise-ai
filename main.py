@@ -1459,7 +1459,9 @@ def format_arabic_pdf_text(value) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    reshaped = arabic_reshaper.reshape(text)
+    reshaper_config = arabic_reshaper.reshaper_config.default_config.copy()
+    reshaper_config["ARABIC LIGATURE ALLAH"] = False
+    reshaped = arabic_reshaper.ArabicReshaper(configuration=reshaper_config).reshape(text)
     return get_display(reshaped)
 
 
