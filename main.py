@@ -31,7 +31,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Image as ReportLabImage, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 app = FastAPI()
 app.include_router(admin_users_router)
@@ -670,6 +670,39 @@ CREATE TABLE IF NOT EXISTS project_daily (
 """)
 
 conn.execute("""
+CREATE TABLE IF NOT EXISTS client_material_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    project_name TEXT,
+    client_name TEXT,
+    project_location TEXT,
+    receipt_date TEXT NOT NULL,
+    received_by TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL
+)
+""")
+
+conn.execute("""
+CREATE TABLE IF NOT EXISTS client_material_receipt_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    receipt_id INTEGER NOT NULL,
+    material_name TEXT NOT NULL,
+    quantity TEXT,
+    status TEXT NOT NULL DEFAULT 'سليمة'
+)
+""")
+
+conn.execute("""
+CREATE TABLE IF NOT EXISTS client_material_receipt_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    receipt_id INTEGER NOT NULL,
+    image_type TEXT NOT NULL,
+    image_path TEXT NOT NULL
+)
+""")
+
+conn.execute("""
 CREATE TABLE IF NOT EXISTS daily_report_tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER,
@@ -1239,6 +1272,7 @@ UPLOAD_CATEGORIES = (
     "maintenance",
     "maintenance_visits",
     "project_daily",
+    "client_materials",
     "property",
     "misc",
 )
@@ -1943,6 +1977,138 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
         story.append(Paragraph(format_arabic_pdf_text(line), body_style))
         story.append(Spacer(1, 3))
 
+    doc.build(story, onFirstPage=draw_pdf_luxury_page_background, onLaterPages=draw_pdf_luxury_page_background)
+    return file_path, file_name
+
+
+def build_client_material_receipt_pdf(receipt, items, images) -> tuple[str, str]:
+    os.makedirs("pdfs", exist_ok=True)
+    file_name = f"client_material_receipt_{receipt['id']}.pdf"
+    file_path = os.path.join("pdfs", file_name)
+    font_name = get_pdf_report_font_name()
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "ClientMaterialReceiptTitle",
+        parent=styles["Heading1"],
+        fontName=font_name,
+        fontSize=18,
+        leading=24,
+        alignment=TA_RIGHT,
+        textColor=colors.HexColor("#D8B35E"),
+        spaceAfter=6,
+    )
+    section_style = ParagraphStyle(
+        "ClientMaterialReceiptSection",
+        parent=styles["Heading2"],
+        fontName=font_name,
+        fontSize=13,
+        leading=18,
+        alignment=TA_RIGHT,
+        textColor=colors.HexColor("#D8B35E"),
+        spaceAfter=8,
+        spaceBefore=8,
+    )
+    body_style = ParagraphStyle(
+        "ClientMaterialReceiptBody",
+        parent=styles["Normal"],
+        fontName=font_name,
+        fontSize=10,
+        leading=16,
+        alignment=TA_RIGHT,
+        textColor=colors.HexColor("#1F2A22"),
+    )
+    table_header_style = ParagraphStyle(
+        "ClientMaterialReceiptTableHeader",
+        parent=body_style,
+        textColor=colors.HexColor("#F2D892"),
+    )
+
+    story = [
+        Paragraph(format_arabic_pdf_text("أوربان رايز ووركس"), title_style),
+        Paragraph(format_arabic_pdf_text("محضر استلام مواد من العميل"), title_style),
+        Spacer(1, 8),
+        Paragraph(
+            format_arabic_pdf_text(f"تم استلام المواد الخاصة بمشروع: {receipt['project_name'] or '-'}"),
+            body_style,
+        ),
+        Paragraph(format_arabic_pdf_text(f"من العميل: {receipt['client_name'] or '-'}"), body_style),
+        Paragraph(format_arabic_pdf_text(f"في الموقع: {receipt['project_location'] or '-'}"), body_style),
+        Paragraph(format_arabic_pdf_text(f"بتاريخ: {receipt['receipt_date'] or '-'}"), body_style),
+        Spacer(1, 5),
+        Paragraph(format_arabic_pdf_text(f"وقام بالاستلام: {receipt['received_by'] or '-'}"), body_style),
+        Spacer(1, 10),
+        Paragraph(format_arabic_pdf_text("المواد المستلمة"), section_style),
+    ]
+
+    material_rows = [[
+        Paragraph(format_arabic_pdf_text("الحالة"), table_header_style),
+        Paragraph(format_arabic_pdf_text("الكمية"), table_header_style),
+        Paragraph(format_arabic_pdf_text("المادة"), table_header_style),
+    ]]
+    for item in items:
+        material_rows.append([
+            Paragraph(format_arabic_pdf_text(item["status"] or "سليمة"), body_style),
+            Paragraph(format_arabic_pdf_text(item["quantity"] or "-"), body_style),
+            Paragraph(format_arabic_pdf_text(item["material_name"] or "-"), body_style),
+        ])
+
+    material_table = Table(
+        material_rows,
+        colWidths=[45 * mm, 55 * mm, 78 * mm],
+        repeatRows=1,
+        hAlign="RIGHT",
+    )
+    material_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2A22")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#F2D892")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#F6F1E7"), colors.HexColor("#EEE4CF")]),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8C294")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    story.extend([
+        material_table,
+        Spacer(1, 10),
+        Paragraph(format_arabic_pdf_text("الملاحظات"), section_style),
+        Paragraph(format_arabic_pdf_text(receipt["notes"] or "لا توجد ملاحظات"), body_style),
+    ])
+
+    image_flowables = []
+    for image in images:
+        resolved_path = resolve_upload_path(image["image_path"] or "")
+        if not resolved_path:
+            continue
+        try:
+            image_flowables.append(
+                [
+                    Paragraph(
+                        format_arabic_pdf_text("صور التلف" if image["image_type"] == "damage" else "صور المواد"),
+                        body_style,
+                    ),
+                    ReportLabImage(resolved_path, width=72 * mm, height=54 * mm, kind="proportional"),
+                ]
+            )
+        except Exception:
+            logger.warning("Unable to include client material image in PDF: %s", resolved_path)
+
+    if image_flowables:
+        story.extend([Spacer(1, 10), Paragraph(format_arabic_pdf_text("الصور المرفقة"), section_style)])
+        for image_block in image_flowables:
+            story.extend(image_block)
+            story.append(Spacer(1, 8))
+
+    doc = SimpleDocTemplate(
+        file_path,
+        pagesize=A4,
+        rightMargin=16 * mm,
+        leftMargin=16 * mm,
+        topMargin=16 * mm,
+        bottomMargin=14 * mm,
+    )
     doc.build(story, onFirstPage=draw_pdf_luxury_page_background, onLaterPages=draw_pdf_luxury_page_background)
     return file_path, file_name
 
@@ -3298,6 +3464,30 @@ def is_works_daily_log_only_employee(user, company: str) -> bool:
     return get_employee_allowed_sections(user["id"], company) == {"daily_log"}
 
 
+def is_works_daily_log_allowed_path(path: str) -> bool:
+    normalized_path = (path or "/").rstrip("/") or "/"
+    if normalized_path in {
+        "/",
+        "/portal",
+        "/session-info",
+        "/logout",
+        "/company/works",
+        "/projects",
+        "/project-daily",
+        "/save-daily",
+    }:
+        return True
+    if normalized_path.startswith("/uploads/"):
+        return True
+    if re.fullmatch(r"/project/\d+", normalized_path):
+        return True
+    if re.fullmatch(r"/project/\d+/client-materials", normalized_path):
+        return True
+    if re.fullmatch(r"/project/\d+/client-materials/\d+/pdf", normalized_path):
+        return True
+    return False
+
+
 def is_works_partner_user(user, company: str) -> bool:
     if not user or not is_partner(user) or not is_works_company(company):
         return False
@@ -3881,6 +4071,16 @@ async def authentication_middleware(request: Request, call_next):
         if any(path == prefix or path.startswith(f"{prefix}/") for prefix in PROTECTED_ROUTE_PREFIXES):
             if session_available and not request.state.current_user:
                 return RedirectResponse(url="/login", status_code=303)
+
+        if (
+            request.state.current_user
+            and is_works_daily_log_only_employee(request.state.current_user, "works")
+            and not is_works_daily_log_allowed_path(path)
+        ):
+            return access_denied_response(
+                "صلاحية موظف السجل اليومي تقتصر على السجل اليومي واستلام مواد العميل",
+                back_url="/projects?company=works",
+            )
 
         return await call_next(request)
     except Exception as exc:
@@ -6731,7 +6931,7 @@ def projects_page(request: Request, company: str = ""):
         <tr>
             <td>{p['id']}</td>
             <td>
-                <a href="{'/project-daily?project_id=' + str(p['id']) + '&company=' + company if is_works_daily_scope_user else '/project/' + str(p['id']) + '?company=' + company}">
+                <a href="/project/{p['id']}?company={company}">
                     {p['name']}
                 </a>
             </td>
@@ -8851,6 +9051,262 @@ def analyze_project_items_route(request: Request, project_id: int, company: str 
         conn.close()
 
 
+CLIENT_MATERIAL_STATUSES = ("سليمة", "بها تلف", "ناقصة")
+
+
+def ensure_client_materials_access(request: Request):
+    user = getattr(request.state, "current_user", None) or get_current_user(request)
+    if is_employee(user):
+        return ensure_employee_any_section_access(request, "works", {"daily_log", "expenses"})
+    return ensure_company_access(request, "works")
+
+
+def get_works_project_with_location(conn, project_id: int):
+    return conn.execute(
+        """
+        SELECT projects.*, quotes.project_location
+        FROM projects
+        LEFT JOIN contracts ON contracts.id = projects.contract_id
+        LEFT JOIN quotes ON quotes.id = contracts.quote_id
+        WHERE projects.id = ? AND projects.company = 'works'
+        """,
+        (project_id,),
+    ).fetchone()
+
+
+def render_client_material_status_options(selected_status: str = "سليمة") -> str:
+    return "".join(
+        f'<option value="{status}" {"selected" if status == selected_status else ""}>{status}</option>'
+        for status in CLIENT_MATERIAL_STATUSES
+    )
+
+
+@app.get("/project/{project_id}/client-materials", response_class=HTMLResponse)
+def client_materials_page(request: Request, project_id: int):
+    access_result = ensure_client_materials_access(request)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, "works")
+
+    conn = get_db()
+    project = get_works_project_with_location(conn, project_id)
+    if not project:
+        conn.close()
+        return HTMLResponse("<h2>المشروع غير موجود</h2>", status_code=404)
+
+    receipts = conn.execute(
+        "SELECT * FROM client_material_receipts WHERE project_id = ? ORDER BY id DESC",
+        (project_id,),
+    ).fetchall()
+    receipt_rows = ""
+    for receipt in receipts:
+        item_count = conn.execute(
+            "SELECT COUNT(*) AS total FROM client_material_receipt_items WHERE receipt_id = ?",
+            (receipt["id"],),
+        ).fetchone()["total"]
+        receipt_rows += f"""
+        <tr>
+            <td>{receipt['id']}</td>
+            <td>{escape(receipt['receipt_date'] or '-')}</td>
+            <td>{escape(receipt['received_by'] or '-')}</td>
+            <td>{item_count}</td>
+            <td><a href="/project/{project_id}/client-materials/{receipt['id']}/pdf" class="action-btn">تحميل PDF</a></td>
+        </tr>
+        """
+    conn.close()
+
+    material_rows = ""
+    for index in range(6):
+        material_rows += f"""
+        <tr>
+            <td><input type="text" name="material_name" {'required' if index == 0 else ''}></td>
+            <td><input type="text" name="material_quantity"></td>
+            <td><select name="material_status">{render_client_material_status_options()}</select></td>
+        </tr>
+        """
+
+    form_html = ""
+    if not is_read_only_works_partner:
+        form_html = f"""
+        <div class="inventory-panel" style="margin-top:20px;text-align:right;">
+            <h2>محضر جديد</h2>
+            <form action="/project/{project_id}/client-materials" method="post" enctype="multipart/form-data">
+                <label>اسم المستلم</label>
+                <input type="text" name="received_by" required>
+
+                <h3>المواد المستلمة</h3>
+                <table border="1" style="width:100%;background:white;text-align:center;">
+                    <tr><th>اسم المادة</th><th>الكمية</th><th>الحالة</th></tr>
+                    {material_rows}
+                </table>
+
+                <label>ملاحظات</label>
+                <textarea name="notes" rows="4" style="width:100%;resize:vertical;" placeholder="تم الاستلام ويوجد كسر في بعض الكراتين."></textarea>
+
+                <label>صور المواد</label>
+                <input type="file" name="material_images" accept="image/*" multiple>
+
+                <label>صور التلف إن وجد</label>
+                <input type="file" name="damage_images" accept="image/*" multiple>
+
+                <br><br>
+                <button type="submit" class="glass-btn gold-text">حفظ المحضر</button>
+            </form>
+        </div>
+        """
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>استلام مواد من العميل</h1>
+    <div class="inventory-note" style="margin:18px 0;text-align:right;">
+        <strong>اسم المشروع:</strong> {escape(project['name'] or '-')}<br>
+        <strong>اسم العميل:</strong> {escape(project['client'] or '-')}<br>
+        <strong>موقع المشروع:</strong> {escape(project['project_location'] or '-')}<br>
+        <strong>تاريخ اليوم:</strong> {date.today().isoformat()}
+    </div>
+
+    {form_html}
+
+    <div class="inventory-panel" style="margin-top:20px;">
+        <h2>المحاضر المحفوظة</h2>
+        <table border="1" style="width:100%;background:white;text-align:center;">
+            <tr><th>رقم المحضر</th><th>التاريخ</th><th>المستلم</th><th>عدد المواد</th><th>PDF</th></tr>
+            {receipt_rows if receipt_rows else "<tr><td colspan='5'>لا توجد محاضر استلام مواد مسجلة</td></tr>"}
+        </table>
+    </div>
+
+    <br>
+    <a href="/project/{project_id}?company=works" class="glass-btn back-btn">رجوع للمشروع</a>
+</div>
+"""
+
+
+@app.post("/project/{project_id}/client-materials")
+def save_client_material_receipt(
+    request: Request,
+    project_id: int,
+    received_by: str = Form(...),
+    notes: str = Form(""),
+    material_name: list[str] = Form([]),
+    material_quantity: list[str] = Form([]),
+    material_status: list[str] = Form([]),
+    material_images: list[UploadFile] = File([]),
+    damage_images: list[UploadFile] = File([]),
+):
+    access_result = ensure_client_materials_access(request)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+
+    cleaned_items = []
+    for index, raw_name in enumerate(material_name):
+        clean_name = (raw_name or "").strip()
+        if not clean_name:
+            continue
+        quantity = (material_quantity[index] if index < len(material_quantity) else "").strip()
+        status = (material_status[index] if index < len(material_status) else "سليمة").strip()
+        if status not in CLIENT_MATERIAL_STATUSES:
+            status = "سليمة"
+        cleaned_items.append((clean_name, quantity, status))
+    if not cleaned_items:
+        return RedirectResponse(url=f"/project/{project_id}/client-materials", status_code=303)
+
+    conn = get_db()
+    try:
+        project = get_works_project_with_location(conn, project_id)
+        if not project:
+            return HTMLResponse("<h2>المشروع غير موجود</h2>", status_code=404)
+
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO client_material_receipts (
+                project_id, project_name, client_name, project_location,
+                receipt_date, received_by, notes, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                project_id,
+                project["name"] or "",
+                project["client"] or "",
+                project["project_location"] or "",
+                date.today().isoformat(),
+                received_by.strip(),
+                notes.strip(),
+                datetime.now().strftime("%Y-%m-%d %H:%M"),
+            ),
+        )
+        receipt_id = cursor.lastrowid
+        conn.executemany(
+            """
+            INSERT INTO client_material_receipt_items (receipt_id, material_name, quantity, status)
+            VALUES (?, ?, ?, ?)
+            """,
+            [(receipt_id, name, quantity, status) for name, quantity, status in cleaned_items],
+        )
+
+        image_rows = []
+        for image_type, uploads in (("materials", material_images), ("damage", damage_images)):
+            for upload in uploads:
+                if not upload or not upload.filename or not (upload.content_type or "").startswith("image/"):
+                    continue
+                saved_path = save_upload_file(upload, "client_materials")
+                if saved_path:
+                    image_rows.append((receipt_id, image_type, saved_path))
+        if image_rows:
+            conn.executemany(
+                """
+                INSERT INTO client_material_receipt_images (receipt_id, image_type, image_path)
+                VALUES (?, ?, ?)
+                """,
+                image_rows,
+            )
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        logger.exception("Failed to save client material receipt for project %s", project_id, exc_info=exc)
+        return HTMLResponse("<h2>تعذر حفظ محضر استلام المواد</h2>", status_code=500)
+    finally:
+        conn.close()
+
+    return RedirectResponse(url=f"/project/{project_id}/client-materials", status_code=303)
+
+
+@app.get("/project/{project_id}/client-materials/{receipt_id}/pdf")
+def client_material_receipt_pdf(request: Request, project_id: int, receipt_id: int):
+    access_result = ensure_client_materials_access(request)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+
+    conn = get_db()
+    receipt = conn.execute(
+        "SELECT * FROM client_material_receipts WHERE id = ? AND project_id = ?",
+        (receipt_id, project_id),
+    ).fetchone()
+    if not receipt:
+        conn.close()
+        return HTMLResponse("<h2>محضر استلام المواد غير موجود</h2>", status_code=404)
+    items = conn.execute(
+        "SELECT * FROM client_material_receipt_items WHERE receipt_id = ? ORDER BY id",
+        (receipt_id,),
+    ).fetchall()
+    images = conn.execute(
+        "SELECT * FROM client_material_receipt_images WHERE receipt_id = ? ORDER BY id",
+        (receipt_id,),
+    ).fetchall()
+    conn.close()
+
+    file_path, file_name = build_client_material_receipt_pdf(receipt, items, images)
+    return FileResponse(path=file_path, filename=file_name, media_type="application/pdf")
+
+
 @app.get("/project/{project_id}", response_class=HTMLResponse)
 def project_dashboard(request: Request, project_id: int, company: str = ""):
     user = getattr(request.state, "current_user", None) or get_current_user(request)
@@ -8860,13 +9316,6 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
         access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
-    if is_employee(access_result) and normalize_access_value(company) == "works":
-        allowed_sections = get_employee_allowed_sections(access_result["id"], company)
-        if allowed_sections == {"daily_log"}:
-            return RedirectResponse(
-                url=f"/project-daily?project_id={project_id}&company={company}",
-                status_code=303,
-            )
     is_read_only_works_partner = is_works_partner_user(access_result, company)
 
     conn = get_db()
@@ -8878,6 +9327,28 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
     if not project:
         conn.close()
         return "<h2>المشروع غير موجود</h2>"
+
+    if is_works_daily_log_only_employee(access_result, company):
+        conn.close()
+        return f'''
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>{escape(project['name'] or f"مشروع رقم {project_id}")}</h1>
+    <div class="companies">
+        <a href="/project-daily?project_id={project_id}&company=works" class="company-card works">
+            <h2>السجل اليومي</h2>
+        </a>
+        <a href="/project/{project_id}/client-materials" class="company-card works">
+            <h2>استلام مواد من العميل</h2>
+        </a>
+    </div>
+    <br>
+    <a href="/projects?company=works" class="glass-btn back-btn">رجوع</a>
+</div>
+'''
 
     if is_works_expenses_suppliers_employee(access_result, company):
         conn.close()
@@ -8967,6 +9438,9 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
     inventory_withdraw_html = ""
     if normalize_access_value(company) != "works":
         inventory_withdraw_html = f'<a href="/inventory?project_id={project_id}" class="company-card {company}"><h2>سحب من المستودع</h2></a>'
+    client_materials_html = ""
+    if normalize_access_value(company) == "works":
+        client_materials_html = f'<a href="/project/{project_id}/client-materials" class="company-card {company}"><h2>استلام مواد من العميل</h2></a>'
 
     return f'''
 <meta charset="UTF-8">
@@ -9015,6 +9489,8 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
 <a href="/project-daily?project_id={project_id}&company={company}" class="company-card {company}">
 <h2>السجل اليومي</h2>
 </a>
+
+{client_materials_html}
 
 {inventory_withdraw_html}
 
@@ -10514,14 +10990,18 @@ def project_daily(request: Request, project_id: int, company: str = "", report_d
     if not isinstance(access_result, sqlite3.Row):
         return access_result
     is_read_only_works_partner = is_works_partner_user(access_result, company)
+    can_manage_daily_records = (
+        not is_read_only_works_partner
+        and not is_works_daily_log_only_employee(access_result, company)
+    )
 
     back_url = f"/project/{project_id}?company={company}"
     back_label = "⬅ رجوع للمشروع"
     if is_employee(access_result) and normalize_access_value(company) == "works":
         allowed_sections = get_employee_allowed_sections(access_result["id"], company)
         if allowed_sections == {"daily_log"}:
-            back_url = f"/projects?company={company}"
-            back_label = "⬅ رجوع للمشاريع"
+            back_url = f"/project/{project_id}?company={company}"
+            back_label = "⬅ رجوع للمشروع"
 
     selected_report_date = normalize_daily_report_date(report_date)
     conn = get_db()
@@ -10561,7 +11041,7 @@ def project_daily(request: Request, project_id: int, company: str = "", report_d
             <td>{r['workers']}</td>
             <td class="report-cell daily-report-text"><div class="report-card">{r['report']}</div></td>
             <td>{attachment_html}</td>
-            <td>{"-" if is_read_only_works_partner else f'''<a href="/edit-project-daily/{r['id']}?project_id={project_id}&company={company}" class="action-btn">تعديل</a><a href="/delete-project-daily/{r['id']}?project_id={project_id}&company={company}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا السجل اليومي؟')">حذف</a>'''}</td>
+            <td>{"-" if not can_manage_daily_records else f'''<a href="/edit-project-daily/{r['id']}?project_id={project_id}&company={company}" class="action-btn">تعديل</a><a href="/delete-project-daily/{r['id']}?project_id={project_id}&company={company}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا السجل اليومي؟')">حذف</a>'''}</td>
         </tr>
         """
 
