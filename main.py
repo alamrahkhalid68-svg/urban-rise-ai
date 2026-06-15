@@ -480,6 +480,86 @@ CREATE TABLE IF NOT EXISTS quote_payments (
 )
 """)
 
+# عروض أسعار الصيانة والنظافة
+conn.execute("""
+CREATE TABLE IF NOT EXISTS maintenance_cleaning_quotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client TEXT,
+    status TEXT,
+    client_id TEXT,
+    client_address TEXT,
+    service_location TEXT,
+    service_type TEXT,
+    duration TEXT,
+    created_at TEXT
+)
+""")
+
+conn.execute("""
+CREATE TABLE IF NOT EXISTS maintenance_cleaning_quote_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quote_id INTEGER,
+    description TEXT,
+    qty REAL,
+    unit_price REAL
+)
+""")
+
+conn.execute("""
+CREATE TABLE IF NOT EXISTS maintenance_cleaning_quote_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quote_id INTEGER,
+    title TEXT,
+    percentage REAL
+)
+""")
+
+conn.execute("""
+CREATE TABLE IF NOT EXISTS maintenance_cleaning_contracts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quote_id INTEGER,
+    client_name TEXT,
+    project_name TEXT,
+    service_type TEXT,
+    contract_type TEXT,
+    start_date TEXT,
+    end_date TEXT,
+    contract_value REAL,
+    status TEXT,
+    created_at TEXT
+)
+""")
+
+conn.execute("""
+CREATE TABLE IF NOT EXISTS maintenance_cleaning_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contract_id INTEGER,
+    quote_id INTEGER,
+    project_name TEXT,
+    client_name TEXT,
+    service_type TEXT,
+    contract_type TEXT,
+    location TEXT,
+    start_date TEXT,
+    end_date TEXT,
+    status TEXT,
+    contract_value REAL,
+    created_at TEXT
+)
+""")
+
+conn.execute("""
+CREATE TABLE IF NOT EXISTS pricing_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    default_price REAL NOT NULL DEFAULT 0,
+    notes TEXT,
+    created_at TEXT NOT NULL
+)
+""")
+
 # العقود
 conn.execute("""
 CREATE TABLE IF NOT EXISTS contracts (
@@ -1157,6 +1237,7 @@ UPLOAD_CATEGORIES = (
     "expenses",
     "collections",
     "maintenance",
+    "maintenance_visits",
     "project_daily",
     "property",
     "misc",
@@ -4774,8 +4855,7 @@ def inventory_withdraw(
 # صفحة الشركة
 # ======================
 
-@app.get("/company/{company}", response_class=HTMLResponse)
-def company_page(request: Request, company: str):
+def get_company_page_access(request: Request, company: str):
     user = getattr(request.state, "current_user", None) or get_current_user(request)
     if is_active_projects_project_manager(user):
         return RedirectResponse(url=get_role_landing_url(user), status_code=303)
@@ -4787,11 +4867,1787 @@ def company_page(request: Request, company: str):
         return access_result
     if is_owner(access_result) and company == "realestate":
         return RedirectResponse(url=get_role_landing_url(access_result), status_code=303)
-    allowed_sections = get_employee_allowed_sections(access_result["id"], company) if is_employee(access_result) else set()
     if is_works_expenses_only_user(access_result, company):
         return RedirectResponse(url=get_works_expenses_landing_url(), status_code=303)
     if is_works_daily_log_only_employee(access_result, company):
         return RedirectResponse(url="/projects?company=works", status_code=303)
+    return access_result
+
+
+def render_works_sections_page(is_works_partner_read_only: bool = False) -> str:
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+<h1>Urban Rise Works</h1>
+<p>المقاولات</p>
+
+<div class="companies">
+
+<a href="/company/works/finishing" class="company-card works">
+<h2>التشطيب والترميم</h2>
+<p>النظام الحالي للمقاولات</p>
+</a>
+
+<a href="/company/works/maintenance-cleaning" class="company-card works">
+<h2>الصيانة والنظافة</h2>
+<p>مرحلة تأسيس القسم</p>
+</a>
+
+</div>
+
+{"<div class='inventory-note' style='margin-top:18px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_works_partner_read_only else ""}
+
+<br>
+<a href="/" class="glass-btn back-btn">⬅ رجوع</a>
+
+</div>
+"""
+
+
+def render_maintenance_cleaning_page(is_works_partner_read_only: bool = False) -> str:
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+<h1>الصيانة والنظافة</h1>
+<p>Urban Rise Works</p>
+
+<div class="companies">
+
+<a href="/maintenance-cleaning/quotes" class="company-card works">
+<h2>عروض الأسعار</h2>
+</a>
+
+<a href="/maintenance-cleaning/projects" class="company-card works">
+<h2>المشاريع</h2>
+</a>
+
+<a href="/maintenance-cleaning/contracts" class="company-card works">
+<h2>العقود</h2>
+</a>
+
+<a href="/company/works/maintenance-cleaning" class="company-card works">
+<h2>المعدات</h2>
+</a>
+
+</div>
+
+{"<div class='inventory-note' style='margin-top:18px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_works_partner_read_only else ""}
+
+<br>
+<a href="/company/works" class="glass-btn back-btn">⬅ رجوع للأقسام</a>
+
+</div>
+"""
+
+
+def render_company_system_page(company: str, is_works_partner_read_only: bool = False) -> str:
+    names = {
+        "works": "Urban Rise Works",
+        "logistics": "Urban Rise Logistics"
+    }
+
+    body_class = "system-dark logistics-page" if company == "logistics" else "system-dark"
+    company_card_class = f"company-card {company}{' glass-card' if company == 'logistics' else ''}"
+
+    arabic = {
+        "works": "المقاولات",
+        "logistics": "اللوجستيات"
+    }
+    back_url = "/company/works" if company == "works" else "/"
+    back_label = "رجوع للأقسام" if company == "works" else "رجوع"
+    pricing_card = (
+        f'<a href="/works/pricing" class="{company_card_class}"><h2>📊 التسعير</h2><p>مركز بنود وأسعار التنفيذ</p></a>'
+        if company == "works"
+        else ""
+    )
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<script>
+function toggleNewTenantFields(mode) {{
+    const select = document.getElementById(`contract-tenant-select-${{mode}}`);
+    const fields = document.getElementById(`contract-new-tenant-fields-${{mode}}`);
+    if (!select || !fields) return;
+    const isNewTenant = select.value === "__new__";
+    fields.style.display = isNewTenant ? "block" : "none";
+    fields.querySelectorAll("input, select").forEach((field) => {{
+        if (field.name === "new_tenant_name") {{
+            field.required = isNewTenant;
+        }}
+    }});
+}}
+</script>
+<body class="{body_class}">
+{HOME_BUTTON}
+<div class="dashboard">
+<h1>{names.get(company, "")}</h1>
+<p>{arabic.get(company, "")}</p>
+
+<div class="companies">
+
+<a href="/projects?company={company}" class="{company_card_class}">
+<h2>المشاريع</h2>
+</a>
+
+<a href="/quotes?company={company}" class="{company_card_class}">
+<h2>عروض الأسعار</h2>
+</a>
+
+<a href="/employees?company={company}" class="{company_card_class}">
+<h2>الموظفين</h2>
+</a>
+
+<a href="/contracts?company={company}" class="{company_card_class}">
+<h2>العقود</h2>
+</a>
+
+{pricing_card}
+
+{f'<a href="/equipment?company={company}" class="{company_card_class}"><h2>المعدات</h2></a>' if company == 'logistics' else ''}
+
+</div>
+
+{"<div class='inventory-note' style='margin-top:18px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_works_partner_read_only else ""}
+
+<br>
+<a href="{back_url}" class="glass-btn back-btn">⬅ {back_label}</a>
+
+</div>
+"""
+
+
+@app.get("/company/works/finishing", response_class=HTMLResponse)
+def works_finishing_page(request: Request):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    return render_company_system_page("works", is_works_partner_user(access_result, "works"))
+
+
+PRICING_ITEM_CATEGORIES = (
+    "دهانات",
+    "جبس",
+    "بلاط",
+    "كهرباء",
+    "سباكة",
+    "عزل",
+    "هدم",
+    "خرسانة",
+    "نظافة وجلي",
+    "أعمال أخرى",
+)
+
+
+def ensure_pricing_items_table(conn) -> None:
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS pricing_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_name TEXT NOT NULL,
+        category TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        default_price REAL NOT NULL DEFAULT 0,
+        notes TEXT,
+        created_at TEXT NOT NULL
+    )
+    """)
+    conn.commit()
+
+
+def render_pricing_item_form(item=None) -> str:
+    item_id = item["id"] if item else None
+    selected_category = item["category"] if item else PRICING_ITEM_CATEGORIES[0]
+    category_options = "".join(
+        f'<option value="{escape(category)}"{" selected" if category == selected_category else ""}>{escape(category)}</option>'
+        for category in PRICING_ITEM_CATEGORIES
+    )
+    action = f"/works/pricing/items/{item_id}/update" if item else "/works/pricing/items"
+    heading = "تعديل بند التسعير" if item else "إضافة بند جديد"
+    submit_label = "حفظ التعديل" if item else "إضافة البند"
+    cancel_link = '<a href="/works/pricing" class="glass-btn back-btn">إلغاء التعديل</a>' if item else ""
+    item_name = escape(item["item_name"] or "") if item else ""
+    unit = escape(item["unit"] or "") if item else ""
+    default_price = escape(str(item["default_price"] if item else ""))
+    notes = escape(item["notes"] or "") if item else ""
+    return f"""
+    <div class="inventory-panel inventory-table-panel" style="margin:20px auto;max-width:900px;text-align:right;">
+        <h3>{heading}</h3>
+        <form action="{action}" method="post">
+            <label>اسم البند</label>
+            <input type="text" name="item_name" value="{item_name}" required>
+
+            <label>التصنيف</label>
+            <select name="category" required>{category_options}</select>
+
+            <label>الوحدة</label>
+            <input type="text" name="unit" value="{unit}" placeholder="مثال: متر مربع، نقطة، عدد" required>
+
+            <label>السعر الافتراضي</label>
+            <input type="number" name="default_price" value="{default_price}" min="0" step="0.01" required>
+
+            <label>ملاحظات</label>
+            <textarea name="notes" rows="3" style="width:100%;resize:vertical;">{notes}</textarea>
+
+            <div style="display:flex;gap:10px;justify-content:flex-start;flex-wrap:wrap;margin-top:16px;">
+                <button type="submit" class="glass-btn gold-text">{submit_label}</button>
+                {cancel_link}
+            </div>
+        </form>
+    </div>
+    """
+
+
+@app.get("/works/pricing", response_class=HTMLResponse)
+def works_pricing_page(request: Request, edit_id: int | None = None):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, "works")
+
+    conn = get_db()
+    ensure_pricing_items_table(conn)
+    items = conn.execute("SELECT * FROM pricing_items ORDER BY id DESC").fetchall()
+    edit_item = None
+    if edit_id is not None:
+        edit_item = conn.execute("SELECT * FROM pricing_items WHERE id = ?", (edit_id,)).fetchone()
+    conn.close()
+
+    rows = ""
+    for item in items:
+        actions = "-"
+        if not is_read_only_works_partner:
+            actions = f"""
+            <a href="/works/pricing?edit_id={item['id']}" class="action-btn">تعديل</a>
+            <form action="/works/pricing/items/{item['id']}/delete" method="post" style="display:inline;" onsubmit="return confirm('هل تريد حذف بند التسعير؟');">
+                <button type="submit" class="action-btn delete-btn">حذف</button>
+            </form>
+            """
+        rows += f"""
+        <tr>
+            <td>{item['id']}</td>
+            <td>{escape(item['item_name'] or '-')}</td>
+            <td>{escape(item['category'] or '-')}</td>
+            <td>{escape(item['unit'] or '-')}</td>
+            <td>{format_currency(safe_float(item['default_price']))} ريال</td>
+            <td>{escape(item['notes'] or '-')}</td>
+            <td>{escape(item['created_at'] or '-')}</td>
+            <td>{actions}</td>
+        </tr>
+        """
+
+    form_html = "" if is_read_only_works_partner else render_pricing_item_form(edit_item)
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>📊 التسعير</h1>
+    <p>مركز تسعير تمهيدي لبنود التشطيب والترميم</p>
+
+    {"<div class='inventory-note' style='margin:18px auto;max-width:900px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
+    {form_html}
+
+    <div class="inventory-panel inventory-table-panel" style="margin:20px auto;max-width:1200px;">
+        <h3>بنود التسعير</h3>
+        <div style="overflow-x:auto;">
+            <table border="1" style="background:white;margin:auto;width:100%;text-align:center;">
+                <tr><th>الرقم</th><th>اسم البند</th><th>التصنيف</th><th>الوحدة</th><th>السعر الافتراضي</th><th>ملاحظات</th><th>تاريخ الإنشاء</th><th>الإجراءات</th></tr>
+                {rows if rows else "<tr><td colspan='8'>لا توجد بنود تسعير محفوظة</td></tr>"}
+            </table>
+        </div>
+    </div>
+
+    <div class="companies">
+        <div class="company-card works">
+            <h2>سجل الأسعار السابقة</h2>
+            <p>قسم إحصائيات للقراءة، سيتم ربطه ببيانات الأسعار في مرحلة لاحقة.</p>
+        </div>
+        <div class="company-card works">
+            <h2>تكلفة التنفيذ الفعلية</h2>
+            <p>واجهة مبدئية، سيتم ربطها بالمشاريع والمصروفات في مرحلة لاحقة.</p>
+        </div>
+    </div>
+
+    <br>
+    <a href="/company/works/finishing" class="glass-btn back-btn">⬅ رجوع للتشطيب والترميم</a>
+</div>
+"""
+
+
+@app.post("/works/pricing/items")
+def works_pricing_add_item(
+    request: Request,
+    item_name: str = Form(...),
+    category: str = Form(...),
+    unit: str = Form(...),
+    default_price: float = Form(...),
+    notes: str = Form(""),
+):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    clean_item_name = item_name.strip()
+    clean_unit = unit.strip()
+    if not clean_item_name or not clean_unit or category not in PRICING_ITEM_CATEGORIES or default_price < 0:
+        return HTMLResponse("<h2>بيانات بند التسعير غير صحيحة</h2>", status_code=400)
+
+    conn = get_db()
+    ensure_pricing_items_table(conn)
+    conn.execute(
+        """
+        INSERT INTO pricing_items (item_name, category, unit, default_price, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            clean_item_name,
+            category,
+            clean_unit,
+            default_price,
+            notes.strip(),
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url="/works/pricing", status_code=303)
+
+
+@app.post("/works/pricing/items/{item_id}/update")
+def works_pricing_update_item(
+    request: Request,
+    item_id: int,
+    item_name: str = Form(...),
+    category: str = Form(...),
+    unit: str = Form(...),
+    default_price: float = Form(...),
+    notes: str = Form(""),
+):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    clean_item_name = item_name.strip()
+    clean_unit = unit.strip()
+    if not clean_item_name or not clean_unit or category not in PRICING_ITEM_CATEGORIES or default_price < 0:
+        return HTMLResponse("<h2>بيانات بند التسعير غير صحيحة</h2>", status_code=400)
+
+    conn = get_db()
+    ensure_pricing_items_table(conn)
+    conn.execute(
+        """
+        UPDATE pricing_items
+        SET item_name = ?, category = ?, unit = ?, default_price = ?, notes = ?
+        WHERE id = ?
+        """,
+        (clean_item_name, category, clean_unit, default_price, notes.strip(), item_id),
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url="/works/pricing", status_code=303)
+
+
+@app.post("/works/pricing/items/{item_id}/delete")
+def works_pricing_delete_item(request: Request, item_id: int):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+
+    conn = get_db()
+    ensure_pricing_items_table(conn)
+    conn.execute("DELETE FROM pricing_items WHERE id = ?", (item_id,))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url="/works/pricing", status_code=303)
+
+
+@app.get("/company/works/maintenance-cleaning", response_class=HTMLResponse)
+def works_maintenance_cleaning_page(request: Request):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    return render_maintenance_cleaning_page(is_works_partner_user(access_result, "works"))
+
+
+@app.get("/maintenance-cleaning/quotes", response_class=HTMLResponse)
+def maintenance_cleaning_quotes_page(request: Request):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, "works")
+
+    conn = get_db()
+    quotes = conn.execute(
+        "SELECT id, client, service_type, status FROM maintenance_cleaning_quotes ORDER BY id DESC"
+    ).fetchall()
+    conn.close()
+
+    rows = ""
+    for quote_row in quotes:
+        rows += f"""
+        <tr>
+            <td>{quote_row['id']}</td>
+            <td>{escape(quote_row['client'] or '-')}</td>
+            <td>{escape(quote_row['service_type'] or '-')}</td>
+            <td>{escape(quote_row['status'] or '-')}</td>
+            <td><a href="/maintenance-cleaning/quote/{quote_row['id']}" target="_blank">فتح</a></td>
+        </tr>
+        """
+
+    create_card = ""
+    if not is_read_only_works_partner:
+        create_card = """
+        <a href="/maintenance-cleaning/new-quote" class="company-card works">
+            <h2>&#10133; عرض سعر جديد</h2>
+        </a>
+        """
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>عروض أسعار الصيانة والنظافة</h1>
+
+    {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
+    {create_card}
+
+    <br><br>
+
+    <table border="1" style="background:white;margin:auto;width:85%;">
+        <tr>
+            <th>رقم</th>
+            <th>العميل</th>
+            <th>نوع الخدمة</th>
+            <th>الحالة</th>
+            <th>فتح</th>
+        </tr>
+        {rows if rows else "<tr><td colspan='5'>لا توجد عروض أسعار</td></tr>"}
+    </table>
+
+    <br>
+    <a href="/company/works/maintenance-cleaning" class="glass-btn back-btn">⬅ رجوع</a>
+</div>
+"""
+
+
+@app.get("/maintenance-cleaning/new-quote", response_class=HTMLResponse)
+def maintenance_cleaning_new_quote_form(request: Request):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h2>إنشاء عرض سعر - الصيانة والنظافة</h2>
+
+    <form action="/maintenance-cleaning/save-quote" method="post">
+        اسم العميل:
+        <input type="text" name="client" required><br><br>
+
+        رقم الهوية / السجل:
+        <input type="text" name="client_id"><br><br>
+
+        عنوان العميل:
+        <input type="text" name="client_address"><br><br>
+
+        موقع الخدمة:
+        <input type="text" name="service_location"><br><br>
+
+        نوع الخدمة:
+        <select name="service_type">
+            <option value="">اختر نوع الخدمة</option>
+            <option value="صيانة">صيانة</option>
+            <option value="نظافة">نظافة</option>
+            <option value="صيانة ونظافة">صيانة ونظافة</option>
+            <option value="زيارة واحدة">زيارة واحدة</option>
+            <option value="عقد دوري">عقد دوري</option>
+        </select><br><br>
+
+        مدة الخدمة / العقد:
+        <input type="text" name="duration" placeholder="مثال: شهر، سنة، زيارة واحدة"><br><br>
+
+        <button type="submit" class="glass-btn gold-text">إنشاء العرض</button>
+    </form>
+
+    <br>
+    <a href="/maintenance-cleaning/quotes" class="glass-btn back-btn">⬅ رجوع</a>
+</div>
+"""
+
+
+@app.post("/maintenance-cleaning/save-quote")
+def maintenance_cleaning_save_quote(
+    request: Request,
+    client: str = Form(...),
+    client_id: str = Form(""),
+    client_address: str = Form(""),
+    service_location: str = Form(""),
+    service_type: str = Form(""),
+    duration: str = Form(""),
+):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO maintenance_cleaning_quotes (
+            client, status, client_id, client_address, service_location,
+            service_type, duration, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            client.strip(),
+            "جديد",
+            client_id.strip(),
+            client_address.strip(),
+            service_location.strip(),
+            service_type.strip(),
+            duration.strip(),
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+        ),
+    )
+    quote_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    return RedirectResponse(url=f"/maintenance-cleaning/quote/{quote_id}", status_code=303)
+
+
+@app.get("/maintenance-cleaning/quote/{quote_id}", response_class=HTMLResponse)
+def maintenance_cleaning_quote_detail(request: Request, quote_id: int):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, "works")
+
+    conn = get_db()
+    quote_row = conn.execute(
+        "SELECT * FROM maintenance_cleaning_quotes WHERE id = ?",
+        (quote_id,),
+    ).fetchone()
+    items = conn.execute(
+        "SELECT * FROM maintenance_cleaning_quote_items WHERE quote_id = ? ORDER BY id",
+        (quote_id,),
+    ).fetchall()
+    payments = conn.execute(
+        "SELECT * FROM maintenance_cleaning_quote_payments WHERE quote_id = ? ORDER BY id",
+        (quote_id,),
+    ).fetchall()
+    conn.close()
+
+    if not quote_row:
+        return HTMLResponse("<h2>عرض السعر غير موجود</h2>", status_code=404)
+
+    item_rows = ""
+    total = 0.0
+    for item in items:
+        line_total = safe_float(item["qty"]) * safe_float(item["unit_price"])
+        total += line_total
+        item_rows += f"""
+        <tr>
+            <td>{escape(item['description'] or '-')}</td>
+            <td>{format_currency(safe_float(item['qty']))}</td>
+            <td>{format_currency(safe_float(item['unit_price']))}</td>
+            <td>{format_currency(line_total)}</td>
+        </tr>
+        """
+
+    payment_rows = ""
+    for payment in payments:
+        amount = calculate_percentage_amount(total, payment["percentage"])
+        payment_rows += f"""
+        <tr>
+            <td>{escape(payment['title'] or '-')}</td>
+            <td>{format_percentage_display(payment['percentage'])}</td>
+            <td>{format_currency(float(amount))} ريال</td>
+        </tr>
+        """
+
+    item_form = ""
+    payment_form = ""
+    existing_contract = None
+    if not is_read_only_works_partner:
+        item_form = f"""
+        <form action="/maintenance-cleaning/quote/{quote_id}/items" method="post">
+            الوصف:
+            <textarea name="description" rows="5" style="width:100%; resize: vertical;" required></textarea>
+
+            الكمية:
+            <input type="number" step="0.01" name="qty" required>
+
+            سعر الوحدة:
+            <input type="number" step="0.01" name="unit_price" required>
+
+            <button type="submit" class="glass-btn gold-text">&#10133; إضافة بند</button>
+        </form>
+        """
+        payment_form = f"""
+        <form action="/maintenance-cleaning/quote/{quote_id}/payments" method="post">
+            اسم الدفعة:
+            <input type="text" name="title" required>
+
+            النسبة:
+            <input type="number" step="0.01" name="percentage" required>
+
+            <button type="submit" class="glass-btn gold-text">إضافة دفعة</button>
+        </form>
+        """
+    conn = get_db()
+    existing_contract = conn.execute(
+        "SELECT id FROM maintenance_cleaning_contracts WHERE quote_id = ? LIMIT 1",
+        (quote_id,),
+    ).fetchone()
+    existing_project = conn.execute(
+        "SELECT id FROM maintenance_cleaning_projects WHERE quote_id = ? LIMIT 1",
+        (quote_id,),
+    ).fetchone()
+    conn.close()
+
+    convert_html = ""
+    if existing_project:
+        convert_html = f'<a href="/maintenance-cleaning/project/{existing_project["id"]}" class="glass-btn gold-text">فتح المشروع المرتبط</a>'
+    elif existing_contract and not is_read_only_works_partner:
+        convert_html = f"""
+        <form action="/maintenance-cleaning/convert-to-contract/{quote_id}" method="post" style="display:inline-block;">
+            <button type="submit" class="glass-btn gold-text">إنشاء المشروع المرتبط</button>
+        </form>
+        """
+    elif existing_contract:
+        convert_html = f'<a href="/maintenance-cleaning/contract/{existing_contract["id"]}" class="glass-btn gold-text">فتح العقد المرتبط</a>'
+    elif not is_read_only_works_partner:
+        convert_html = f"""
+        <form action="/maintenance-cleaning/convert-to-contract/{quote_id}" method="post" style="display:inline-block;">
+            <button type="submit" class="glass-btn gold-text">تحويل إلى عقد</button>
+        </form>
+        """
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>عرض سعر الصيانة والنظافة</h1>
+    <p>العميل: {escape(quote_row['client'] or '-')}</p>
+    <p>نوع الخدمة: {escape(quote_row['service_type'] or '-')}</p>
+    <p>موقع الخدمة: {escape(quote_row['service_location'] or '-')}</p>
+    <p>مدة الخدمة: {escape(quote_row['duration'] or '-')}</p>
+
+    {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
+    <div style="display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin:18px 0;">
+        {convert_html}
+    </div>
+
+    <div class="inventory-panel inventory-table-panel" style="margin:20px auto;max-width:1000px;text-align:right;">
+        <h3>إضافة بند</h3>
+        {item_form if item_form else "<div class='inventory-note'>العرض فقط</div>"}
+    </div>
+
+    <table border="1" style="background:white;margin:auto;width:90%;text-align:center;">
+        <tr>
+            <th>الوصف</th>
+            <th>الكمية</th>
+            <th>سعر الوحدة</th>
+            <th>الإجمالي</th>
+        </tr>
+        {item_rows if item_rows else "<tr><td colspan='4'>لا توجد بنود</td></tr>"}
+        <tr>
+            <td colspan="3"><strong>الإجمالي</strong></td>
+            <td><strong>{format_currency(total)} ريال</strong></td>
+        </tr>
+    </table>
+
+    <div class="inventory-panel inventory-table-panel" style="margin:20px auto;max-width:1000px;text-align:right;">
+        <h3>إضافة دفعة</h3>
+        {payment_form if payment_form else "<div class='inventory-note'>العرض فقط</div>"}
+    </div>
+
+    <table border="1" style="background:white;margin:auto;width:80%;text-align:center;">
+        <tr>
+            <th>الدفعة</th>
+            <th>النسبة</th>
+            <th>المبلغ</th>
+        </tr>
+        {payment_rows if payment_rows else "<tr><td colspan='3'>لا توجد دفعات</td></tr>"}
+    </table>
+
+    <br>
+    <a href="/maintenance-cleaning/quotes" class="glass-btn back-btn">⬅ رجوع</a>
+</div>
+"""
+
+
+@app.post("/maintenance-cleaning/quote/{quote_id}/items")
+def maintenance_cleaning_add_quote_item(
+    request: Request,
+    quote_id: int,
+    description: str = Form(...),
+    qty: float = Form(...),
+    unit_price: float = Form(...),
+):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+
+    conn = get_db()
+    quote_exists = conn.execute(
+        "SELECT id FROM maintenance_cleaning_quotes WHERE id = ?",
+        (quote_id,),
+    ).fetchone()
+    if quote_exists:
+        conn.execute(
+            """
+            INSERT INTO maintenance_cleaning_quote_items (quote_id, description, qty, unit_price)
+            VALUES (?, ?, ?, ?)
+            """,
+            (quote_id, description.strip(), qty, unit_price),
+        )
+        conn.commit()
+    conn.close()
+
+    return RedirectResponse(url=f"/maintenance-cleaning/quote/{quote_id}", status_code=303)
+
+
+@app.post("/maintenance-cleaning/quote/{quote_id}/payments")
+def maintenance_cleaning_add_quote_payment(
+    request: Request,
+    quote_id: int,
+    title: str = Form(...),
+    percentage: float = Form(...),
+):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+
+    conn = get_db()
+    quote_exists = conn.execute(
+        "SELECT id FROM maintenance_cleaning_quotes WHERE id = ?",
+        (quote_id,),
+    ).fetchone()
+    if quote_exists:
+        conn.execute(
+            """
+            INSERT INTO maintenance_cleaning_quote_payments (quote_id, title, percentage)
+            VALUES (?, ?, ?)
+            """,
+            (quote_id, title.strip(), percentage),
+        )
+        conn.commit()
+    conn.close()
+
+    return RedirectResponse(url=f"/maintenance-cleaning/quote/{quote_id}", status_code=303)
+
+
+@app.post("/maintenance-cleaning/convert-to-contract/{quote_id}")
+def maintenance_cleaning_convert_to_contract(request: Request, quote_id: int):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+
+    conn = get_db()
+    try:
+        quote_row = conn.execute(
+            "SELECT * FROM maintenance_cleaning_quotes WHERE id = ?",
+            (quote_id,),
+        ).fetchone()
+        if not quote_row:
+            return HTMLResponse("<h2>عرض السعر غير موجود</h2>", status_code=404)
+
+        existing_contract = conn.execute(
+            "SELECT * FROM maintenance_cleaning_contracts WHERE quote_id = ? LIMIT 1",
+            (quote_id,),
+        ).fetchone()
+        existing_project = conn.execute(
+            "SELECT id FROM maintenance_cleaning_projects WHERE quote_id = ? LIMIT 1",
+            (quote_id,),
+        ).fetchone()
+        if existing_contract and existing_project:
+            conn.execute(
+                "UPDATE maintenance_cleaning_quotes SET status = ? WHERE id = ?",
+                ("تم التحويل لعقد", quote_id),
+            )
+            conn.commit()
+            return RedirectResponse(
+                url=f"/maintenance-cleaning/project/{existing_project['id']}",
+                status_code=303,
+            )
+
+        items = conn.execute(
+            "SELECT qty, unit_price FROM maintenance_cleaning_quote_items WHERE quote_id = ?",
+            (quote_id,),
+        ).fetchall()
+        contract_value = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
+        project_name = (quote_row["service_location"] or "").strip() or f"عقد صيانة ونظافة عرض {quote_id}"
+        service_type = (quote_row["service_type"] or "").strip()
+        duration_text = (quote_row["duration"] or "").strip()
+        contract_type = "عقد دوري" if ("عقد" in service_type or any(word in duration_text for word in ("شهر", "سنة", "سنوي", "شهري"))) else "زيارة / خدمة"
+
+        if existing_contract:
+            contract_id = existing_contract["id"]
+            client_name = existing_contract["client_name"] or (quote_row["client"] or "").strip()
+            project_name = existing_contract["project_name"] or project_name
+            service_type = existing_contract["service_type"] or service_type
+            contract_type = existing_contract["contract_type"] or contract_type
+            contract_value = safe_float(existing_contract["contract_value"])
+            start_date = existing_contract["start_date"] or ""
+            end_date = existing_contract["end_date"] or ""
+            status = existing_contract["status"] or "ساري"
+        else:
+            client_name = (quote_row["client"] or "").strip()
+            start_date = ""
+            end_date = ""
+            status = "ساري"
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO maintenance_cleaning_contracts (
+                    quote_id, client_name, project_name, service_type, contract_type,
+                    start_date, end_date, contract_value, status, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    quote_id,
+                    client_name,
+                    project_name,
+                    service_type,
+                    contract_type,
+                    start_date,
+                    end_date,
+                    contract_value,
+                    status,
+                    datetime.now().strftime("%Y-%m-%d %H:%M"),
+                ),
+            )
+            contract_id = cur.lastrowid
+
+        if existing_project:
+            project_id = existing_project["id"]
+        else:
+            project_cur = conn.cursor()
+            project_cur.execute(
+                """
+                INSERT INTO maintenance_cleaning_projects (
+                    contract_id, quote_id, project_name, client_name, service_type,
+                    contract_type, location, start_date, end_date, status,
+                    contract_value, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    contract_id,
+                    quote_id,
+                    project_name,
+                    client_name,
+                    service_type,
+                    contract_type,
+                    (quote_row["service_location"] or "").strip(),
+                    start_date,
+                    end_date,
+                    status,
+                    contract_value,
+                    datetime.now().strftime("%Y-%m-%d %H:%M"),
+                ),
+            )
+            project_id = project_cur.lastrowid
+
+        conn.execute(
+            "UPDATE maintenance_cleaning_quotes SET status = ? WHERE id = ?",
+            ("تم التحويل لعقد", quote_id),
+        )
+        conn.commit()
+        return RedirectResponse(url=f"/maintenance-cleaning/project/{project_id}", status_code=303)
+    except Exception as exc:
+        conn.rollback()
+        logger.exception("Failed to convert maintenance cleaning quote %s to contract", quote_id, exc_info=exc)
+        return HTMLResponse("<h2>تعذر تحويل عرض السعر إلى عقد</h2>", status_code=500)
+    finally:
+        conn.close()
+
+
+@app.get("/maintenance-cleaning/contracts", response_class=HTMLResponse)
+def maintenance_cleaning_contracts_page(request: Request):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, "works")
+
+    conn = get_db()
+    contracts = conn.execute(
+        """
+        SELECT id, quote_id, client_name, project_name, service_type, contract_type,
+               contract_value, status, created_at
+        FROM maintenance_cleaning_contracts
+        ORDER BY id DESC
+        """
+    ).fetchall()
+    conn.close()
+
+    rows = ""
+    for contract in contracts:
+        rows += f"""
+        <tr>
+            <td><a href="/maintenance-cleaning/contract/{contract['id']}">{contract['id']}</a></td>
+            <td>{escape(contract['client_name'] or '-')}</td>
+            <td>{escape(contract['project_name'] or '-')}</td>
+            <td>{escape(contract['service_type'] or '-')}</td>
+            <td>{escape(contract['contract_type'] or '-')}</td>
+            <td>{format_currency(safe_float(contract['contract_value']))} ريال</td>
+            <td>{escape(contract['status'] or '-')}</td>
+        </tr>
+        """
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>عقود الصيانة والنظافة</h1>
+
+    {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
+
+    <table border="1" style="background:white;margin:auto;width:90%;">
+        <tr>
+            <th>رقم العقد</th>
+            <th>العميل</th>
+            <th>اسم المشروع / الموقع</th>
+            <th>نوع الخدمة</th>
+            <th>نوع العقد</th>
+            <th>قيمة العقد</th>
+            <th>الحالة</th>
+        </tr>
+        {rows if rows else "<tr><td colspan='7'>لا توجد عقود</td></tr>"}
+    </table>
+
+    <br>
+    <a href="/company/works/maintenance-cleaning" class="glass-btn back-btn">⬅ رجوع</a>
+</div>
+"""
+
+
+@app.get("/maintenance-cleaning/contract/{contract_id}", response_class=HTMLResponse)
+def maintenance_cleaning_contract_detail(request: Request, contract_id: int):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, "works")
+
+    conn = get_db()
+    contract = conn.execute(
+        "SELECT * FROM maintenance_cleaning_contracts WHERE id = ?",
+        (contract_id,),
+    ).fetchone()
+    quote_row = None
+    items = []
+    payments = []
+    if contract:
+        quote_row = conn.execute(
+            "SELECT * FROM maintenance_cleaning_quotes WHERE id = ?",
+            (contract["quote_id"],),
+        ).fetchone()
+        items = conn.execute(
+            "SELECT * FROM maintenance_cleaning_quote_items WHERE quote_id = ? ORDER BY id",
+            (contract["quote_id"],),
+        ).fetchall()
+        payments = conn.execute(
+            "SELECT * FROM maintenance_cleaning_quote_payments WHERE quote_id = ? ORDER BY id",
+            (contract["quote_id"],),
+        ).fetchall()
+    conn.close()
+
+    if not contract:
+        return HTMLResponse("<h2>العقد غير موجود</h2>", status_code=404)
+
+    item_rows = ""
+    for item in items:
+        line_total = safe_float(item["qty"]) * safe_float(item["unit_price"])
+        item_rows += f"""
+        <tr>
+            <td>{escape(item['description'] or '-')}</td>
+            <td>{format_currency(safe_float(item['qty']))}</td>
+            <td>{format_currency(safe_float(item['unit_price']))}</td>
+            <td>{format_currency(line_total)}</td>
+        </tr>
+        """
+
+    payment_rows = ""
+    for payment in payments:
+        amount = calculate_percentage_amount(contract["contract_value"], payment["percentage"])
+        payment_rows += f"""
+        <tr>
+            <td>{escape(payment['title'] or '-')}</td>
+            <td>{format_percentage_display(payment['percentage'])}</td>
+            <td>{format_currency(float(amount))} ريال</td>
+        </tr>
+        """
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>عقد الصيانة والنظافة</h1>
+
+    {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
+
+    <div class="inventory-note" style="margin:18px auto;text-align:right;max-width:900px;">
+        <strong>رقم العقد:</strong> {contract['id']}<br>
+        <strong>عرض السعر:</strong> <a href="/maintenance-cleaning/quote/{contract['quote_id']}">{contract['quote_id']}</a><br>
+        <strong>العميل:</strong> {escape(contract['client_name'] or '-')}<br>
+        <strong>اسم المشروع / الموقع:</strong> {escape(contract['project_name'] or '-')}<br>
+        <strong>نوع الخدمة:</strong> {escape(contract['service_type'] or '-')}<br>
+        <strong>نوع العقد:</strong> {escape(contract['contract_type'] or '-')}<br>
+        <strong>قيمة العقد:</strong> {format_currency(safe_float(contract['contract_value']))} ريال<br>
+        <strong>الحالة:</strong> {escape(contract['status'] or '-')}<br>
+        <strong>تاريخ الإنشاء:</strong> {escape(contract['created_at'] or '-')}
+    </div>
+
+    <table border="1" style="background:white;margin:auto;width:90%;text-align:center;">
+        <tr>
+            <th>الوصف</th>
+            <th>الكمية</th>
+            <th>سعر الوحدة</th>
+            <th>الإجمالي</th>
+        </tr>
+        {item_rows if item_rows else "<tr><td colspan='4'>لا توجد بنود</td></tr>"}
+        <tr>
+            <td colspan="3"><strong>الإجمالي</strong></td>
+            <td><strong>{format_currency(safe_float(contract['contract_value']))} ريال</strong></td>
+        </tr>
+    </table>
+
+    <br>
+
+    <table border="1" style="background:white;margin:auto;width:80%;text-align:center;">
+        <tr>
+            <th>الدفعة</th>
+            <th>النسبة</th>
+            <th>المبلغ</th>
+        </tr>
+        {payment_rows if payment_rows else "<tr><td colspan='3'>لا توجد دفعات</td></tr>"}
+    </table>
+
+    <br>
+    <a href="/maintenance-cleaning/contracts" class="glass-btn back-btn">⬅ رجوع للعقود</a>
+</div>
+"""
+
+
+@app.get("/maintenance-cleaning/projects", response_class=HTMLResponse)
+def maintenance_cleaning_projects_page(request: Request):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, "works")
+
+    conn = get_db()
+    projects = conn.execute(
+        """
+        SELECT id, contract_id, quote_id, project_name, client_name, service_type,
+               contract_type, status, contract_value
+        FROM maintenance_cleaning_projects
+        ORDER BY id DESC
+        """
+    ).fetchall()
+    conn.close()
+
+    rows = ""
+    for project in projects:
+        rows += f"""
+        <tr>
+            <td><a href="/maintenance-cleaning/project/{project['id']}">{project['id']}</a></td>
+            <td>{escape(project['project_name'] or '-')}</td>
+            <td>{escape(project['client_name'] or '-')}</td>
+            <td>{escape(project['service_type'] or '-')}</td>
+            <td>{escape(project['contract_type'] or '-')}</td>
+            <td>{format_currency(safe_float(project['contract_value']))} ريال</td>
+            <td>{escape(project['status'] or '-')}</td>
+        </tr>
+        """
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>مشاريع الصيانة والنظافة</h1>
+
+    {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
+
+    <table border="1" style="background:white;margin:auto;width:90%;">
+        <tr>
+            <th>رقم المشروع</th>
+            <th>اسم المشروع</th>
+            <th>العميل</th>
+            <th>نوع الخدمة</th>
+            <th>نوع العقد</th>
+            <th>قيمة العقد</th>
+            <th>الحالة</th>
+        </tr>
+        {rows if rows else "<tr><td colspan='7'>لا توجد مشاريع</td></tr>"}
+    </table>
+
+    <br>
+    <a href="/company/works/maintenance-cleaning" class="glass-btn back-btn">⬅ رجوع</a>
+</div>
+"""
+
+
+@app.get("/maintenance-cleaning/project/{project_id}", response_class=HTMLResponse)
+def maintenance_cleaning_project_detail(request: Request, project_id: int):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, "works")
+
+    conn = get_db()
+    ensure_maintenance_cleaning_project_tables(conn)
+    project = conn.execute(
+        "SELECT * FROM maintenance_cleaning_projects WHERE id = ?",
+        (project_id,),
+    ).fetchone()
+    if not project:
+        conn.close()
+        return HTMLResponse("<h2>المشروع غير موجود</h2>", status_code=404)
+
+    expenses_total_row = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS total FROM maintenance_cleaning_project_expenses WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()
+    daily_count = conn.execute(
+        "SELECT COUNT(*) AS count FROM maintenance_cleaning_project_daily WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()["count"]
+    visit_counts = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN status = 'مجدولة' THEN 1 ELSE 0 END) AS scheduled,
+            SUM(CASE WHEN status = 'مكتملة' THEN 1 ELSE 0 END) AS completed,
+            SUM(CASE WHEN status = 'ملغاة' THEN 1 ELSE 0 END) AS cancelled
+        FROM maintenance_cleaning_project_visits
+        WHERE project_id = ?
+        """,
+        (project_id,),
+    ).fetchone()
+    equipment_count = conn.execute(
+        "SELECT COUNT(*) AS count FROM maintenance_cleaning_project_equipment WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()["count"]
+    contract = conn.execute(
+        "SELECT id FROM maintenance_cleaning_contracts WHERE id = ?",
+        (project["contract_id"] or 0,),
+    ).fetchone()
+    quote_row = conn.execute(
+        "SELECT id FROM maintenance_cleaning_quotes WHERE id = ?",
+        (project["quote_id"] or 0,),
+    ).fetchone()
+    conn.close()
+
+    contract_value = safe_float(project["contract_value"])
+    expenses_total = safe_float(expenses_total_row["total"] if expenses_total_row else 0)
+    profit = contract_value - expenses_total
+    contract_card = (
+        f'<a href="/maintenance-cleaning/contract/{contract["id"]}" class="company-card works"><h2>العقد المرتبط</h2></a>'
+        if contract
+        else '<div class="company-card works"><h2>العقد المرتبط</h2><p>لا يوجد عقد مرتبط</p></div>'
+    )
+    quote_card = (
+        f'<a href="/maintenance-cleaning/quote/{quote_row["id"]}" class="company-card works"><h2>عرض السعر المرتبط</h2></a>'
+        if quote_row
+        else '<div class="company-card works"><h2>عرض السعر المرتبط</h2><p>لا يوجد عرض سعر مرتبط</p></div>'
+    )
+
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>{escape(project['project_name'] or f"مشروع رقم {project['id']}")}</h1>
+
+    {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
+
+    <div class="inventory-note" style="margin:18px auto;text-align:right;max-width:900px;">
+        <strong>اسم المشروع:</strong> {escape(project['project_name'] or '-')}<br>
+        <strong>العميل:</strong> {escape(project['client_name'] or '-')}<br>
+        <strong>نوع الخدمة:</strong> {escape(project['service_type'] or '-')}<br>
+        <strong>نوع العقد:</strong> {escape(project['contract_type'] or '-')}<br>
+        <strong>الموقع:</strong> {escape(project['location'] or '-')}<br>
+        <strong>تاريخ البداية:</strong> {escape(project['start_date'] or '-')}<br>
+        <strong>تاريخ النهاية:</strong> {escape(project['end_date'] or '-')}<br>
+        <strong>الحالة:</strong> {escape(project['status'] or '-')}
+    </div>
+
+    <h3>قيمة العقد</h3>
+    <p>{format_currency(contract_value)} ريال</p>
+
+    <h3>إجمالي المصروفات</h3>
+    <p>{format_currency(expenses_total)} ريال</p>
+
+    <h3>الربح الحالي</h3>
+    <p>{format_currency(profit)} ريال</p>
+
+    <br><br>
+
+    <div class="companies">
+        <a href="/maintenance-cleaning/project-daily?project_id={project_id}" class="company-card works">
+            <h2>السجل اليومي</h2>
+            <p>{daily_count} سجل</p>
+        </a>
+
+        <a href="/maintenance-cleaning/project-expenses?project_id={project_id}" class="company-card works">
+            <h2>المصروفات</h2>
+            <p>{format_currency(expenses_total)} ريال</p>
+        </a>
+
+        <a href="/maintenance-cleaning/project/{project_id}/visits" class="company-card works">
+            <h2>الزيارات</h2>
+            <p>إجمالي الزيارات: {visit_counts['total'] or 0}</p>
+            <p>المجدولة: {visit_counts['scheduled'] or 0}</p>
+            <p>المكتملة: {visit_counts['completed'] or 0}</p>
+            <p>الملغاة: {visit_counts['cancelled'] or 0}</p>
+        </a>
+
+        <a href="/maintenance-cleaning/project-equipment?project_id={project_id}" class="company-card works">
+            <h2>المعدات</h2>
+            <p>{equipment_count} معدة</p>
+        </a>
+
+        {contract_card}
+        {quote_card}
+    </div>
+
+    <br>
+    <a href="/maintenance-cleaning/projects" class="glass-btn back-btn">⬅ رجوع للمشاريع</a>
+</div>
+"""
+
+
+def ensure_maintenance_cleaning_project_tables(conn) -> None:
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS maintenance_cleaning_project_daily (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER,
+        report TEXT,
+        workers TEXT,
+        date TEXT,
+        notes TEXT,
+        created_at TEXT
+    )
+    """)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS maintenance_cleaning_project_expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER,
+        title TEXT,
+        category TEXT,
+        supplier TEXT,
+        amount REAL,
+        date TEXT,
+        notes TEXT,
+        created_at TEXT
+    )
+    """)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS maintenance_cleaning_project_visits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER,
+        work_order_no TEXT,
+        visit_date TEXT,
+        visit_type TEXT,
+        technician_team TEXT,
+        status TEXT,
+        description TEXT,
+        notes TEXT,
+        created_at TEXT
+    )
+    """)
+    visit_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(maintenance_cleaning_project_visits)").fetchall()
+    }
+    if "visit_type" not in visit_columns:
+        conn.execute("ALTER TABLE maintenance_cleaning_project_visits ADD COLUMN visit_type TEXT")
+    if "technician_team" not in visit_columns:
+        conn.execute("ALTER TABLE maintenance_cleaning_project_visits ADD COLUMN technician_team TEXT")
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS maintenance_cleaning_project_visit_images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        visit_id INTEGER NOT NULL,
+        project_id INTEGER NOT NULL,
+        image_path TEXT NOT NULL,
+        created_at TEXT
+    )
+    """)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS maintenance_cleaning_project_equipment (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER,
+        name TEXT,
+        type TEXT,
+        quantity REAL,
+        status TEXT,
+        notes TEXT,
+        created_at TEXT
+    )
+    """)
+    conn.commit()
+
+
+def get_maintenance_cleaning_project_or_404(conn, project_id: int):
+    ensure_maintenance_cleaning_project_tables(conn)
+    return conn.execute(
+        "SELECT * FROM maintenance_cleaning_projects WHERE id = ?",
+        (project_id,),
+    ).fetchone()
+
+
+@app.get("/maintenance-cleaning/project-daily", response_class=HTMLResponse)
+def maintenance_cleaning_project_daily(request: Request, project_id: int):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, "works")
+
+    conn = get_db()
+    project = get_maintenance_cleaning_project_or_404(conn, project_id)
+    if not project:
+        conn.close()
+        return HTMLResponse("<h2>المشروع غير موجود</h2>", status_code=404)
+    rows_data = conn.execute(
+        "SELECT * FROM maintenance_cleaning_project_daily WHERE project_id = ? ORDER BY date DESC, id DESC",
+        (project_id,),
+    ).fetchall()
+    conn.close()
+
+    rows = ""
+    for row in rows_data:
+        rows += f"""
+        <tr>
+            <td>{escape(row['date'] or '-')}</td>
+            <td>{escape(row['workers'] or '-')}</td>
+            <td>{escape(row['report'] or '-')}</td>
+            <td>{escape(row['notes'] or '-')}</td>
+        </tr>
+        """
+    form_html = "" if is_read_only_works_partner else f"""
+    <div class="inventory-panel inventory-table-panel" style="margin:20px auto;max-width:900px;text-align:right;">
+        <h3>إضافة سجل يومي</h3>
+        <form action="/maintenance-cleaning/project-daily" method="post">
+            <input type="hidden" name="project_id" value="{project_id}">
+            التاريخ: <input type="date" name="date" required><br><br>
+            العمال / الفريق: <input type="text" name="workers"><br><br>
+            التقرير: <textarea name="report" rows="4" style="width:100%;resize:vertical;" required></textarea><br><br>
+            ملاحظات: <textarea name="notes" rows="3" style="width:100%;resize:vertical;"></textarea><br><br>
+            <button type="submit" class="glass-btn gold-text">إضافة</button>
+        </form>
+    </div>
+    """
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>السجل اليومي - {escape(project['project_name'] or '-')}</h1>
+    {form_html}
+    <table border="1" style="background:white;margin:auto;width:90%;text-align:center;">
+        <tr><th>التاريخ</th><th>العمال / الفريق</th><th>التقرير</th><th>ملاحظات</th></tr>
+        {rows if rows else "<tr><td colspan='4'>لا توجد سجلات</td></tr>"}
+    </table>
+    <br>
+    <a href="/maintenance-cleaning/project/{project_id}" class="glass-btn back-btn">⬅ رجوع للمشروع</a>
+</div>
+"""
+
+
+@app.post("/maintenance-cleaning/project-daily")
+def maintenance_cleaning_save_project_daily(request: Request, project_id: int = Form(...), date: str = Form(...), workers: str = Form(""), report: str = Form(...), notes: str = Form("")):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    conn = get_db()
+    if get_maintenance_cleaning_project_or_404(conn, project_id):
+        conn.execute(
+            "INSERT INTO maintenance_cleaning_project_daily (project_id, report, workers, date, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (project_id, report.strip(), workers.strip(), date.strip(), notes.strip(), datetime.now().strftime("%Y-%m-%d %H:%M")),
+        )
+        conn.commit()
+    conn.close()
+    return RedirectResponse(url=f"/maintenance-cleaning/project-daily?project_id={project_id}", status_code=303)
+
+
+@app.get("/maintenance-cleaning/project-expenses", response_class=HTMLResponse)
+def maintenance_cleaning_project_expenses(request: Request, project_id: int):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, "works")
+
+    conn = get_db()
+    project = get_maintenance_cleaning_project_or_404(conn, project_id)
+    if not project:
+        conn.close()
+        return HTMLResponse("<h2>المشروع غير موجود</h2>", status_code=404)
+    rows_data = conn.execute(
+        "SELECT * FROM maintenance_cleaning_project_expenses WHERE project_id = ? ORDER BY date DESC, id DESC",
+        (project_id,),
+    ).fetchall()
+    conn.close()
+
+    total = sum(safe_float(row["amount"]) for row in rows_data)
+    rows = ""
+    for row in rows_data:
+        rows += f"""
+        <tr>
+            <td>{escape(row['date'] or '-')}</td>
+            <td>{escape(row['title'] or '-')}</td>
+            <td>{escape(row['category'] or '-')}</td>
+            <td>{escape(row['supplier'] or '-')}</td>
+            <td>{format_currency(safe_float(row['amount']))} ريال</td>
+            <td>{escape(row['notes'] or '-')}</td>
+        </tr>
+        """
+    form_html = "" if is_read_only_works_partner else f"""
+    <div class="inventory-panel inventory-table-panel" style="margin:20px auto;max-width:900px;text-align:right;">
+        <h3>إضافة مصروف</h3>
+        <form action="/maintenance-cleaning/project-expenses" method="post">
+            <input type="hidden" name="project_id" value="{project_id}">
+            التاريخ: <input type="date" name="date" required><br><br>
+            البيان: <input type="text" name="title" required><br><br>
+            التصنيف: <input type="text" name="category"><br><br>
+            المورد: <input type="text" name="supplier"><br><br>
+            المبلغ: <input type="number" step="0.01" name="amount" required><br><br>
+            ملاحظات: <textarea name="notes" rows="3" style="width:100%;resize:vertical;"></textarea><br><br>
+            <button type="submit" class="glass-btn gold-text">إضافة</button>
+        </form>
+    </div>
+    """
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>مصروفات - {escape(project['project_name'] or '-')}</h1>
+    <h3>إجمالي المصروفات</h3>
+    <p>{format_currency(total)} ريال</p>
+    {form_html}
+    <table border="1" style="background:white;margin:auto;width:90%;text-align:center;">
+        <tr><th>التاريخ</th><th>البيان</th><th>التصنيف</th><th>المورد</th><th>المبلغ</th><th>ملاحظات</th></tr>
+        {rows if rows else "<tr><td colspan='6'>لا توجد مصروفات</td></tr>"}
+    </table>
+    <br>
+    <a href="/maintenance-cleaning/project/{project_id}" class="glass-btn back-btn">⬅ رجوع للمشروع</a>
+</div>
+"""
+
+
+@app.post("/maintenance-cleaning/project-expenses")
+def maintenance_cleaning_save_project_expense(request: Request, project_id: int = Form(...), date: str = Form(...), title: str = Form(...), category: str = Form(""), supplier: str = Form(""), amount: float = Form(...), notes: str = Form("")):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    conn = get_db()
+    if get_maintenance_cleaning_project_or_404(conn, project_id):
+        conn.execute(
+            "INSERT INTO maintenance_cleaning_project_expenses (project_id, title, category, supplier, amount, date, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, title.strip(), category.strip(), supplier.strip(), amount, date.strip(), notes.strip(), datetime.now().strftime("%Y-%m-%d %H:%M")),
+        )
+        conn.commit()
+    conn.close()
+    return RedirectResponse(url=f"/maintenance-cleaning/project-expenses?project_id={project_id}", status_code=303)
+
+
+MAINTENANCE_CLEANING_VISIT_STATUSES = ("مجدولة", "جاري التنفيذ", "مكتملة", "ملغاة")
+
+
+@app.get("/maintenance-cleaning/project-visits")
+def maintenance_cleaning_project_visits_legacy(request: Request, project_id: int):
+    return RedirectResponse(url=f"/maintenance-cleaning/project/{project_id}/visits", status_code=303)
+
+
+@app.get("/maintenance-cleaning/project/{project_id}/visits", response_class=HTMLResponse)
+def maintenance_cleaning_project_visits(request: Request, project_id: int):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, "works")
+
+    conn = get_db()
+    project = get_maintenance_cleaning_project_or_404(conn, project_id)
+    if not project:
+        conn.close()
+        return HTMLResponse("<h2>المشروع غير موجود</h2>", status_code=404)
+    rows_data = conn.execute(
+        "SELECT * FROM maintenance_cleaning_project_visits WHERE project_id = ? ORDER BY visit_date DESC, id DESC",
+        (project_id,),
+    ).fetchall()
+    image_rows = conn.execute(
+        "SELECT visit_id, image_path FROM maintenance_cleaning_project_visit_images WHERE project_id = ? ORDER BY id",
+        (project_id,),
+    ).fetchall()
+    conn.close()
+
+    images_by_visit = {}
+    for image_row in image_rows:
+        images_by_visit.setdefault(image_row["visit_id"], []).append(image_row["image_path"])
+
+    rows = ""
+    for row in rows_data:
+        images = images_by_visit.get(row["id"], [])
+        images_html = "".join(
+            f'<a href="{escape(path)}" target="_blank"><img src="{escape(path)}" alt="صورة الزيارة" style="width:72px;height:72px;object-fit:cover;border-radius:10px;margin:3px;"></a>'
+            for path in images
+        ) or "-"
+        rows += f"""
+        <tr>
+            <td>{escape(row['visit_date'] or '-')}</td>
+            <td>{escape(row['visit_type'] or row['description'] or '-')}</td>
+            <td>{escape(row['technician_team'] or '-')}</td>
+            <td>{escape(row['status'] or '-')}</td>
+            <td>{escape(row['notes'] or '-')}</td>
+            <td>{images_html}</td>
+            <td>{escape(row['created_at'] or '-')}</td>
+        </tr>
+        """
+    status_options = "".join(
+        f'<option value="{status}">{status}</option>'
+        for status in MAINTENANCE_CLEANING_VISIT_STATUSES
+    )
+    form_html = "" if is_read_only_works_partner else f"""
+    <div class="inventory-panel inventory-table-panel" style="margin:20px auto;max-width:900px;text-align:right;">
+        <h3>إضافة زيارة</h3>
+        <form action="/maintenance-cleaning/project/{project_id}/visits" method="post" enctype="multipart/form-data">
+            تاريخ الزيارة: <input type="date" name="visit_date" required><br><br>
+            نوع الزيارة: <input type="text" name="visit_type" required><br><br>
+            اسم الفني أو الفريق: <input type="text" name="technician_team" required><br><br>
+            الحالة:
+            <select name="status" required>
+                {status_options}
+            </select><br><br>
+            ملاحظات: <textarea name="notes" rows="3" style="width:100%;resize:vertical;"></textarea><br><br>
+            صور الزيارة: <input type="file" name="images" accept="image/*" multiple><br><br>
+            <button type="submit" class="glass-btn gold-text">إضافة</button>
+        </form>
+    </div>
+    """
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>الزيارات - {escape(project['project_name'] or '-')}</h1>
+    {form_html}
+    <table border="1" style="background:white;margin:auto;width:96%;text-align:center;">
+        <tr><th>تاريخ الزيارة</th><th>نوع الزيارة</th><th>الفني أو الفريق</th><th>الحالة</th><th>الملاحظات</th><th>الصور</th><th>تاريخ الإنشاء</th></tr>
+        {rows if rows else "<tr><td colspan='7'>لا توجد زيارات</td></tr>"}
+    </table>
+    <br>
+    <a href="/maintenance-cleaning/project/{project_id}" class="glass-btn back-btn">⬅ رجوع للمشروع</a>
+</div>
+"""
+
+
+@app.post("/maintenance-cleaning/project/{project_id}/visits")
+def maintenance_cleaning_save_project_visit(
+    request: Request,
+    project_id: int,
+    visit_date: str = Form(...),
+    visit_type: str = Form(...),
+    technician_team: str = Form(...),
+    status: str = Form(...),
+    notes: str = Form(""),
+    images: list[UploadFile] = File([]),
+):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    clean_status = status.strip()
+    if clean_status not in MAINTENANCE_CLEANING_VISIT_STATUSES:
+        return HTMLResponse("<h2>حالة الزيارة غير صحيحة</h2>", status_code=400)
+
+    conn = get_db()
+    try:
+        if not get_maintenance_cleaning_project_or_404(conn, project_id):
+            return HTMLResponse("<h2>المشروع غير موجود</h2>", status_code=404)
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+        cursor = conn.execute(
+            """
+            INSERT INTO maintenance_cleaning_project_visits
+                (project_id, visit_date, visit_type, technician_team, status, notes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                project_id,
+                visit_date.strip(),
+                visit_type.strip(),
+                technician_team.strip(),
+                clean_status,
+                notes.strip(),
+                created_at,
+            ),
+        )
+        visit_id = cursor.lastrowid
+        for image in images:
+            if not image or not image.filename:
+                continue
+            if not (image.content_type or "").lower().startswith("image/"):
+                continue
+            image_path = save_upload_file(image, "maintenance_visits")
+            if image_path:
+                conn.execute(
+                    """
+                    INSERT INTO maintenance_cleaning_project_visit_images
+                        (visit_id, project_id, image_path, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (visit_id, project_id, image_path, created_at),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+    return RedirectResponse(url=f"/maintenance-cleaning/project/{project_id}/visits", status_code=303)
+
+
+@app.get("/maintenance-cleaning/project-equipment", response_class=HTMLResponse)
+def maintenance_cleaning_project_equipment(request: Request, project_id: int):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    is_read_only_works_partner = is_works_partner_user(access_result, "works")
+
+    conn = get_db()
+    project = get_maintenance_cleaning_project_or_404(conn, project_id)
+    if not project:
+        conn.close()
+        return HTMLResponse("<h2>المشروع غير موجود</h2>", status_code=404)
+    rows_data = conn.execute(
+        "SELECT * FROM maintenance_cleaning_project_equipment WHERE project_id = ? ORDER BY id DESC",
+        (project_id,),
+    ).fetchall()
+    conn.close()
+
+    rows = ""
+    for row in rows_data:
+        rows += f"""
+        <tr>
+            <td>{escape(row['name'] or '-')}</td>
+            <td>{escape(row['type'] or '-')}</td>
+            <td>{format_currency(safe_float(row['quantity']))}</td>
+            <td>{escape(row['status'] or '-')}</td>
+            <td>{escape(row['notes'] or '-')}</td>
+        </tr>
+        """
+    form_html = "" if is_read_only_works_partner else f"""
+    <div class="inventory-panel inventory-table-panel" style="margin:20px auto;max-width:900px;text-align:right;">
+        <h3>إضافة معدة</h3>
+        <form action="/maintenance-cleaning/project-equipment" method="post">
+            <input type="hidden" name="project_id" value="{project_id}">
+            اسم المعدة: <input type="text" name="name" required><br><br>
+            النوع: <input type="text" name="type"><br><br>
+            الكمية: <input type="number" step="0.01" name="quantity" value="1"><br><br>
+            الحالة: <input type="text" name="status" value="متاحة"><br><br>
+            ملاحظات: <textarea name="notes" rows="3" style="width:100%;resize:vertical;"></textarea><br><br>
+            <button type="submit" class="glass-btn gold-text">إضافة</button>
+        </form>
+    </div>
+    """
+    return f"""
+<meta charset="UTF-8">
+<link rel="stylesheet" href="/static/style.css">
+<body class="system-dark">
+{HOME_BUTTON}
+<div class="dashboard">
+    <h1>المعدات - {escape(project['project_name'] or '-')}</h1>
+    {form_html}
+    <table border="1" style="background:white;margin:auto;width:90%;text-align:center;">
+        <tr><th>اسم المعدة</th><th>النوع</th><th>الكمية</th><th>الحالة</th><th>ملاحظات</th></tr>
+        {rows if rows else "<tr><td colspan='5'>لا توجد معدات</td></tr>"}
+    </table>
+    <br>
+    <a href="/maintenance-cleaning/project/{project_id}" class="glass-btn back-btn">⬅ رجوع للمشروع</a>
+</div>
+"""
+
+
+@app.post("/maintenance-cleaning/project-equipment")
+def maintenance_cleaning_save_project_equipment(request: Request, project_id: int = Form(...), name: str = Form(...), type: str = Form(""), quantity: float = Form(1), status: str = Form(""), notes: str = Form("")):
+    access_result = get_company_page_access(request, "works")
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, "works")
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    conn = get_db()
+    if get_maintenance_cleaning_project_or_404(conn, project_id):
+        conn.execute(
+            "INSERT INTO maintenance_cleaning_project_equipment (project_id, name, type, quantity, status, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (project_id, name.strip(), type.strip(), quantity, status.strip(), notes.strip(), datetime.now().strftime("%Y-%m-%d %H:%M")),
+        )
+        conn.commit()
+    conn.close()
+    return RedirectResponse(url=f"/maintenance-cleaning/project-equipment?project_id={project_id}", status_code=303)
+
+@app.get("/company/{company}", response_class=HTMLResponse)
+def company_page(request: Request, company: str):
+    access_result = get_company_page_access(request, company)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    allowed_sections = get_employee_allowed_sections(access_result["id"], company) if is_employee(access_result) else set()
     is_works_partner_read_only = is_works_partner_user(access_result, company)
 
     if company == "realestate":
@@ -4835,71 +6691,10 @@ def company_page(request: Request, company: str):
 </div>
 """
 
-    names = {
-        "works": "Urban Rise Works",
-        "logistics": "Urban Rise Logistics"
-    }
+    if company == "works":
+        return render_works_sections_page(is_works_partner_read_only)
 
-    body_class = "system-dark logistics-page" if company == "logistics" else "system-dark"
-    company_card_class = f"company-card {company}{' glass-card' if company == 'logistics' else ''}"
-
-    arabic = {
-        "works": "المقاولات",
-        "logistics": "اللوجستيات"
-    }
-
-    return f"""
-<meta charset="UTF-8">
-<link rel="stylesheet" href="/static/style.css">
-<script>
-function toggleNewTenantFields(mode) {{
-    const select = document.getElementById(`contract-tenant-select-${{mode}}`);
-    const fields = document.getElementById(`contract-new-tenant-fields-${{mode}}`);
-    if (!select || !fields) return;
-    const isNewTenant = select.value === "__new__";
-    fields.style.display = isNewTenant ? "block" : "none";
-    fields.querySelectorAll("input, select").forEach((field) => {{
-        if (field.name === "new_tenant_name") {{
-            field.required = isNewTenant;
-        }}
-    }});
-}}
-</script>
-<body class="{body_class}">
-{HOME_BUTTON}
-<div class="dashboard">
-<h1>{names.get(company, "")}</h1>
-<p>{arabic.get(company, "")}</p>
-
-<div class="companies">
-
-<a href="/projects?company={company}" class="{company_card_class}">
-<h2>المشاريع</h2>
-</a>
-
-<a href="/quotes?company={company}" class="{company_card_class}">
-<h2>عروض الأسعار</h2>
-</a>
-
-<a href="/employees?company={company}" class="{company_card_class}">
-<h2>الموظفين</h2>
-</a>
-
-<a href="/contracts?company={company}" class="{company_card_class}">
-<h2>العقود</h2>
-</a>
-
-{f'<a href="/equipment?company={company}" class="{company_card_class}"><h2>المعدات</h2></a>' if company == 'logistics' else ''}
-
-</div>
-
-{"<div class='inventory-note' style='margin-top:18px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_works_partner_read_only else ""}
-
-<br>
-<a href="/" class="glass-btn back-btn">⬅ رجوع</a>
-
-</div>
-"""
+    return render_company_system_page(company, is_works_partner_read_only)
 
 # ======================
 # المشاريع
