@@ -1383,7 +1383,11 @@ ensure_upload_dirs()
 
 
 @app.get("/uploads/{file_path:path}")
-def serve_uploaded_file(file_path: str):
+def serve_uploaded_file(request: Request, file_path: str):
+    user = getattr(request.state, "current_user", None) or get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=303)
+
     uploads_root = os.path.abspath(get_uploads_root())
     requested_full_path = os.path.abspath(
         os.path.join(uploads_root, str(file_path).replace("/", os.sep).replace("\\", os.sep))
@@ -4509,7 +4513,12 @@ async def authentication_middleware(request: Request, call_next):
         if (
             request.state.current_user
             and request.state.current_user["role"] == "client"
-            and not (path == "/client-portal" or path.startswith("/client-portal/") or path == "/logout")
+            and not (
+                path == "/client-portal"
+                or path.startswith("/client-portal/")
+                or path.startswith("/uploads/")
+                or path == "/logout"
+            )
         ):
             return RedirectResponse(url="/client-portal", status_code=303)
 
