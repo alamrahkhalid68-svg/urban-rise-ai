@@ -7,3 +7,4 @@ Werkzeug
 arabic-reshaper
 python-bidi
 reportlab
+qrcode[pil]

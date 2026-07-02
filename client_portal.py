@@ -12,6 +12,9 @@ import os
 import logging
 import sqlite3
 import re
+import secrets
+import time
+from io import BytesIO
 import uuid
 
 from fastapi import File, Form, Request, UploadFile
@@ -38,6 +41,8 @@ PHASE_STATUSES = {"not_started", "in_progress", "completed", "awaiting_client", 
 REQUEST_STATUSES = {"new", "reviewing", "assigned", "awaiting_client", "approved", "implemented", "rejected", "closed"}
 REQUEST_TYPES = {"change", "inquiry", "note", "maintenance", "materials"}
 logger = logging.getLogger("urbanrise.client_requests")
+PORTAL_HOME_URL = "https://urban-rise-ai.onrender.com/"
+ACCESS_CARD_DIR = Path("tmp/client_portal_access_cards")
 
 
 def _now():
@@ -191,6 +196,69 @@ def _save_upload(upload, folder="requests"):
         while chunk := upload.file.read(1024 * 1024):
             output.write(chunk)
     return "/" + target.as_posix()
+
+
+def _build_client_access_card(project, client_name, username, password, token):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+    import qrcode
+    from main import format_arabic_pdf_text, get_pdf_report_font_name
+
+    ACCESS_CARD_DIR.mkdir(parents=True, exist_ok=True)
+    for old_file in ACCESS_CARD_DIR.glob("*.pdf"):
+        try:
+            if time.time() - old_file.stat().st_mtime > 86400:
+                old_file.unlink()
+        except OSError:
+            pass
+    output = ACCESS_CARD_DIR / f"access_{int(project['id'])}_{token}.pdf"
+    width, height = A4
+    pdf = canvas.Canvas(str(output), pagesize=A4)
+    pdf.setTitle(f"Client Portal Access {project['id']}")
+    background = Path("static/images/bg.jpg")
+    if background.exists():
+        pdf.drawImage(str(background), 0, 0, width=width, height=height, preserveAspectRatio=False, mask="auto")
+    else:
+        pdf.setFillColor(colors.HexColor("#071815")); pdf.rect(0, 0, width, height, fill=1, stroke=0)
+    pdf.saveState(); pdf.setFillAlpha(.78); pdf.setFillColor(colors.HexColor("#061b18")); pdf.rect(0, 0, width, height, fill=1, stroke=0); pdf.restoreState()
+    font = get_pdf_report_font_name()
+    gold = colors.HexColor("#E1BC72"); white = colors.HexColor("#FFFFFF"); muted = colors.HexColor("#C6D2CE")
+    margin = 42; card_x = margin; card_y = 92; card_w = width - margin * 2; card_h = height - 150
+    pdf.saveState(); pdf.setFillAlpha(.82); pdf.setFillColor(colors.HexColor("#0B2924")); pdf.roundRect(card_x, card_y, card_w, card_h, 22, fill=1, stroke=0); pdf.restoreState()
+    pdf.setStrokeColor(colors.HexColor("#C79E55")); pdf.setLineWidth(1); pdf.roundRect(card_x, card_y, card_w, card_h, 22, fill=0, stroke=1)
+    right = card_x + card_w - 34
+    def ar(text, y, size=12, color=white):
+        pdf.setFont(font, size); pdf.setFillColor(color); pdf.drawRightString(right, y, format_arabic_pdf_text(text))
+    ar("عميلنا العزيز", height - 125, 25, gold)
+    ar("تم إنشاء بوابة خاصة لمتابعة مشروعكم عبر منصة Urban Rise AI.", height - 161, 13, white)
+    ar("من خلال البوابة يمكنكم متابعة آخر تحديثات المشروع، الصور اليومية،", height - 191, 11, muted)
+    ar("المستندات، الدفعات، وطلبات التعديل بكل سهولة ووضوح.", height - 212, 11, muted)
+    pdf.setStrokeColor(colors.HexColor("#8C7142")); pdf.line(card_x + 32, height - 232, right, height - 232)
+    ar("بيانات الدخول", height - 266, 16, gold)
+    labels = [("اسم العميل", client_name or "-"), ("اسم المشروع", project["name"] or "-"), ("اسم المستخدم", username), ("كلمة المرور", password)]
+    y = height - 300
+    for label, value in labels:
+        ar(f"{label}:", y, 10, muted)
+        if label in {"اسم المستخدم", "كلمة المرور"}:
+            pdf.setFont("Helvetica-Bold", 12); pdf.setFillColor(white); pdf.drawString(card_x + 38, y, str(value))
+        else:
+            ar(str(value), y - 17, 12, white)
+            y -= 17
+        y -= 32
+    ar("رابط الدخول:", y, 10, muted)
+    pdf.setFont("Helvetica", 10); pdf.setFillColor(white); pdf.drawString(card_x + 38, y - 19, PORTAL_HOME_URL)
+    qr = qrcode.QRCode(version=3, box_size=8, border=2); qr.add_data(PORTAL_HOME_URL); qr.make(fit=True)
+    qr_buffer = BytesIO(); qr.make_image(fill_color="#14201d", back_color="#f7f1e4").save(qr_buffer, format="PNG"); qr_buffer.seek(0)
+    qr_size = 112; pdf.drawImage(ImageReader(qr_buffer), card_x + 38, card_y + 92, qr_size, qr_size, mask="auto")
+    ar("امسح الرمز لفتح الصفحة الرئيسية", card_y + 136, 10, muted)
+    ar("يرجى الاحتفاظ ببيانات الدخول وعدم مشاركتها مع أي طرف غير مخول.", card_y + 61, 10, gold)
+    pdf.setFont(font, 13); pdf.setFillColor(white); pdf.drawCentredString(width / 2, 60, format_arabic_pdf_text("معكم في كل خطوة"))
+    pdf.setFont("Helvetica-Bold", 12); pdf.setFillColor(gold); pdf.drawCentredString(width / 2, 40, "Urban Rise AI")
+    pdf.setFont(font, 9); pdf.setFillColor(muted); pdf.drawCentredString(width / 2, 24, format_arabic_pdf_text("منصة متابعة مشاريع العملاء"))
+    pdf.showPage(); pdf.save()
+    return output
 
 
 def _request_attachments(conn, request_ids):
@@ -564,7 +632,8 @@ def register_client_portal(app):
         context.update(request=request, all_daily=all_daily, all_documents=all_docs, clients=clients,
                        login_url=str(request.base_url).rstrip('/') + '/login', source_contract=source_contract,
                        source_appendices=source_appendices, source_receipts=source_receipts,
-                       source_payments=source_payments, controls=controls, created_credentials=created_credentials)
+                       source_payments=source_payments, controls=controls, created_credentials=created_credentials,
+                       group_home_url=PORTAL_HOME_URL)
         conn.close()
         return TEMPLATES.TemplateResponse(request, "client_portal_admin.html", context)
 
@@ -655,9 +724,42 @@ def register_client_portal(app):
         if active:
             _ensure_settings(conn,project_id)
             conn.execute("UPDATE client_portal_settings SET enabled=1,published=1,updated_at=? WHERE project_id=?",(_now(),project_id))
-        conn.commit();conn.close()
-        request.state.client_created_credentials={"username":username,"password":password,"login_url":"/login"}
+        conn.commit(); project=conn.execute("SELECT * FROM projects WHERE id=?",(project_id,)).fetchone();conn.close()
+        token=secrets.token_urlsafe(24); access_card_url=""
+        try:
+            _build_client_access_card(project,full_name.strip() or (project["client"] or ""),username,password,token)
+            access_card_url=f"/admin/project/{project_id}/client-portal/access-card.pdf?token={token}"
+        except Exception:
+            logger.exception("Unable to build client portal access card for project %s",project_id)
+        request.state.client_created_credentials={"username":username,"password":password,"login_url":"/login","access_card_url":access_card_url}
         return admin_client_portal(request,project_id)
+
+    @app.get("/admin/project/{project_id}/client-portal/access-card.pdf")
+    def download_access_card(request:Request,project_id:int,token:str=""):
+        if not _admin(request): return HTMLResponse("غير مصرح",403)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{20,80}",token or ""): return HTMLResponse("البطاقة غير متاحة؛ أنشئ بطاقة جديدة",404)
+        path=ACCESS_CARD_DIR / f"access_{project_id}_{token}.pdf"
+        if not path.exists(): return HTMLResponse("انتهت صلاحية البطاقة؛ أعد إنشاءها",404)
+        return FileResponse(path,media_type="application/pdf",filename=f"client_portal_access_{project_id}.pdf")
+
+    @app.post("/admin/project/{project_id}/client-portal/reset-access-card")
+    def reset_access_card(request:Request,project_id:int,client_user_id:int=Form(...)):
+        if not _admin(request): return HTMLResponse("غير مصرح",403)
+        conn=get_db(); client=conn.execute("""SELECT u.* FROM users u JOIN client_project_access a ON a.user_id=u.id
+                                              WHERE u.id=? AND a.project_id=? AND u.role='client'""",(client_user_id,project_id)).fetchone()
+        project=conn.execute("SELECT * FROM projects WHERE id=?",(project_id,)).fetchone()
+        if not client or not project: conn.close(); return HTMLResponse("حساب العميل أو المشروع غير موجود",404)
+        temporary_password="UR-"+secrets.token_urlsafe(9)
+        stored=generate_password_hash(temporary_password) if generate_password_hash else temporary_password
+        token=secrets.token_urlsafe(24)
+        try:
+            path=_build_client_access_card(project,client["full_name"] or project["client"] or "",client["username"],temporary_password,token)
+        except Exception:
+            conn.close()
+            logger.exception("Unable to reset and build access card for project %s",project_id)
+            return HTMLResponse("تعذر إنشاء بطاقة الدخول",500)
+        conn.execute("UPDATE users SET password=?,is_active=1 WHERE id=?",(stored,client_user_id));conn.commit();conn.close()
+        return FileResponse(path,media_type="application/pdf",filename=f"client_portal_access_{project_id}.pdf")
 
     @app.post("/admin/project/{project_id}/client-portal/status")
     def update_portal_status(request: Request, project_id: int, action: str = Form(...)):
