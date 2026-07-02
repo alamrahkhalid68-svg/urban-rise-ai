@@ -1606,6 +1606,169 @@ code{{white-space:normal;word-break:break-all}}.yes{{color:#087830}}.no{{color:#
 </body></html>"""
 
 
+@app.get("/admin/debug/client-portal-daily/{project_id}", response_class=HTMLResponse)
+def admin_debug_client_portal_daily(request: Request, project_id: int):
+    current_user = require_role(request, {"admin"})
+    if not isinstance(current_user, sqlite3.Row):
+        return current_user
+
+    from client_portal import public_upload_url
+
+    conn = get_db()
+    try:
+        settings = conn.execute(
+            "SELECT * FROM client_portal_settings WHERE project_id=?", (project_id,)
+        ).fetchone()
+        access_rows = conn.execute(
+            """SELECT a.*,u.username,u.full_name,u.role,u.is_active
+               FROM client_project_access a
+               JOIN users u ON u.id=a.user_id
+               WHERE a.project_id=? ORDER BY a.id""",
+            (project_id,),
+        ).fetchall()
+        control_rows = conn.execute(
+            "SELECT * FROM client_portal_item_controls WHERE project_id=?",
+            (project_id,),
+        ).fetchall()
+        daily_source = conn.execute(
+            "SELECT * FROM project_daily WHERE project_id=? ORDER BY date DESC,id DESC",
+            (project_id,),
+        ).fetchall()
+        target_rows = conn.execute(
+            "SELECT id,project_id,date FROM project_daily WHERE id IN (113,114,115) ORDER BY id DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    controls = {(row["item_type"], int(row["item_id"])): row for row in control_rows}
+    source_debug = []
+    final_daily = []
+    exclusion_reasons = {}
+
+    # This block intentionally mirrors client_portal._project_context daily preparation.
+    for position, row in enumerate(daily_source, start=1):
+        report_override = controls.get(("daily", int(row["id"])))
+        image_override = controls.get(("daily_image", int(row["id"])))
+        client_report_visible = bool(report_override["visible_to_client"]) if report_override else True
+        attachment_path = row["attachment_path"] or ""
+        attachment_url = public_upload_url(attachment_path, "project_daily")
+        client_image_visible = bool(
+            attachment_path and (bool(image_override["visible_to_client"]) if image_override else True)
+        )
+        source_debug.append({
+            "row": row,
+            "position": position,
+            "attachment_url": attachment_url,
+            "client_report_visible": client_report_visible,
+            "client_image_visible": client_image_visible,
+            "report_override": report_override,
+            "image_override": image_override,
+        })
+        if not client_report_visible:
+            exclusion_reasons[int(row["id"])] = "visibility override hides the report"
+            continue
+        if len(final_daily) < 3:
+            item = dict(row)
+            item["client_summary"] = (
+                report_override["client_summary"]
+                if report_override and report_override["client_summary"]
+                else item.get("client_summary")
+            ) or ""
+            item["client_image_visible"] = client_image_visible
+            item["attachment_url"] = attachment_url
+            final_daily.append(item)
+        else:
+            exclusion_reasons[int(row["id"])] = (
+                "excluded by the 3-item limit after ORDER BY date DESC, id DESC"
+            )
+
+    final_ids = [int(item["id"]) for item in final_daily]
+    source_ids = [int(item["row"]["id"]) for item in source_debug]
+    for item in source_debug:
+        daily_id = int(item["row"]["id"])
+        if daily_id not in final_ids and daily_id not in exclusion_reasons:
+            exclusion_reasons[daily_id] = (
+                "excluded by the 3-item limit after ORDER BY date DESC, id DESC"
+            )
+
+    target_map = {int(row["id"]): row for row in target_rows}
+    target_results = []
+    for target_id in (115, 114, 113):
+        target = target_map.get(target_id)
+        if target_id in final_ids:
+            result = "YES — included in final daily"
+        elif target_id in exclusion_reasons:
+            result = "NO — " + exclusion_reasons[target_id]
+        elif target:
+            result = f"NO — report belongs to project_id={target['project_id']}, not requested project_id={project_id}"
+        else:
+            result = "NO — report ID does not exist in project_daily"
+        target_results.append(f"<li><b>ID {target_id}:</b> {escape(result)}</li>")
+
+    source_rows_html = "".join(
+        "<tr>"
+        f"<td>{item['position']}</td><td>{item['row']['id']}</td>"
+        f"<td>{escape(str(item['row']['date'] or ''))}</td>"
+        f"<td>{escape(str(item['row']['report'] or ''))}</td>"
+        f"<td><code>{escape(str(item['row']['attachment_path'] or ''))}</code></td>"
+        f"<td><code>{escape(item['attachment_url'])}</code></td>"
+        f"<td>{item['client_report_visible']}</td>"
+        f"<td>{item['client_image_visible']}</td>"
+        f"<td>{item['report_override'] is not None}</td>"
+        f"<td>{item['image_override'] is not None}</td>"
+        f"<td>{escape(exclusion_reasons.get(int(item['row']['id']), 'included or evaluated before limit'))}</td>"
+        "</tr>"
+        for item in source_debug
+    ) or '<tr><td colspan="11">No daily reports found for this project</td></tr>'
+
+    final_rows_html = "".join(
+        "<tr>"
+        f"<td>{index}</td><td>{item['id']}</td><td>{escape(str(item['date'] or ''))}</td>"
+        f"<td>{escape(str(item.get('client_summary') or item.get('report') or ''))}</td>"
+        f"<td><code>{escape(item.get('attachment_url') or '')}</code></td>"
+        f"<td>{bool(item.get('client_image_visible'))}</td>"
+        f"<td>{bool(item.get('attachment_url') and item.get('client_image_visible'))}</td>"
+        "</tr>"
+        for index, item in enumerate(final_daily, start=1)
+    ) or '<tr><td colspan="7">Final daily list is empty</td></tr>'
+
+    access_html = "".join(
+        "<tr>"
+        f"<td>{row['user_id']}</td><td>{escape(str(row['username']))}</td>"
+        f"<td>{row['is_active']}</td><td>{row['portal_enabled']}</td>"
+        f"<td>{row['portal_published']}</td>"
+        "</tr>"
+        for row in access_rows
+    ) or '<tr><td colspan="5">No client access rows for this project</td></tr>'
+
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Client portal daily diagnostics</title>
+<style>
+body{{font-family:Arial,sans-serif;margin:24px;background:#f5f7f8;color:#17202a}}
+section{{background:#fff;padding:16px;margin:16px 0;border:1px solid #d9e0e4;border-radius:8px;overflow:auto}}
+table{{border-collapse:collapse;width:100%;font-size:13px}}th,td{{border:1px solid #ccd6dc;padding:7px;text-align:left;vertical-align:top}}
+code{{white-space:normal;word-break:break-all}}
+</style></head><body>
+<h1>Client portal final daily diagnostics</h1>
+<section><h2>Requested project</h2><p><b>project_id:</b> {project_id}</p></section>
+<section><h2>Portal state</h2>
+<p><b>settings.enabled:</b> {settings['enabled'] if settings else 'no settings row'}<br>
+<b>settings.published:</b> {settings['published'] if settings else 'no settings row'}</p>
+<table><thead><tr><th>Client user ID</th><th>Username</th><th>User active</th><th>Access enabled</th><th>Access published</th></tr></thead>
+<tbody>{access_html}</tbody></table></section>
+<section><h2>All source reports before filtering</h2>
+<p>Exact source order: <code>ORDER BY date DESC, id DESC</code></p>
+<table><thead><tr><th>Position</th><th>ID</th><th>Date</th><th>Report</th><th>attachment_path</th>
+<th>attachment_url</th><th>Report visible</th><th>Image visible</th><th>Report override</th><th>Image override</th><th>Outcome/reason</th></tr></thead>
+<tbody>{source_rows_html}</tbody></table></section>
+<section><h2>Final daily list sent to the template</h2>
+<table><thead><tr><th>Position</th><th>ID</th><th>Date</th><th>Report/note</th><th>attachment_url</th>
+<th>client_image_visible</th><th>Template image condition</th></tr></thead><tbody>{final_rows_html}</tbody></table></section>
+<section><h2>Required ID checks</h2><ul>{''.join(target_results)}</ul>
+<p><b>Final IDs:</b> {escape(str(final_ids))}</p></section>
+</body></html>"""
+
+
 PROJECT_EXPENSE_CATEGORIES = [
     "مواد",
     "أجور",
