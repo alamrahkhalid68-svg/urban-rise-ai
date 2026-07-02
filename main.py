@@ -1390,16 +1390,155 @@ def serve_uploaded_file(file_path: str):
     )
     resolved_path = resolve_upload_path(f"/uploads/{file_path}")
     full_path = resolved_path or requested_full_path
-    logger.info(
-        "uploads.request file_path=%s upload_root=%s full_path=%s exists=%s",
-        file_path,
-        uploads_root,
-        full_path,
-        os.path.isfile(full_path),
-    )
+    logger.warning("UPLOAD_DEBUG file_path=%s", file_path)
+    logger.warning("UPLOAD_DEBUG upload_root=%s", uploads_root)
+    logger.warning("UPLOAD_DEBUG full_path=%s", full_path)
+    logger.warning("UPLOAD_DEBUG exists=%s", os.path.exists(full_path))
+    logger.warning("UPLOAD_DEBUG is_file=%s", os.path.isfile(full_path))
     if not resolved_path:
         return HTMLResponse("<h2>الملف غير موجود</h2>", status_code=404)
     return FileResponse(resolved_path, filename=os.path.basename(resolved_path))
+
+
+def _debug_path_listing(path: str) -> list[dict]:
+    absolute_path = os.path.abspath(path)
+    if not os.path.isdir(absolute_path):
+        return []
+    try:
+        rows = []
+        for name in sorted(os.listdir(absolute_path)):
+            item_path = os.path.join(absolute_path, name)
+            try:
+                stat = os.stat(item_path)
+                rows.append({
+                    "name": name,
+                    "type": "directory" if os.path.isdir(item_path) else "file",
+                    "size": stat.st_size if os.path.isfile(item_path) else "-",
+                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(sep=" ", timespec="seconds"),
+                })
+            except OSError as exc:
+                rows.append({"name": name, "type": "error", "size": "-", "modified": str(exc)})
+        return rows
+    except OSError as exc:
+        return [{"name": "<listing error>", "type": "error", "size": "-", "modified": str(exc)}]
+
+
+def _debug_path_section(path: str) -> str:
+    absolute_path = os.path.abspath(path)
+    exists = os.path.exists(absolute_path)
+    items = _debug_path_listing(absolute_path)
+    item_rows = "".join(
+        f"<tr><td>{escape(str(item['name']))}</td><td>{escape(str(item['type']))}</td>"
+        f"<td>{escape(str(item['size']))}</td><td>{escape(str(item['modified']))}</td></tr>"
+        for item in items
+    ) or '<tr><td colspan="4">Empty, missing, or not a directory</td></tr>'
+    return (
+        f"<section><h3>{escape(path)}</h3>"
+        f"<p><b>Absolute:</b> {escape(absolute_path)}<br><b>Exists:</b> {exists}<br>"
+        f"<b>Is directory:</b> {os.path.isdir(absolute_path)}</p>"
+        f"<table><thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th></tr></thead>"
+        f"<tbody>{item_rows}</tbody></table></section>"
+    )
+
+
+@app.get("/admin/debug/uploads", response_class=HTMLResponse)
+def admin_debug_uploads(request: Request):
+    current_user = require_role(request, {"admin"})
+    if not isinstance(current_user, sqlite3.Row):
+        return current_user
+
+    from db import DB_PATH
+    from client_portal import public_upload_url
+
+    uploads_root = os.path.abspath(get_uploads_root())
+    db_path = os.path.abspath(DB_PATH)
+    db_exists = os.path.isfile(db_path)
+    db_size = os.path.getsize(db_path) if db_exists else None
+    db_modified = (
+        datetime.fromtimestamp(os.path.getmtime(db_path)).isoformat(sep=" ", timespec="seconds")
+        if db_exists else None
+    )
+
+    conn = get_db()
+    try:
+        daily_rows = conn.execute(
+            """SELECT id, project_id, attachment_path, date, created_at
+               FROM project_daily
+               WHERE COALESCE(attachment_path, '') <> ''
+               ORDER BY id DESC LIMIT 10"""
+        ).fetchall()
+    finally:
+        conn.close()
+
+    image_rows = []
+    for row in daily_rows:
+        stored_path = row["attachment_path"] or ""
+        public_url = public_upload_url(stored_path, "project_daily")
+        public_relative = public_url.split("?", 1)[0].lstrip("/")
+        if public_relative.startswith("uploads/"):
+            public_relative = public_relative[len("uploads/"):]
+        full_path = os.path.abspath(os.path.join(uploads_root, public_relative.replace("/", os.sep)))
+        exists = os.path.isfile(full_path)
+        size = os.path.getsize(full_path) if exists else "-"
+        image_rows.append(
+            "<tr>"
+            f"<td>{row['id']}</td><td>{row['id']}</td><td>{row['project_id']}</td>"
+            f"<td><code>{escape(stored_path)}</code></td>"
+            f"<td><code>{escape(public_url)}</code></td>"
+            f"<td><code>{escape(full_path)}</code></td>"
+            f"<td>{exists}</td><td>{size}</td>"
+            f"<td><a href=\"{escape(public_url)}\" target=\"_blank\">Open image</a></td>"
+            "</tr>"
+        )
+
+    paths_to_check = [
+        RENDER_DATA_DIR,
+        os.path.join(RENDER_DATA_DIR, "uploads"),
+        os.path.join(RENDER_DATA_DIR, "uploads", "project_daily"),
+        "/data",
+        "/data/uploads",
+        "/opt/render/project/src/static/uploads",
+        "/opt/render/project/src/uploads",
+        "static/uploads",
+        "data/uploads",
+        "uploads",
+    ]
+    path_sections = "".join(_debug_path_section(path) for path in paths_to_check)
+    render_runtime = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Uploads diagnostics</title>
+<style>
+body{{font-family:Arial,sans-serif;margin:24px;background:#f5f7f8;color:#17202a}}
+section{{background:white;padding:16px;margin:16px 0;border:1px solid #d9e0e4;border-radius:8px;overflow:auto}}
+table{{border-collapse:collapse;width:100%;font-size:13px}}th,td{{border:1px solid #ccd6dc;padding:7px;text-align:left;vertical-align:top}}
+code{{white-space:normal;word-break:break-all}}.yes{{color:#087830}}.no{{color:#b42318}}
+</style></head><body>
+<h1>Render uploads diagnostics</h1>
+<section><h2>Environment</h2><table><tbody>
+<tr><th>Render runtime</th><td>{render_runtime}</td></tr>
+<tr><th>RENDER</th><td>{escape(str(os.getenv('RENDER')))}</td></tr>
+<tr><th>RENDER_SERVICE_ID</th><td>{escape(str(os.getenv('RENDER_SERVICE_ID')))}</td></tr>
+<tr><th>os.getcwd()</th><td><code>{escape(os.getcwd())}</code></td></tr>
+<tr><th>__file__</th><td><code>{escape(os.path.abspath(__file__))}</code></td></tr>
+<tr><th>DATA_DIR</th><td><code>{escape(os.path.abspath(DATA_DIR))}</code></td></tr>
+<tr><th>UPLOADS_DIR</th><td><code>{escape(uploads_root)}</code></td></tr>
+<tr><th>DB_PATH</th><td><code>{escape(db_path)}</code></td></tr>
+<tr><th>DATA_DIR exists</th><td>{os.path.isdir(DATA_DIR)}</td></tr>
+<tr><th>UPLOADS_DIR exists</th><td>{os.path.isdir(uploads_root)}</td></tr>
+<tr><th>DB_PATH exists</th><td>{db_exists}</td></tr>
+<tr><th>DB size</th><td>{db_size}</td></tr>
+<tr><th>DB modified</th><td>{escape(str(db_modified))}</td></tr>
+<tr><th>/opt/render/project/src/data exists</th><td>{os.path.isdir(RENDER_DATA_DIR)}</td></tr>
+<tr><th>/opt/render/project/src/data/uploads exists</th><td>{os.path.isdir(os.path.join(RENDER_DATA_DIR, 'uploads'))}</td></tr>
+<tr><th>/opt/render/project/src/data/urbanrise.db exists</th><td>{os.path.isfile(os.path.join(RENDER_DATA_DIR, 'urbanrise.db'))}</td></tr>
+</tbody></table></section>
+<section><h2>Latest daily report images</h2><table><thead><tr>
+<th>ID</th><th>Report ID</th><th>Project ID</th><th>Stored path</th><th>Public URL</th>
+<th>Full path under UPLOADS_DIR</th><th>Exists</th><th>Size</th><th>Direct test</th>
+</tr></thead><tbody>{''.join(image_rows) or '<tr><td colspan="9">No daily report images found</td></tr>'}</tbody></table></section>
+<h2>Disk and alternative paths</h2>{path_sections}
+</body></html>"""
 
 
 PROJECT_EXPENSE_CATEGORIES = [
