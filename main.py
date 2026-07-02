@@ -1442,7 +1442,7 @@ def _debug_path_section(path: str) -> str:
 
 
 @app.get("/admin/debug/uploads", response_class=HTMLResponse)
-def admin_debug_uploads(request: Request):
+def admin_debug_uploads(request: Request, project_id: int = 0):
     current_user = require_role(request, {"admin"})
     if not isinstance(current_user, sqlite3.Row):
         return current_user
@@ -1461,17 +1461,37 @@ def admin_debug_uploads(request: Request):
 
     conn = get_db()
     try:
-        daily_rows = conn.execute(
-            """SELECT id, project_id, attachment_path, date, created_at
-               FROM project_daily
-               WHERE COALESCE(attachment_path, '') <> ''
-               ORDER BY id DESC LIMIT 10"""
-        ).fetchall()
+        if project_id:
+            daily_rows = conn.execute(
+                "SELECT * FROM project_daily WHERE project_id=? ORDER BY id DESC LIMIT 10",
+                (project_id,),
+            ).fetchall()
+            controls = conn.execute(
+                "SELECT * FROM client_portal_item_controls WHERE project_id=? AND item_type IN ('daily','daily_image')",
+                (project_id,),
+            ).fetchall()
+            portal_settings = conn.execute(
+                "SELECT * FROM client_portal_settings WHERE project_id=?",
+                (project_id,),
+            ).fetchone()
+            client_access = conn.execute(
+                """SELECT a.*,u.username,u.full_name,u.role,u.is_active
+                   FROM client_project_access a JOIN users u ON u.id=a.user_id
+                   WHERE a.project_id=? ORDER BY a.id""",
+                (project_id,),
+            ).fetchall()
+        else:
+            daily_rows = conn.execute("SELECT * FROM project_daily ORDER BY id DESC LIMIT 10").fetchall()
+            controls = []
+            portal_settings = None
+            client_access = []
     finally:
         conn.close()
 
+    controls_map = {(row["item_type"], int(row["item_id"])): row for row in controls}
     image_rows = []
     for row in daily_rows:
+        row_keys = set(row.keys())
         stored_path = row["attachment_path"] or ""
         public_url = public_upload_url(stored_path, "project_daily")
         public_relative = public_url.split("?", 1)[0].lstrip("/")
@@ -1480,16 +1500,45 @@ def admin_debug_uploads(request: Request):
         full_path = os.path.abspath(os.path.join(uploads_root, public_relative.replace("/", os.sep)))
         exists = os.path.isfile(full_path)
         size = os.path.getsize(full_path) if exists else "-"
+        report_control = controls_map.get(("daily", int(row["id"])))
+        image_control = controls_map.get(("daily_image", int(row["id"])))
+        effective_report_visible = bool(report_control["visible_to_client"]) if report_control else True
+        effective_image_visible = bool(image_control["visible_to_client"]) if image_control else True
+        stored_visibility = (
+            row["show_to_client"] if "show_to_client" in row_keys else
+            row["visible_to_client"] if "visible_to_client" in row_keys else
+            row["client_visible"] if "client_visible" in row_keys else "column not present"
+        )
+        report_text = row["report"] if "report" in row_keys else ""
+        image_count = 1 if stored_path else 0
+        open_link = f'<a href="{escape(public_url)}" target="_blank">Open image</a>' if public_url else "-"
         image_rows.append(
             "<tr>"
             f"<td>{row['id']}</td><td>{row['id']}</td><td>{row['project_id']}</td>"
+            f"<td>{escape(str(row['date'] if 'date' in row_keys else ''))}</td>"
+            f"<td>{escape(str(report_text or ''))}</td>"
+            f"<td>{escape(str(stored_visibility))}</td>"
+            f"<td>{effective_report_visible}</td>"
+            f"<td>{bool(stored_path)}</td><td>{image_count}</td>"
             f"<td><code>{escape(stored_path)}</code></td>"
             f"<td><code>{escape(public_url)}</code></td>"
             f"<td><code>{escape(full_path)}</code></td>"
-            f"<td>{exists}</td><td>{size}</td>"
-            f"<td><a href=\"{escape(public_url)}\" target=\"_blank\">Open image</a></td>"
+            f"<td>{exists}</td><td>{size}</td><td>{effective_image_visible}</td>"
+            f"<td>{open_link}</td>"
             "</tr>"
         )
+
+    access_rows = "".join(
+        "<tr>"
+        f"<td>{row['user_id']}</td><td>{escape(str(row['username']))}</td>"
+        f"<td>{escape(str(row['full_name']))}</td><td>{row['project_id']}</td>"
+        f"<td>{row['portal_enabled']}</td><td>{row['portal_published']}</td>"
+        f"<td>{row['is_active']}</td>"
+        "</tr>"
+        for row in client_access
+    ) or '<tr><td colspan="7">No client account is linked to this project</td></tr>'
+    portal_enabled = portal_settings["enabled"] if portal_settings else "no settings row"
+    portal_published = portal_settings["published"] if portal_settings else "no settings row"
 
     paths_to_check = [
         RENDER_DATA_DIR,
@@ -1515,6 +1564,9 @@ table{{border-collapse:collapse;width:100%;font-size:13px}}th,td{{border:1px sol
 code{{white-space:normal;word-break:break-all}}.yes{{color:#087830}}.no{{color:#b42318}}
 </style></head><body>
 <h1>Render uploads diagnostics</h1>
+<section><h2>Project filter</h2>
+<form method="get" action="/admin/debug/uploads"><label>Project ID <input type="number" min="1" name="project_id" value="{project_id or ''}"></label> <button type="submit">Filter</button></form>
+<p><b>Current project_id:</b> {project_id or 'all projects'}</p></section>
 <section><h2>Environment</h2><table><tbody>
 <tr><th>Render runtime</th><td>{render_runtime}</td></tr>
 <tr><th>RENDER</th><td>{escape(str(os.getenv('RENDER')))}</td></tr>
@@ -1533,10 +1585,23 @@ code{{white-space:normal;word-break:break-all}}.yes{{color:#087830}}.no{{color:#
 <tr><th>/opt/render/project/src/data/uploads exists</th><td>{os.path.isdir(os.path.join(RENDER_DATA_DIR, 'uploads'))}</td></tr>
 <tr><th>/opt/render/project/src/data/urbanrise.db exists</th><td>{os.path.isfile(os.path.join(RENDER_DATA_DIR, 'urbanrise.db'))}</td></tr>
 </tbody></table></section>
-<section><h2>Latest daily report images</h2><table><thead><tr>
-<th>ID</th><th>Report ID</th><th>Project ID</th><th>Stored path</th><th>Public URL</th>
-<th>Full path under UPLOADS_DIR</th><th>Exists</th><th>Size</th><th>Direct test</th>
-</tr></thead><tbody>{''.join(image_rows) or '<tr><td colspan="9">No daily report images found</td></tr>'}</tbody></table></section>
+<section><h2>Client portal state for project {project_id or 'all'}</h2>
+<p><b>client_portal_settings.enabled:</b> {portal_enabled}<br><b>client_portal_settings.published:</b> {portal_published}</p>
+<table><thead><tr><th>User ID</th><th>Username</th><th>Name</th><th>Project ID</th><th>Access enabled</th><th>Access published</th><th>User active</th></tr></thead><tbody>{access_rows}</tbody></table></section>
+<section><h2>Latest 10 daily reports for project {project_id or 'all'}</h2><table><thead><tr>
+<th>ID</th><th>Report ID</th><th>Project ID</th><th>Report date</th><th>Report / note</th>
+<th>Stored visibility column</th><th>Effective report visible</th><th>Has image</th><th>Image count</th>
+<th>Stored path</th><th>Public URL</th><th>Full path under UPLOADS_DIR</th><th>Exists</th><th>Size</th>
+<th>Effective image visible</th><th>Direct test</th>
+</tr></thead><tbody>{''.join(image_rows) or '<tr><td colspan="16">No daily reports found</td></tr>'}</tbody></table></section>
+<section><h2>Exact client portal query behavior</h2><ul>
+<li>Filters by project_id: yes.</li><li>Source query: SELECT * FROM project_daily WHERE project_id=? ORDER BY date DESC,id DESC.</li>
+<li>Visibility: client_portal_item_controls item_type=daily overrides visibility; without an override the default is visible.</li>
+<li>Status/type filters: none.</li><li>Limit: the loop stops after 3 visible reports.</li>
+<li>Ordering: date descending, then id descending; created_at is not used.</li>
+<li>Reports without images are included.</li><li>Source table: project_daily; it does not use a separate portal reports table.</li>
+<li>Image visibility: requires attachment_path and client_portal_item_controls item_type=daily_image defaults to visible.</li>
+</ul></section>
 <h2>Disk and alternative paths</h2>{path_sections}
 </body></html>"""
 
