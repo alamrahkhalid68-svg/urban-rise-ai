@@ -1263,6 +1263,8 @@ def normalize_arabic_digits(value: str) -> str:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LEGACY_UPLOADS_DIR = os.path.join(BASE_DIR, "static", "uploads")
 RENDER_DATA_DIR = "/opt/render/project/src/data"
+IS_RENDER_RUNTIME = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+DATA_DIR = RENDER_DATA_DIR if IS_RENDER_RUNTIME else os.path.join(BASE_DIR, "data")
 UPLOAD_CATEGORIES = (
     "contracts",
     "expenses",
@@ -1277,10 +1279,7 @@ UPLOAD_CATEGORIES = (
 
 
 def get_uploads_root() -> str:
-    is_render_runtime = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
-    if is_render_runtime and os.path.isdir(RENDER_DATA_DIR):
-        return os.path.join(RENDER_DATA_DIR, "uploads")
-    return os.path.join(BASE_DIR, "data", "uploads")
+    return os.path.join(DATA_DIR, "uploads")
 
 
 UPLOADS_DIR = get_uploads_root()
@@ -1385,7 +1384,19 @@ ensure_upload_dirs()
 
 @app.get("/uploads/{file_path:path}")
 def serve_uploaded_file(file_path: str):
+    uploads_root = os.path.abspath(get_uploads_root())
+    requested_full_path = os.path.abspath(
+        os.path.join(uploads_root, str(file_path).replace("/", os.sep).replace("\\", os.sep))
+    )
     resolved_path = resolve_upload_path(f"/uploads/{file_path}")
+    full_path = resolved_path or requested_full_path
+    logger.info(
+        "uploads.request file_path=%s upload_root=%s full_path=%s exists=%s",
+        file_path,
+        uploads_root,
+        full_path,
+        os.path.isfile(full_path),
+    )
     if not resolved_path:
         return HTMLResponse("<h2>الملف غير موجود</h2>", status_code=404)
     return FileResponse(resolved_path, filename=os.path.basename(resolved_path))

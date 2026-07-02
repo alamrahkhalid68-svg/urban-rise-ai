@@ -2,9 +2,11 @@ import os
 import shutil
 import sqlite3
 
-SOURCE_DB = "urbanrise.db"
-DISK_DB = "/opt/render/project/src/data/urbanrise.db"
+SOURCE_DB = os.getenv("URBANRISE_DB_PATH", "urbanrise.db")
 IS_RENDER_RUNTIME = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+RENDER_DATA_DIR = "/opt/render/project/src/data"
+DATA_DIR = RENDER_DATA_DIR if IS_RENDER_RUNTIME else os.path.abspath("data")
+DISK_DB = os.path.join(RENDER_DATA_DIR, "urbanrise.db")
 DB_PATH = DISK_DB if IS_RENDER_RUNTIME else SOURCE_DB
 
 
