@@ -37,11 +37,6 @@ app = FastAPI()
 app.include_router(admin_users_router)
 templates = Jinja2Templates(directory="templates")
 logger = logging.getLogger("urbanrise")
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=os.getenv("URBANRISE_SESSION_SECRET", "urban-rise-ai-internal-session-secret"),
-    same_site="lax",
-)
 class UploadFallbackStaticFiles(StaticFiles):
     async def get_response(self, path, scope):
         try:
@@ -56,7 +51,7 @@ class UploadFallbackStaticFiles(StaticFiles):
 
 app.mount("/static", UploadFallbackStaticFiles(directory="static"), name="static")
 
-AUTH_ROLES = {"admin", "partner", "employee", "project_manager", "owner", "tenant"}
+AUTH_ROLES = {"admin", "partner", "employee", "project_manager", "owner", "tenant", "client"}
 PROTECTED_ROUTE_PREFIXES = (
     "/portal",
     "/company",
@@ -984,6 +979,9 @@ for statement in [
     "ALTER TABLE projects ADD COLUMN area REAL",
     "ALTER TABLE projects ADD COLUMN contract_value REAL",
     "ALTER TABLE projects ADD COLUMN assigned_user_id INTEGER",
+    "ALTER TABLE projects ADD COLUMN duration_days INTEGER",
+    "ALTER TABLE contracts ADD COLUMN duration_days INTEGER",
+    "ALTER TABLE contract_appendices ADD COLUMN appendix_extra_days INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE contracts ADD COLUMN source_type TEXT",
     "ALTER TABLE contracts ADD COLUMN manual_project_id INTEGER",
     "ALTER TABLE investment_projects ADD COLUMN assigned_user_id INTEGER",
@@ -3935,6 +3933,9 @@ def get_role_landing_url(user) -> str:
     if is_admin(user):
         return "/portal"
 
+    if user["role"] == "client":
+        return "/client-portal"
+
     if is_tenant(user):
         return "/client-maintenance"
 
@@ -3975,6 +3976,47 @@ def get_role_landing_url(user) -> str:
         return "/company/works"
 
     return "/portal"
+
+
+def client_account_portal_ready(user_id: int) -> bool:
+    """A client may authenticate only when at least one published project portal is available."""
+    if not user_id:
+        return False
+    conn = get_db()
+    try:
+        return bool(conn.execute("""
+            SELECT 1
+            FROM client_project_access access
+            JOIN projects ON projects.id=access.project_id
+            JOIN client_portal_settings settings ON settings.project_id=access.project_id
+            WHERE access.user_id=? AND access.portal_enabled=1 AND access.portal_published=1
+              AND settings.enabled=1 AND settings.published=1
+            LIMIT 1
+        """, (user_id,)).fetchone())
+    finally:
+        conn.close()
+
+
+def client_account_portal_state(user_id: int) -> dict:
+    state = {"project_linked": False, "access_enabled": False, "access_published": False,
+             "portal_enabled": False, "portal_published": False}
+    if not user_id:
+        return state
+    conn = get_db()
+    try:
+        row = conn.execute("""SELECT access.project_id,access.portal_enabled,access.portal_published,
+                              settings.enabled settings_enabled,settings.published settings_published
+                              FROM client_project_access access
+                              LEFT JOIN client_portal_settings settings ON settings.project_id=access.project_id
+                              WHERE access.user_id=? ORDER BY access.id LIMIT 1""", (user_id,)).fetchone()
+        if row:
+            state.update(project_linked=True, access_enabled=bool(row["portal_enabled"]),
+                         access_published=bool(row["portal_published"]),
+                         portal_enabled=bool(row["settings_enabled"]),
+                         portal_published=bool(row["settings_published"]))
+        return state
+    finally:
+        conn.close()
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -4023,13 +4065,24 @@ def login_submit(
     finally:
         conn.close()
 
-    if not user or user["role"] not in AUTH_ROLES or not password_matches(user["password"] or "", clean_password):
+    role = (user["role"] or "").strip().lower() if user else ""
+    password_ok = bool(user and password_matches(user["password"] or "", clean_password))
+    credentials_valid = bool(user and role in AUTH_ROLES and bool(user["is_active"]) and password_ok)
+    client_ready = bool(credentials_valid and (role != "client" or client_account_portal_ready(user["id"])))
+    if not credentials_valid or not client_ready:
+        portal_state = client_account_portal_state(user["id"]) if user and role == "client" else {}
+        logger.warning("login_rejected username=%r user_exists=%s user_id=%s role=%r role_allowed=%s "
+                       "is_active=%s password_matches=%s client_portal_state=%s",
+                       clean_username, bool(user), user["id"] if user else None, role,
+                       role in AUTH_ROLES, bool(user["is_active"]) if user else False,
+                       password_ok, portal_state)
         return templates.TemplateResponse(
             request,
             "login.html",
             {
                 "request": request,
-                "error": "بيانات الدخول غير صحيحة أو أن الحساب غير مفعل",
+                "error": ("حساب العميل غير مربوط ببوابة مشروع مفعلة" if credentials_valid and role == "client"
+                          else "بيانات الدخول غير صحيحة أو أن الحساب غير مفعل"),
                 "username": clean_username,
             },
             status_code=401,
@@ -4073,6 +4126,14 @@ async def authentication_middleware(request: Request, call_next):
             if session_available and not request.state.current_user:
                 return RedirectResponse(url="/login", status_code=303)
 
+        # Client accounts never enter the internal system, even through a pasted URL.
+        if (
+            request.state.current_user
+            and request.state.current_user["role"] == "client"
+            and not (path == "/client-portal" or path.startswith("/client-portal/") or path == "/logout")
+        ):
+            return RedirectResponse(url="/client-portal", status_code=303)
+
         if (
             request.state.current_user
             and is_works_daily_log_only_employee(request.state.current_user, "works")
@@ -4088,6 +4149,14 @@ async def authentication_middleware(request: Request, call_next):
         return safe_error_response(request, exc, status_code=500)
 
 
+# Added after the authentication middleware so session data is available to it.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv("URBANRISE_SESSION_SECRET", "urban-rise-ai-internal-session-secret"),
+    same_site="lax",
+)
+
+
 @app.get("/logout")
 def logout(request: Request):
     session_data = request.scope.get("session")
@@ -4101,7 +4170,12 @@ def render_internal_portal(user) -> HTMLResponse:
     daily_report_button = ""
     if is_admin(user):
         admin_users_button = '<a href="/admin/users" class="portal-admin-btn">تسجيل مستخدم جديد</a>'
-        daily_report_button = '<a href="/daily-activity-report" class="portal-admin-btn">تقرير أعمال اليوم</a>'
+        conn = get_db()
+        unread_requests = conn.execute("""SELECT COUNT(*) total FROM client_change_requests
+            WHERE COALESCE(is_read,0)=0 OR status IN ('new','جديد')""").fetchone()["total"]
+        conn.close()
+        badge = f'<span class="daily-report-badge">{unread_requests}</span>' if unread_requests else ''
+        daily_report_button = f'<span class="daily-report-notify"><a href="/daily-activity-report" class="portal-admin-btn">مركز العمليات</a>{badge}</span>'
     return HTMLResponse(
         content=f"""
 <meta charset="UTF-8">
@@ -4172,6 +4246,10 @@ def render_internal_portal(user) -> HTMLResponse:
     border-color: rgba(242, 216, 146, 0.64);
     box-shadow: 0 16px 36px rgba(0, 0, 0, 0.42), 0 0 18px rgba(216, 179, 94, 0.10);
 }}
+.daily-report-notify {{ position:relative;display:inline-flex;overflow:visible; }}
+.daily-report-badge {{ position:absolute;z-index:8;top:-8px;right:-8px;display:grid;place-items:center;min-width:22px;height:22px;padding:0 5px;border-radius:999px;background:#d9272e;color:#fff;font-size:11px;font-weight:900;line-height:1;box-shadow:0 3px 9px rgba(0,0,0,.38);pointer-events:none;animation:daily-request-pulse 2s ease-in-out infinite; }}
+@keyframes daily-request-pulse {{ 0%,100%{{transform:scale(1)}} 50%{{transform:scale(1.08)}} }}
+@media(prefers-reduced-motion:reduce){{.daily-report-badge{{animation:none}}}}
 .portal-company-grid {{
     direction: rtl;
     display: grid;
@@ -4447,6 +4525,18 @@ def build_daily_activity_report_data():
             """,
             (today,),
         ).fetchall()
+        client_requests = conn.execute(
+            """
+            SELECT request.*, projects.name AS project_name, projects.client AS project_client,
+                   users.full_name AS client_name, users.username AS client_username
+            FROM client_change_requests request
+            JOIN projects ON projects.id = request.project_id
+            LEFT JOIN users ON users.id = COALESCE(request.client_user_id, request.user_id)
+            WHERE datetime(request.created_at) >= datetime('now','localtime','-7 days')
+              AND (request.hidden_from_today_after IS NULL OR datetime(request.hidden_from_today_after) > datetime('now','localtime'))
+            ORDER BY datetime(request.created_at) DESC, request.id DESC
+            """
+        ).fetchall()
     finally:
         conn.close()
 
@@ -4456,6 +4546,7 @@ def build_daily_activity_report_data():
         "works_daily": works_daily,
         "property_expenses": property_expenses,
         "maintenance_updates": maintenance_updates,
+        "client_requests": client_requests,
     }
 
 
@@ -4546,6 +4637,25 @@ def daily_activity_report(request: Request):
         f'<div class="daily-activity-alert daily-activity-warning">{escape(alert)}</div>'
         for alert in works_alerts + realestate_alerts
     )
+    request_status_labels = {"new":"جديد","reviewing":"تحت المراجعة","assigned":"تم التوجيه للمشرف",
+        "awaiting_client":"بانتظار اعتماد العميل","approved":"معتمد","implemented":"تم التنفيذ","rejected":"مرفوض","closed":"مغلق"}
+    request_type_labels = {"change":"تعديل","inquiry":"استفسار","note":"ملاحظة","maintenance":"صيانة","materials":"توريد مواد"}
+    client_requests_html = ""
+    for item in data["client_requests"]:
+        summary = (item["description"] or "").strip()
+        if len(summary) > 180: summary = summary[:180] + "…"
+        client_name = item["client_name"] or item["client_username"] or item["project_client"] or "عميل"
+        client_requests_html += f"""
+        <article class="client-today-request">
+          <div class="client-request-head"><span>{escape(request_type_labels.get(item['request_type'],'طلب'))}</span><b>{escape(item['title'] or '')}</b></div>
+          <div class="client-request-meta">{escape(client_name)} · {escape(item['project_name'] or '-')} · {escape(item['created_at'] or '')}</div>
+          <p>{escape(summary)}</p><span class="client-request-state">{escape(request_status_labels.get(item['status'],item['status'] or 'جديد'))}</span>
+          <div class="client-request-actions"><a href="/admin/client-request/{item['id']}/view" class="action-btn">عرض التفاصيل والرد</a>
+          <form method="post" action="/admin/client-request/{item['id']}/mark-read"><button class="action-btn">تم الاطلاع</button></form>
+          <form method="post" action="/admin/client-request/{item['id']}/convert-task"><button class="action-btn">تحويل إلى مهمة يومية</button></form>
+          <form method="post" action="/admin/client-request/{item['id']}/assign"><button class="action-btn">توجيه للعمال / المشرف</button></form></div>
+        </article>"""
+    client_requests_section = f"""<div class="client-requests-panel"><div class="client-requests-title"><h3>طلبات العملاء الجديدة</h3><span>{len(data['client_requests'])}</span></div>{client_requests_html or '<p>لا توجد طلبات عملاء جديدة خلال آخر 7 أيام.</p>'}</div>"""
 
     return f"""
 <meta charset="UTF-8">
@@ -4616,12 +4726,15 @@ def daily_activity_report(request: Request):
     color: #F2D892 !important;
     -webkit-text-fill-color: #F2D892 !important;
 }}
+.client-requests-panel{{margin:18px 0;padding:22px;border:1px solid rgba(216,179,94,.38);border-radius:20px;background:rgba(37,31,22,.48);text-align:right}}.client-requests-title{{display:flex;align-items:center;justify-content:space-between}}.client-requests-title h3{{color:#F2D892;margin:0}}.client-requests-title>span{{display:grid;place-items:center;min-width:34px;height:34px;border-radius:50%;background:#D8B35E;color:#20190d;font-weight:800}}.client-today-request{{margin-top:14px;padding:16px;border:1px solid rgba(255,255,255,.1);border-radius:15px;background:rgba(255,255,255,.035)}}.client-request-head{{display:flex;gap:10px;align-items:center}}.client-request-head span,.client-request-state{{padding:5px 8px;border-radius:999px;background:rgba(216,179,94,.14);color:#F2D892;font-size:.78rem}}.client-request-head b{{color:#fff}}.client-request-meta{{margin-top:8px;color:#cabd99;font-size:.82rem}}.client-today-request p{{color:#eee1bd;line-height:1.7}}.client-request-actions{{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}}.client-request-actions form{{margin:0}}.client-request-actions button{{font:inherit;cursor:pointer}}@media(max-width:620px){{.client-request-head{{align-items:flex-start;flex-direction:column}}}}
 </style>
 <body class="system-dark">
 {HOME_BUTTON}
 <div class="dashboard">
-    <h1>تقرير أعمال اليوم</h1>
+    <h1>مركز العمليات</h1>
     <p>{data['today']}</p>
+
+    {client_requests_section}
 
     <div class="inventory-panel" style="text-align:right;margin:18px 0;">
         <h3>تحليل سريع</h3>
@@ -7046,6 +7159,9 @@ def new_project_form(request: Request, company: str = ""):
         تاريخ النهاية:
         <input type="date" name="end_date"><br><br>
 
+        مدة التنفيذ بالأيام:
+        <input type="number" name="duration_days" min="0" step="1" placeholder="مثال: 14"><br><br>
+
         الحالة:
         <select name="status">
             <option value="جاري">جاري</option>
@@ -7077,7 +7193,8 @@ def save_project(
     work_type: str = Form(""),
     finish_level: str = Form(""),
     area: str = Form(""),
-    contract_value: str = Form("")
+    contract_value: str = Form(""),
+    duration_days: int = Form(0)
 ):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
@@ -7098,9 +7215,9 @@ def save_project(
         """
         INSERT INTO projects (
             company, name, client, start_date, end_date, status,
-            project_type, work_type, finish_level, area, contract_value
+            project_type, work_type, finish_level, area, contract_value, duration_days
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             company,
@@ -7114,6 +7231,7 @@ def save_project(
             structured_finish_level,
             structured_area,
             structured_contract_value,
+            max(0, duration_days),
         )
     )
     project_id = cur.lastrowid
@@ -7232,6 +7350,9 @@ def edit_project_form(request: Request, project_id: int, company: str = ""):
         تاريخ النهاية:
         <input type="date" name="end_date" value="{project['end_date'] or ''}"><br><br>
 
+        مدة التنفيذ بالأيام:
+        <input type="number" name="duration_days" min="0" step="1" value="{project['duration_days'] or ''}"><br><br>
+
         الحالة:
         <select name="status">
             <option value="جاري" {"selected" if project['status'] == "جاري" else ""}>جاري</option>
@@ -7264,7 +7385,8 @@ def update_project(
     work_type: str = Form(""),
     finish_level: str = Form(""),
     area: str = Form(""),
-    contract_value: str = Form("")
+    contract_value: str = Form(""),
+    duration_days: int = Form(0)
 ):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
@@ -7284,7 +7406,7 @@ def update_project(
         """
         UPDATE projects
         SET name = ?, client = ?, start_date = ?, end_date = ?, status = ?,
-            project_type = ?, work_type = ?, finish_level = ?, area = ?, contract_value = ?
+            project_type = ?, work_type = ?, finish_level = ?, area = ?, contract_value = ?, duration_days = ?
         WHERE id = ? AND company = ?
         """,
         (
@@ -7298,6 +7420,7 @@ def update_project(
             structured_finish_level,
             structured_area,
             structured_contract_value,
+            max(0, duration_days),
             project_id,
             company,
         )
@@ -8158,6 +8281,9 @@ def new_contract_appendix_form(request: Request, contract_id: int, company: str 
         <label>وصف مختصر للعمل الإضافي</label>
         <textarea name="short_description" rows="4" style="width:100%;resize:vertical;" required></textarea>
 
+        <label>مدة إضافية بالأيام (اختياري)</label>
+        <input type="number" name="appendix_extra_days" min="0" step="1" value="0">
+
         <h3>بنود العمل الإضافي</h3>
         <table class="table" border="1" style="width:100%;text-align:center;background:white;">
             <tr>
@@ -8189,6 +8315,7 @@ def save_contract_appendix(
     appendix_date: str = Form(""),
     short_description: str = Form(...),
     notes: str = Form(""),
+    appendix_extra_days: int = Form(0),
     item_description: list[str] = Form([]),
     item_qty: list[str] = Form([]),
     item_unit_price: list[str] = Form([]),
@@ -8235,9 +8362,9 @@ def save_contract_appendix(
             """
             INSERT INTO contract_appendices (
                 company, parent_contract_id, project_id, client, appendix_date,
-                short_description, notes, total, status, created_at
+                short_description, notes, total, status, created_at, appendix_extra_days
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 company,
@@ -8250,6 +8377,7 @@ def save_contract_appendix(
                 total,
                 "ساري",
                 datetime.now().strftime("%Y-%m-%d %H:%M"),
+                max(0, appendix_extra_days),
             ),
         )
         appendix_id = cur.lastrowid
@@ -9429,6 +9557,7 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
         if is_read_only_works_partner
         else (
             f'''<div style="display:flex;gap:10px;flex-wrap:wrap;margin:18px 0;">
+{f'<a href="/admin/project/{project_id}/client-portal" class="glass-btn gold-text">بوابة العميل / متابعة مشروعي</a>' if is_admin(access_result) and normalize_access_value(company) == "works" else ''}
 <a href="/edit-project/{project_id}?company={company}" class="action-btn">تعديل المشروع</a>
 <a href="/delete-project/{project_id}?company={company}" class="action-btn delete-btn" onclick="return confirm('هل تريد حذف هذا المشروع وجميع بياناته المرتبطة؟')">حذف المشروع</a>
 <button type="button" id="analyze-project-btn" class="glass-btn gold-text">تحليل المشروع بالذكاء</button>
@@ -20543,4 +20672,9 @@ def delete_logistics_equipment(equipment_id: int, company: str = ""):
         url=f"/equipment?company={company}",
         status_code=303
     )
+
+
+# Client portal routes and additive schema are isolated in their own module.
+from client_portal import register_client_portal
+register_client_portal(app)
 

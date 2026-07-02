@@ -1,0 +1,108 @@
+/* Hero layout refinements: structure and legibility only; background/colors stay unchanged. */
+.client-portal-page .hero {
+  min-height: auto !important;
+  padding-bottom: clamp(70px, 8vw, 110px);
+}
+
+.client-portal-page .hero-layout {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(360px, .75fr);
+  align-items: center;
+  gap: clamp(48px, 7vw, 100px);
+  width: min(1220px, 100%);
+  margin: clamp(70px, 10vh, 110px) auto 0;
+}
+
+.client-portal-page .hero-content {
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+}
+
+.client-portal-page .hero h1 {
+  max-width: 100%;
+  margin: 16px 0 18px;
+  font-size: clamp(3rem, 6.2vw, 6.1rem);
+  font-weight: 800;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, .45);
+  animation: heroTitleIn .7s cubic-bezier(.22, .8, .3, 1) .08s both;
+}
+
+.client-portal-page .welcome,
+.client-portal-page .hero-content > p,
+.client-portal-page .status-row,
+.client-portal-page .status-row .pill {
+  text-shadow: 0 2px 8px rgba(0, 0, 0, .45) !important;
+}
+
+.client-portal-page .progress-card {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  max-width: 470px;
+  justify-self: end;
+  margin: 0;
+  align-self: center;
+}
+
+@keyframes heroTitleIn {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 980px) {
+  .client-portal-page .hero-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, .75fr);
+    gap: 40px;
+    margin-top: 65px;
+  }
+
+  .client-portal-page .hero h1 {
+    font-size: clamp(2.8rem, 7vw, 4.7rem);
+  }
+}
+
+@media (max-width: 760px) {
+  .client-portal-page .hero {
+    padding-inline: 20px;
+    padding-bottom: 72px;
+  }
+
+  .client-portal-page .hero-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 38px;
+    margin-top: 55px;
+  }
+
+  .client-portal-page .progress-card {
+    width: 100%;
+    max-width: none;
+    justify-self: stretch;
+  }
+}
+
+@media (max-width: 480px) {
+  .client-portal-page .hero-layout {
+    gap: 30px;
+    margin-top: 42px;
+  }
+
+  .client-portal-page .hero h1 {
+    margin-block: 14px 16px;
+    font-size: clamp(2.5rem, 13vw, 3.5rem);
+  }
+
+  .client-portal-page .progress-card {
+    right: auto;
+    left: auto;
+    bottom: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .client-portal-page .hero h1 { animation: none; }
+}
