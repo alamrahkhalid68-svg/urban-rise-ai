@@ -1350,6 +1350,7 @@ def resolve_upload_path(path: str) -> str:
     if relative_path.startswith("uploads/"):
         upload_relative = relative_path[len("uploads/"):]
         candidates.append(os.path.join(uploads_root, upload_relative.replace("/", os.sep)))
+        candidates.append(os.path.join(legacy_root, upload_relative.replace("/", os.sep)))
     elif relative_path.startswith("static/uploads/"):
         legacy_relative = relative_path[len("static/uploads/"):]
         candidates.append(os.path.join(legacy_root, legacy_relative.replace("/", os.sep)))

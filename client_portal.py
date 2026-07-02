@@ -15,6 +15,7 @@ import re
 import secrets
 import time
 from io import BytesIO
+from urllib.parse import quote
 import uuid
 
 from fastapi import File, Form, Request, UploadFile
@@ -43,6 +44,47 @@ REQUEST_TYPES = {"change", "inquiry", "note", "maintenance", "materials"}
 logger = logging.getLogger("urbanrise.client_requests")
 PORTAL_HOME_URL = "https://urban-rise-ai.onrender.com/"
 ACCESS_CARD_DIR = Path("tmp/client_portal_access_cards")
+
+
+def public_upload_url(path, category=""):
+    """Return the browser URL for an uploaded file without changing stored data."""
+    if not path:
+        return ""
+
+    value = str(path).strip().replace("\\", "/")
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://", "data:")):
+        return value
+
+    clean_path, separator, query = value.partition("?")
+    relative = clean_path.lstrip("/")
+    for prefix in ("data/uploads/", "static/uploads/", "uploads/"):
+        if relative.startswith(prefix):
+            relative = relative[len(prefix):]
+            break
+    else:
+        if "/" not in relative and category:
+            relative = f"{category.strip('/')}/{relative}"
+        elif relative.startswith("static/"):
+            # Non-upload static assets already have their own public mount.
+            return "/" + quote(relative, safe="/") + (separator + query if separator else "")
+
+    url = "/uploads/" + quote(relative.lstrip("/"), safe="/")
+    return url + (separator + query if separator else "")
+
+
+def _portal_file_path(path):
+    """Resolve both current and legacy upload locations for protected downloads."""
+    if not path:
+        return ""
+    from main import resolve_upload_path
+
+    resolved = resolve_upload_path(str(path))
+    if resolved:
+        return resolved
+    legacy = Path(str(path).split("?", 1)[0].lstrip("/"))
+    return str(legacy) if legacy.is_file() else ""
 
 
 def _now():
@@ -431,6 +473,7 @@ def _project_context(conn, project_id, client_user_id=None):
         override = controls.get(("daily", int(row["id"])))
         item["client_summary"] = (override["client_summary"] if override and override["client_summary"] else item.get("client_summary")) or ""
         item["client_image_visible"] = bool(item.get("attachment_path") and _is_visible(controls, "daily_image", row["id"], True))
+        item["attachment_url"] = public_upload_url(item.get("attachment_path"), "project_daily")
         daily.append(item)
         if len(daily) == 3:
             break
@@ -449,7 +492,12 @@ def _project_context(conn, project_id, client_user_id=None):
         if not _is_visible(controls, "material_receipt", receipt["id"], True):
             continue
         items = conn.execute("SELECT * FROM client_material_receipt_items WHERE receipt_id=? ORDER BY id", (receipt["id"],)).fetchall()
-        images = [image for image in conn.execute("SELECT * FROM client_material_receipt_images WHERE receipt_id=? ORDER BY id", (receipt["id"],)).fetchall() if _is_visible(controls, "material_image", image["id"], True)]
+        images = []
+        for image in conn.execute("SELECT * FROM client_material_receipt_images WHERE receipt_id=? ORDER BY id", (receipt["id"],)).fetchall():
+            if _is_visible(controls, "material_image", image["id"], True):
+                image_item = dict(image)
+                image_item["image_url"] = public_upload_url(image_item.get("image_path"), "client_materials")
+                images.append(image_item)
         receipt_data.append((receipt, items, images))
     collections = conn.execute("SELECT COALESCE(SUM(amount),0) total FROM project_collections WHERE project_id=? AND COALESCE(collection_status,'') NOT IN ('ملغي','ملغاة')", (project_id,)).fetchone()["total"] or 0
     contract_value = float(project["contract_value"] or 0)
@@ -578,8 +626,8 @@ def register_client_portal(app):
                        user["id"] in {row["client_user_id"], row["user_id"]})))
         conn.close()
         if not allowed: return HTMLResponse("غير مصرح", 403)
-        path = (row["file_path"] or "").lstrip("/")
-        return FileResponse(path) if Path(path).exists() else HTMLResponse("الملف غير موجود", 404)
+        path = _portal_file_path(row["file_path"] or "")
+        return FileResponse(path) if path else HTMLResponse("الملف غير موجود", 404)
 
     def can_view_project_document(request, conn, project_id):
         user = getattr(request.state, "current_user", None) or get_current_user(request)
@@ -592,8 +640,8 @@ def register_client_portal(app):
         conn=get_db(); row=conn.execute("""SELECT a.*,p.id project_id FROM contract_attachments a JOIN contracts c ON c.id=a.contract_id LEFT JOIN projects p ON p.contract_id=c.id OR p.id=c.manual_project_id WHERE a.id=?""",(attachment_id,)).fetchone()
         allowed=bool(row and row["project_id"] and can_view_project_document(request,conn,row["project_id"])); conn.close()
         if not allowed: return HTMLResponse("غير مصرح",403)
-        path=(row["file_path"] or "").lstrip("/")
-        return FileResponse(path,filename=row["file_name"] or Path(path).name) if Path(path).exists() else HTMLResponse("الملف غير موجود",404)
+        path=_portal_file_path(row["file_path"] or "")
+        return FileResponse(path,filename=row["file_name"] or Path(path).name) if path else HTMLResponse("الملف غير موجود",404)
 
     @app.get("/client-portal/contract/{contract_id}")
     def client_contract_pdf(request: Request, contract_id: int):
