@@ -575,6 +575,109 @@ def register_client_portal(app):
         conn.close()
         return TEMPLATES.TemplateResponse(request, "client_portal.html", context)
 
+    @app.get("/admin/project/{project_id}/client-portal/html-debug", response_class=HTMLResponse)
+    def client_portal_html_debug(request: Request, project_id: int):
+        admin = _admin(request)
+        if not admin:
+            return HTMLResponse("غير مصرح", status_code=403)
+
+        conn = get_db()
+        context = _project_context(conn, project_id, None)
+        if not context:
+            conn.close()
+            return HTMLResponse("المشروع غير موجود", status_code=404)
+        available = conn.execute(
+            "SELECT id,name FROM projects WHERE id=?", (project_id,)
+        ).fetchall()
+        project_clients = conn.execute(
+            """SELECT u.id,u.username,u.is_active
+               FROM users u JOIN client_project_access a ON a.user_id=u.id
+               WHERE a.project_id=? ORDER BY u.id""",
+            (project_id,),
+        ).fetchall()
+        client_selection_debug = []
+        for client in project_clients:
+            client_project_ids = _client_project_ids(conn, client["id"])
+            client_selection_debug.append({
+                "user_id": client["id"],
+                "username": client["username"],
+                "is_active": client["is_active"],
+                "project_ids": client_project_ids,
+                "default_selected_project": client_project_ids[0] if client_project_ids else None,
+                "selects_requested_project": bool(
+                    project_id in client_project_ids
+                    and (client_project_ids[0] if client_project_ids else None) == project_id
+                ),
+            })
+        context.update(
+            request=request,
+            user=admin,
+            available_projects=available,
+            empty=False,
+            portal_available=bool(context["settings"]["enabled"] and context["settings"]["published"]),
+        )
+        conn.close()
+
+        rendered_html = TEMPLATES.get_template("client_portal.html").render(context)
+        updates_match = re.search(
+            r'(<section class="panel" id="updates">.*?</section>)',
+            rendered_html,
+            flags=re.DOTALL,
+        )
+        updates_html = updates_match.group(1) if updates_match else ""
+        daily_debug = []
+        for item in context.get("daily", []):
+            daily_debug.append({
+                "id": item.get("id"),
+                "date": item.get("date"),
+                "attachment_path": item.get("attachment_path"),
+                "attachment_url": item.get("attachment_url"),
+                "client_image_visible": bool(item.get("client_image_visible")),
+                "template_image_condition": bool(
+                    item.get("attachment_url") and item.get("client_image_visible")
+                ),
+            })
+
+        return HTMLResponse(
+            "<!doctype html><html><head><meta charset='utf-8'><title>Client portal HTML debug</title>"
+            "<style>body{font-family:Arial;margin:24px}pre{white-space:pre-wrap;word-break:break-word;"
+            "background:#f5f5f5;border:1px solid #ddd;padding:16px}table{border-collapse:collapse;width:100%}"
+            "th,td{border:1px solid #ccc;padding:7px;text-align:left;vertical-align:top}</style></head><body>"
+            f"<h1>Rendered client portal updates — project {project_id}</h1>"
+            f"<p><b>Template:</b> templates/client_portal.html<br><b>Final daily IDs:</b> "
+            f"{escape(str([item['id'] for item in daily_debug]))}</p>"
+            "<h2>Real client /client-portal default project selection</h2>"
+            "<table><thead><tr><th>User ID</th><th>Username</th><th>Active</th>"
+            "<th>All linked project IDs</th><th>Default selected project</th>"
+            "<th>Default is requested project</th></tr></thead><tbody>"
+            + "".join(
+                "<tr>"
+                f"<td>{item['user_id']}</td><td>{escape(str(item['username']))}</td>"
+                f"<td>{item['is_active']}</td><td>{escape(str(item['project_ids']))}</td>"
+                f"<td>{escape(str(item['default_selected_project']))}</td>"
+                f"<td>{item['selects_requested_project']}</td></tr>"
+                for item in client_selection_debug
+            )
+            + "</tbody></table>"
+            "<h2>Final daily data</h2><table><thead><tr><th>ID</th><th>Date</th>"
+            "<th>attachment_path</th><th>attachment_url</th><th>image visible</th>"
+            "<th>template condition</th></tr></thead><tbody>"
+            + "".join(
+                "<tr>"
+                f"<td>{escape(str(item['id']))}</td><td>{escape(str(item['date']))}</td>"
+                f"<td>{escape(str(item['attachment_path']))}</td>"
+                f"<td>{escape(str(item['attachment_url']))}</td>"
+                f"<td>{item['client_image_visible']}</td>"
+                f"<td>{item['template_image_condition']}</td></tr>"
+                for item in daily_debug
+            )
+            + "</tbody></table><h2>Exact rendered #updates HTML</h2>"
+            f"<pre>{escape(updates_html)}</pre>"
+            "<h2>Rendered preview</h2>"
+            + (updates_html or "<p>#updates section was not found in rendered HTML.</p>")
+            + "</body></html>"
+        )
+
     @app.post("/client-portal/change-request")
     def create_change_request(request: Request, project_id: int = Form(...), title: str = Form(...),
                               description: str = Form(...), request_type: str = Form("change"),
