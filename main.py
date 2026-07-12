@@ -450,7 +450,8 @@ CREATE TABLE IF NOT EXISTS quotes (
     client_id TEXT,
     client_address TEXT,
     project_location TEXT,
-    duration TEXT
+    duration TEXT,
+    vat_enabled INTEGER NOT NULL DEFAULT 1
 )
 """)
 
@@ -1010,6 +1011,22 @@ for statement in [
     except sqlite3.OperationalError:
         pass
 
+quote_columns = {row["name"] for row in conn.execute("PRAGMA table_info(quotes)").fetchall()}
+for column_name, column_definition in {
+    "overhead_rate": "REAL DEFAULT 19",
+    "profit_rate": "REAL DEFAULT 15",
+    "vat_rate": "REAL DEFAULT 15",
+    "items_total": "REAL DEFAULT 0",
+    "overhead_amount": "REAL DEFAULT 0",
+    "profit_amount": "REAL DEFAULT 0",
+    "subtotal_before_vat": "REAL DEFAULT 0",
+    "vat_amount": "REAL DEFAULT 0",
+    "grand_total_with_vat": "REAL DEFAULT 0",
+    "vat_enabled": "INTEGER NOT NULL DEFAULT 1",
+}.items():
+    if column_name not in quote_columns:
+        conn.execute(f"ALTER TABLE quotes ADD COLUMN {column_name} {column_definition}")
+
 for statement in [
     "ALTER TABLE project_expenses ADD COLUMN category TEXT",
     "ALTER TABLE project_expenses ADD COLUMN other_type TEXT",
@@ -1394,11 +1411,6 @@ def serve_uploaded_file(request: Request, file_path: str):
     )
     resolved_path = resolve_upload_path(f"/uploads/{file_path}")
     full_path = resolved_path or requested_full_path
-    logger.warning("UPLOAD_DEBUG file_path=%s", file_path)
-    logger.warning("UPLOAD_DEBUG upload_root=%s", uploads_root)
-    logger.warning("UPLOAD_DEBUG full_path=%s", full_path)
-    logger.warning("UPLOAD_DEBUG exists=%s", os.path.exists(full_path))
-    logger.warning("UPLOAD_DEBUG is_file=%s", os.path.isfile(full_path))
     if not resolved_path:
         return HTMLResponse("<h2>الملف غير موجود</h2>", status_code=404)
     return FileResponse(resolved_path, filename=os.path.basename(resolved_path))
@@ -2043,6 +2055,69 @@ def calculate_percentage_amount(total, percentage) -> Decimal:
     return (total_decimal * percentage_decimal / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def calculate_quote_financials(quote_id: int) -> dict | None:
+    conn = get_db()
+    try:
+        quote = conn.execute(
+            "SELECT overhead_rate, profit_rate, vat_rate, COALESCE(vat_enabled, 1) AS vat_enabled FROM quotes WHERE id = ?",
+            (quote_id,),
+        ).fetchone()
+        if not quote:
+            return None
+
+        items = conn.execute(
+            "SELECT qty, unit_price FROM quote_items WHERE quote_id = ?",
+            (quote_id,),
+        ).fetchall()
+        items_total = sum(
+            (decimal_from_value(item["qty"]) * decimal_from_value(item["unit_price"]) for item in items),
+            Decimal("0"),
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        overhead_rate = decimal_from_value(19 if quote["overhead_rate"] is None else quote["overhead_rate"])
+        profit_rate = decimal_from_value(15 if quote["profit_rate"] is None else quote["profit_rate"])
+        vat_rate = decimal_from_value(15 if quote["vat_rate"] is None else quote["vat_rate"])
+        vat_enabled = 1 if quote["vat_enabled"] is None else int(bool(quote["vat_enabled"]))
+        overhead_amount = calculate_percentage_amount(items_total, overhead_rate)
+        base_after_overhead = items_total + overhead_amount
+        profit_amount = calculate_percentage_amount(base_after_overhead, profit_rate)
+        subtotal_before_vat = base_after_overhead + profit_amount
+        vat_amount = calculate_percentage_amount(subtotal_before_vat, vat_rate) if vat_enabled else Decimal("0.00")
+        grand_total_with_vat = subtotal_before_vat + vat_amount
+
+        values = {
+            "items_total": float(items_total),
+            "overhead_rate": float(overhead_rate),
+            "overhead_amount": float(overhead_amount),
+            "base_after_overhead": float(base_after_overhead),
+            "profit_rate": float(profit_rate),
+            "profit_amount": float(profit_amount),
+            "subtotal_before_vat": float(subtotal_before_vat),
+            "vat_rate": float(vat_rate),
+            "vat_enabled": vat_enabled,
+            "vat_amount": float(vat_amount),
+            "grand_total_with_vat": float(grand_total_with_vat),
+        }
+        conn.execute(
+            """
+            UPDATE quotes
+            SET overhead_rate = ?, profit_rate = ?, vat_rate = ?, items_total = ?,
+                overhead_amount = ?, profit_amount = ?, subtotal_before_vat = ?,
+                vat_amount = ?, grand_total_with_vat = ?
+            WHERE id = ?
+            """,
+            (
+                values["overhead_rate"], values["profit_rate"], values["vat_rate"],
+                values["items_total"], values["overhead_amount"], values["profit_amount"],
+                values["subtotal_before_vat"], values["vat_amount"],
+                values["grand_total_with_vat"], quote_id,
+            ),
+        )
+        conn.commit()
+        return values
+    finally:
+        conn.close()
+
+
 def build_simple_arabic_table(data, col_widths, header_background="#1F2A22", body_row_backgrounds=None):
     table = Table(data, colWidths=col_widths, repeatRows=1, hAlign="RIGHT")
     style_commands = [
@@ -2494,7 +2569,7 @@ def build_client_material_receipt_pdf(receipt, items, images) -> tuple[str, str]
     return file_path, file_name
 
 
-def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[str, str]:
+def build_quote_report_pdf(quote, items, payments, company: str = "", financials=None) -> tuple[str, str]:
     os.makedirs("pdfs", exist_ok=True)
     file_name = f"quote_report_{quote['id']}.pdf"
     file_path = os.path.join("pdfs", file_name)
@@ -2504,6 +2579,16 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
     total = 0.0
     for item in items:
         total += safe_float(item["qty"]) * safe_float(item["unit_price"])
+    financials = financials or {
+        "items_total": total,
+        "subtotal_before_vat": total,
+        "vat_rate": 0,
+        "vat_amount": 0,
+        "grand_total_with_vat": total,
+    }
+    items_total = safe_float(financials.get("items_total", total))
+    subtotal_before_vat = safe_float(financials["subtotal_before_vat"])
+    display_factor = subtotal_before_vat / items_total if items_total else 1.0
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("QuoteReportTitle", parent=styles["Heading1"], fontName=font_name, fontSize=18, leading=24, alignment=TA_RIGHT, textColor=colors.HexColor("#D8B35E"))
@@ -2565,10 +2650,11 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
         Paragraph(format_arabic_pdf_text("الوصف"), table_header_style),
     ]]
     for item in items:
-        line_total = safe_float(item["qty"]) * safe_float(item["unit_price"])
+        displayed_unit_price = safe_float(item["unit_price"]) * display_factor
+        line_total = safe_float(item["qty"]) * displayed_unit_price
         items_rows.append([
             Paragraph(format_arabic_pdf_text(f"{format_currency(line_total)} ريال"), body_style),
-            Paragraph(format_arabic_pdf_text(f"{format_currency(safe_float(item['unit_price']))} ريال"), body_style),
+            Paragraph(format_arabic_pdf_text(f"{format_currency(displayed_unit_price)} ريال"), body_style),
             Paragraph(format_arabic_pdf_text(format_currency(safe_float(item["qty"]))), body_style),
             Paragraph(
                 build_quote_description_paragraph_text(item["description"] or "-", font_name, description_style.fontSize, description_col_width - 8),
@@ -2583,7 +2669,7 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
             Paragraph(format_arabic_pdf_text("لا توجد بنود"), body_style),
         ])
     items_rows.append([
-        Paragraph(format_arabic_pdf_text(f"{format_currency(total)} ريال"), body_style),
+        Paragraph(format_arabic_pdf_text(f"{format_currency(subtotal_before_vat)} ريال"), body_style),
         Paragraph(format_arabic_pdf_text(""), body_style),
         Paragraph(format_arabic_pdf_text(""), body_style),
         Paragraph(format_arabic_pdf_text("الإجمالي"), body_style),
@@ -2610,7 +2696,49 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
     ]))
-    story.extend([items_table, Spacer(1, 10), Paragraph(format_arabic_pdf_text("جدول الدفعات"), section_style)])
+    client_financial_rows = [
+        [
+            Paragraph(format_arabic_pdf_text(f"{format_currency(financials['subtotal_before_vat'])} ريال"), body_style),
+            Paragraph(format_arabic_pdf_text("قيمة الأعمال قبل الضريبة"), body_style),
+        ],
+        [
+            Paragraph(format_arabic_pdf_text(f"{format_currency(financials['vat_amount'])} ريال"), body_style),
+            Paragraph(format_arabic_pdf_text(f"ضريبة القيمة المضافة {format_percentage_display(financials['vat_rate'])}"), body_style),
+        ],
+        [
+            Paragraph(format_arabic_pdf_text(f"{format_currency(financials['grand_total_with_vat'])} ريال"), body_style),
+            Paragraph(format_arabic_pdf_text("الإجمالي شامل الضريبة"), body_style),
+        ],
+    ]
+    if not financials.get("vat_enabled", 1):
+        client_financial_rows = [
+            [
+                Paragraph(format_arabic_pdf_text(f"{format_currency(financials['subtotal_before_vat'])} ريال"), body_style),
+                Paragraph(format_arabic_pdf_text("قيمة الأعمال"), body_style),
+            ],
+            [
+                Paragraph(format_arabic_pdf_text(f"{format_currency(financials['grand_total_with_vat'])} ريال"), body_style),
+                Paragraph(format_arabic_pdf_text("الإجمالي النهائي"), body_style),
+            ],
+        ]
+    client_financial_table = Table(client_financial_rows, colWidths=[70 * mm, 140 * mm], hAlign="RIGHT")
+    client_financial_table.setStyle(TableStyle([
+        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.HexColor("#F6F1E7"), colors.HexColor("#EEE4CF")]),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E8D8B8")),
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8C294")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.extend([
+        items_table,
+        Spacer(1, 10),
+        Paragraph(format_arabic_pdf_text("الملخص المالي"), section_style),
+        client_financial_table,
+        *([Paragraph(format_arabic_pdf_text("هذا العرض غير متضمن لضريبة القيمة المضافة."), body_style)] if not financials.get("vat_enabled", 1) else []),
+        Spacer(1, 10),
+        Paragraph(format_arabic_pdf_text("جدول الدفعات"), section_style),
+    ])
 
     payment_rows = [[
         Paragraph(format_arabic_pdf_text("المبلغ"), table_header_style),
@@ -2618,7 +2746,7 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
         Paragraph(format_arabic_pdf_text("اسم الدفعة"), table_header_style),
     ]]
     for payment in payments:
-        amount = calculate_percentage_amount(total, payment["percentage"])
+        amount = calculate_percentage_amount(financials["grand_total_with_vat"], payment["percentage"])
         payment_rows.append([
             Paragraph(format_arabic_pdf_text(f"{format_currency(float(amount))} ريال"), body_style),
             Paragraph(format_arabic_pdf_text(format_percentage_display(payment["percentage"])), body_style),
@@ -2653,13 +2781,23 @@ def build_quote_report_pdf(quote, items, payments, company: str = "") -> tuple[s
     return file_path, file_name
 
 
-def build_contract_report_pdf(contract, quote, items, payments, company: str = "", project=None) -> tuple[str, str]:
+def build_contract_report_pdf(contract, quote, items, payments, company: str = "", project=None, financials=None) -> tuple[str, str]:
     os.makedirs("pdfs", exist_ok=True)
     file_name = f"contract_report_{contract['id']}.pdf"
     file_path = os.path.join("pdfs", file_name)
     font_name = get_pdf_report_font_name()
     company_profile = WORKS_COMPANY_PROFILE
-    total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
+    items_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
+    financials = financials or calculate_quote_financials(quote["id"]) or {
+        "items_total": items_total,
+        "subtotal_before_vat": items_total,
+        "vat_rate": 0,
+        "vat_amount": 0,
+        "grand_total_with_vat": items_total,
+    }
+    subtotal_before_vat = safe_float(financials["subtotal_before_vat"])
+    display_factor = subtotal_before_vat / items_total if items_total else 1.0
+    total = safe_float(financials["grand_total_with_vat"])
     contract_number = f"25/{int(contract['id']):04d}"
     issue_date = datetime.now().strftime("%d-%m-%Y")
     project_name = ""
@@ -2694,7 +2832,7 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     if items:
         for index, item in enumerate(items, start=1):
             description = (item["description"] or "").strip() or ""
-            line_total = safe_float(item["qty"]) * safe_float(item["unit_price"])
+            line_total = safe_float(item["qty"]) * safe_float(item["unit_price"]) * display_factor
             scope_story.append(contract_paragraph(f"{index}. {description}", body_style))
             scope_story.append(contract_paragraph(f"بمبلغ: {format_currency(line_total)} ريال", body_style))
     else:
@@ -2803,11 +2941,25 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ]))
 
+    contract_value_details = [
+        contract_paragraph("القيمة الإجمالية", small_label_style, contract_page_width - 16),
+        Spacer(1, 4),
+    ]
+    if financials.get("vat_enabled", 1):
+        contract_value_details.extend([
+            contract_paragraph(f"قيمة الأعمال قبل الضريبة: {format_currency(subtotal_before_vat)} ريال", card_value_style, contract_page_width - 16),
+            contract_paragraph(f"ضريبة القيمة المضافة {format_percentage_display(financials['vat_rate'])}: {format_currency(financials['vat_amount'])} ريال", card_value_style, contract_page_width - 16),
+            contract_paragraph(f"الإجمالي شامل الضريبة: {format_currency(total)} ريال سعودي فقط لا غير", card_value_style, contract_page_width - 16),
+        ])
+    else:
+        contract_value_details.extend([
+            contract_paragraph(f"القيمة الإجمالية للعقد: {format_currency(total)} ريال سعودي فقط لا غير", card_value_style, contract_page_width - 16),
+            contract_paragraph("هذا العقد غير متضمن لضريبة القيمة المضافة.", card_value_style, contract_page_width - 16),
+        ])
+
     contract_value_card = Table([[
         [
-            contract_paragraph("القيمة الإجمالية", small_label_style, contract_page_width - 16),
-            Spacer(1, 4),
-            contract_paragraph(f"{format_currency(total)} ريال سعودي فقط لا غير", card_value_style, contract_page_width - 16),
+            *contract_value_details,
         ]
     ]], colWidths=[166 * mm], hAlign="RIGHT")
     contract_value_card.setStyle(TableStyle([
@@ -3267,12 +3419,17 @@ def calculate_project_contract_total(conn, project_row) -> float:
             "SELECT * FROM contracts WHERE id = ?",
             (project_row["contract_id"],)
         ).fetchone()
+    contract_total = 0.0
     if contract and contract["quote_id"]:
+        financials = calculate_quote_financials(contract["quote_id"])
+        if financials:
+            contract_total = safe_float(financials["grand_total_with_vat"])
         items = conn.execute(
             "SELECT qty, unit_price FROM quote_items WHERE quote_id = ?",
             (contract["quote_id"],)
         ).fetchall()
-    contract_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
+    if contract_total <= 0:
+        contract_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
     if contract_total <= 0 and project_row and "contract_value" in project_row.keys():
         contract_total = safe_float(project_row["contract_value"])
     return contract_total + get_project_appendices_total(conn, project_row["id"] if project_row else 0)
@@ -3305,10 +3462,7 @@ def build_project_financial_snapshot(conn, project_row):
         (project_row["id"],)
     ).fetchall()
 
-    contract_value = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
-    if contract_value <= 0 and "contract_value" in project_row.keys():
-        contract_value = safe_float(project_row["contract_value"])
-    contract_value += get_project_appendices_total(conn, project_row["id"])
+    contract_value = calculate_project_contract_total(conn, project_row)
     total_expenses = sum(safe_float(expense["amount"]) for expense in expenses)
     profit = contract_value - total_expenses
     profit_percentage = (profit / contract_value * 100) if contract_value > 0 else 0.0
@@ -7951,6 +8105,12 @@ def new_quote_form(request: Request, company: str = ""):
         مدة التنفيذ (مثال: 90 يوم):
         <input type="text" name="duration"><br><br>
 
+        <label for="vat-enabled">طريقة الضريبة:</label>
+        <select id="vat-enabled" name="vat_enabled">
+            <option value="1" selected>شامل ضريبة القيمة المضافة 15%</option>
+            <option value="0">بدون ضريبة قيمة مضافة</option>
+        </select><br><br>
+
         <button type="submit" class="glass-btn gold-text">إنشاء العرض</button>
     </form>
 
@@ -7968,7 +8128,8 @@ def save_quote(
     client_id: str = Form(""),
     client_address: str = Form(""),
     project_location: str = Form(""),
-    duration: str = Form("")
+    duration: str = Form(""),
+    vat_enabled: int = Form(1),
 ):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
@@ -7981,8 +8142,8 @@ def save_quote(
 
     cur.execute("""
         INSERT INTO quotes 
-        (company, client, status, client_id, client_address, project_location, duration)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (company, client, status, client_id, client_address, project_location, duration, vat_enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         company,
         client,
@@ -7990,7 +8151,8 @@ def save_quote(
         client_id,
         client_address,
         project_location,
-        duration
+        duration,
+        1 if vat_enabled else 0,
     ))
 
     quote_id = cur.lastrowid
@@ -8114,6 +8276,7 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
     if not isinstance(access_result, sqlite3.Row):
         return access_result
     is_read_only_works_partner = is_works_partner_user(access_result, company)
+    financials = calculate_quote_financials(quote_id)
     from datetime import date
     conn = get_db()
 
@@ -8131,6 +8294,16 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
         "SELECT * FROM quote_payments WHERE quote_id = ?",
         (quote_id,)
     ).fetchall()
+
+    linked_contract = conn.execute(
+        "SELECT id FROM contracts WHERE quote_id = ? LIMIT 1", (quote_id,)
+    ).fetchone()
+
+    pricing_items = []
+    if normalize_access_value(company) == "works":
+        pricing_items = conn.execute(
+            "SELECT id, item_name, unit, default_price FROM pricing_items ORDER BY category, item_name"
+        ).fetchall()
 
     conn.close()
 
@@ -8150,7 +8323,7 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
 
     payment_rows = ""
     for p in payments:
-        amount = (p["percentage"] / 100) * total
+        amount = (p["percentage"] / 100) * financials["grand_total_with_vat"]
         payment_rows += f"""
         <tr>
             <td>{p['title']}</td>
@@ -8175,21 +8348,92 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
 
     footer_text = "يتم تنفيذ الأعمال وفق أعلى معايير الجودة، مع ضمان حسن التنفيذ بإذن الله."
 
+    financial_card_html = ""
+    if financials and not is_read_only_works_partner:
+        vat_enabled = bool(financials["vat_enabled"])
+        vat_status_text = "شامل ضريبة القيمة المضافة 15%" if vat_enabled else "بدون ضريبة قيمة مضافة"
+        vat_setting_form = (
+            '<div class="inventory-note" style="margin-top:14px;">لا يمكن تغيير طريقة الضريبة بعد ربط العرض بعقد.</div>'
+            if linked_contract else
+            f'''<form action="/quote/{quote_id}/update-vat-setting?company={company}" method="post" style="margin-top:14px;">
+                <label for="quote-vat-enabled">طريقة الضريبة:</label>
+                <select id="quote-vat-enabled" name="vat_enabled">
+                    <option value="1" {"selected" if vat_enabled else ""}>شامل ضريبة القيمة المضافة 15%</option>
+                    <option value="0" {"selected" if not vat_enabled else ""}>بدون ضريبة قيمة مضافة</option>
+                </select>
+                <button type="submit" class="glass-btn gold-text">حفظ طريقة الضريبة</button>
+            </form>'''
+        )
+        financial_card_html = f"""
+<div class="inventory-panel" style="margin:24px 0;padding:20px;text-align:right;">
+    <h3>الملخص المالي للإدارة</h3>
+    <div class="inventory-note">طريقة الضريبة: {vat_status_text}</div>
+    <table class="table" border="1" style="width:100%;text-align:center;">
+        <tr><th>إجمالي البنود</th><td>{format_currency(financials['items_total'])} ريال</td></tr>
+        <tr><th>Overhead ({format_percentage_display(financials['overhead_rate'])})</th><td>{format_currency(financials['overhead_amount'])} ريال</td></tr>
+        <tr><th>الربح ({format_percentage_display(financials['profit_rate'])})</th><td>{format_currency(financials['profit_amount'])} ريال</td></tr>
+        <tr><th>الإجمالي قبل الضريبة</th><td>{format_currency(financials['subtotal_before_vat'])} ريال</td></tr>
+        <tr><th>VAT ({format_percentage_display(financials['vat_rate'])})</th><td>{format_currency(financials['vat_amount'])} ريال</td></tr>
+        <tr><th>الإجمالي شامل الضريبة</th><td><strong>{format_currency(financials['grand_total_with_vat'])} ريال</strong></td></tr>
+    </table>
+    <form action="/quote/{quote_id}/update-profit-rate?company={company}" method="post" style="margin-top:14px;">
+        <label for="quote-profit-rate">نسبة الربح:</label>
+        <input id="quote-profit-rate" type="number" name="profit_rate" min="0" step="0.01" value="{financials['profit_rate']}" required>
+        <button type="submit" class="glass-btn gold-text">تحديث النسبة</button>
+    </form>
+    {vat_setting_form}
+</div>
+"""
+
     quote_item_form_html = ""
     if not is_read_only_works_partner:
+        pricing_item_options = "".join(
+            f'<option value="{item["id"]}" '
+            f'data-description="{escape(item["item_name"] or "", quote=True)}" '
+            f'data-unit="{escape(item["unit"] or "", quote=True)}" '
+            f'data-price="{safe_float(item["default_price"])}">'
+            f'{escape(item["item_name"] or "-")}</option>'
+            for item in pricing_items
+        )
+        pricing_item_selector_html = ""
+        if normalize_access_value(company) == "works":
+            pricing_item_selector_html = f"""
+بند من صفحة التسعير (اختياري):
+<select id="pricing-item-reference" style="width:100%;">
+    <option value="">إضافة بند يدوياً</option>
+    {pricing_item_options}
+</select>
+
+الوحدة المرجعية:
+<input type="text" id="pricing-item-unit" readonly placeholder="تظهر عند اختيار بند من التسعير">
+"""
         quote_item_form_html = f"""
 <form action="/add-item/{quote_id}?company={company}" method="post">
+{pricing_item_selector_html}
+
 الوصف:
-<textarea name="description" rows="6" style="width:100%; resize: vertical;" required></textarea>
+<textarea id="quote-item-description" name="description" rows="6" style="width:100%; resize: vertical;" required></textarea>
 
 الكمية:
 <input type="number" step="0.01" name="qty" required>
 
 سعر الوحدة:
-<input type="number" step="0.01" name="unit_price" required>
+<input id="quote-item-unit-price" type="number" step="0.01" name="unit_price" required>
 
 <button type="submit" class="glass-btn gold-text">&#10133; إضافة بند</button>
 </form>
+<script>
+const pricingItemReference = document.getElementById("pricing-item-reference");
+if (pricingItemReference) {{
+    pricingItemReference.addEventListener("change", function () {{
+        const selectedOption = this.options[this.selectedIndex];
+        if (!selectedOption.value) return;
+        document.getElementById("quote-item-description").value = selectedOption.dataset.description || "";
+        document.getElementById("pricing-item-unit").value = selectedOption.dataset.unit || "";
+        document.getElementById("quote-item-unit-price").value = selectedOption.dataset.price || "";
+    }});
+}}
+</script>
 """
 
     quote_payment_form_html = ""
@@ -8297,6 +8541,8 @@ URBAN RISE<br>WORKS
 
 </table>
 
+{financial_card_html}
+
 <br><br>
 
 <h3>الدفعات</h3>
@@ -8338,6 +8584,7 @@ def quote_report(request: Request, quote_id: int, company: str = ""):
     if normalize_access_value(company) != "works":
         return HTMLResponse("<h2>هذه الميزة متاحة لشركة المقاولات فقط</h2>", status_code=403)
 
+    financials = calculate_quote_financials(quote_id)
     conn = get_db()
     quote = conn.execute(
         "SELECT * FROM quotes WHERE id = ? AND company = ?",
@@ -8356,7 +8603,9 @@ def quote_report(request: Request, quote_id: int, company: str = ""):
     ).fetchall()
     conn.close()
 
-    file_path, file_name = build_quote_report_pdf(quote, items, payments, company=company)
+    file_path, file_name = build_quote_report_pdf(
+        quote, items, payments, company=company, financials=financials
+    )
     return FileResponse(path=file_path, filename=file_name, media_type="application/pdf")
 
 @app.post("/add-item/{quote_id}", response_class=HTMLResponse)
@@ -8382,6 +8631,56 @@ def add_item(
     conn.commit()
     conn.close()
     return RedirectResponse(url=f"/quote/{quote_id}?company={company}", status_code=303)
+
+
+@app.post("/quote/{quote_id}/update-profit-rate")
+def update_quote_profit_rate(
+    request: Request,
+    quote_id: int,
+    company: str = "works",
+    profit_rate: float = Form(...),
+):
+    access_result = ensure_company_access(request, company)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+
+    conn = get_db()
+    conn.execute(
+        "UPDATE quotes SET profit_rate = ? WHERE id = ? AND company = ?",
+        (profit_rate, quote_id, company),
+    )
+    conn.commit()
+    conn.close()
+    calculate_quote_financials(quote_id)
+    return RedirectResponse(url=f"/quote/{quote_id}?company=works", status_code=303)
+
+
+@app.post("/quote/{quote_id}/update-vat-setting")
+def update_quote_vat_setting(request: Request, quote_id: int, company: str = "works", vat_enabled: int = Form(...)):
+    access_result = ensure_company_access(request, company)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    conn = get_db()
+    try:
+        linked = conn.execute("SELECT id FROM contracts WHERE quote_id = ? LIMIT 1", (quote_id,)).fetchone()
+        if linked:
+            return HTMLResponse("<h2>لا يمكن تغيير طريقة الضريبة بعد ربط العرض بعقد.</h2>", status_code=409)
+        conn.execute(
+            "UPDATE quotes SET vat_enabled = ? WHERE id = ? AND company = ?",
+            (1 if vat_enabled else 0, quote_id, company),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    calculate_quote_financials(quote_id)
+    return RedirectResponse(url=f"/quote/{quote_id}?company={company}", status_code=303)
+
 
 @app.post("/add-payment/{quote_id}")
 def add_payment(
@@ -8421,6 +8720,8 @@ def convert_to_contract(request: Request, quote_id: int, company: str = ""):
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
+    financials = calculate_quote_financials(quote_id)
+    effective_contract_value = safe_float(financials["grand_total_with_vat"]) if financials else 0.0
     conn = get_db()
     try:
         quote = conn.execute(
@@ -8453,6 +8754,11 @@ def convert_to_contract(request: Request, quote_id: int, company: str = ""):
         ).fetchone()
         if existing_project:
             project_id = existing_project["id"]
+            if effective_contract_value > 0:
+                conn.execute(
+                    "UPDATE projects SET contract_value = ? WHERE id = ? AND company = ?",
+                    (effective_contract_value, project_id, company),
+                )
         else:
             quote_keys = set(quote.keys())
             project_name = (quote["project_location"] or "").strip() or f"مشروع عرض {quote_id}"
@@ -8464,9 +8770,9 @@ def convert_to_contract(request: Request, quote_id: int, company: str = ""):
                 """
                 INSERT INTO projects (
                     company, name, client, start_date, end_date, status, contract_id,
-                    project_type, work_type, finish_level, area
+                    project_type, work_type, finish_level, area, contract_value
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     company,
@@ -8480,6 +8786,7 @@ def convert_to_contract(request: Request, quote_id: int, company: str = ""):
                     (quote["work_type"] or "").strip() if "work_type" in quote_keys and quote["work_type"] else "",
                     (quote["finish_level"] or "").strip() if "finish_level" in quote_keys and quote["finish_level"] else "",
                     safe_float(quote["area"]) if "area" in quote_keys and str(quote["area"]).strip() else None,
+                    effective_contract_value if effective_contract_value > 0 else None,
                 )
             )
             project_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -9025,18 +9332,21 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
 
     conn.close()
 
-    # حساب الإجمالي
-    total = 0
+    financials = calculate_quote_financials(quote["id"])
+    items_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
+    subtotal_before_vat = safe_float(financials["subtotal_before_vat"]) if financials else items_total
+    total = safe_float(financials["grand_total_with_vat"]) if financials else items_total
+    display_factor = subtotal_before_vat / items_total if items_total else 1.0
     items_rows = ""
     for i in items:
-        line = i["qty"] * i["unit_price"]
-        total += line
+        displayed_unit_price = safe_float(i["unit_price"]) * display_factor
+        line = safe_float(i["qty"]) * displayed_unit_price
         items_rows += f"""
         <tr>
             <td>{i['description']}</td>
             <td>{i['qty']}</td>
-            <td>{i['unit_price']}</td>
-            <td>{line}</td>
+            <td>{format_currency(displayed_unit_price)}</td>
+            <td>{format_currency(line)}</td>
         </tr>
         """
 
@@ -9147,8 +9457,16 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
 </tr>
 {items_rows}
 <tr>
-<td colspan="3"><strong>الإجمالي</strong></td>
-<td><strong>{total} ريال سعودي</strong></td>
+<td colspan="3"><strong>قيمة الأعمال قبل الضريبة</strong></td>
+<td><strong>{format_currency(subtotal_before_vat)} ريال سعودي</strong></td>
+</tr>
+<tr>
+<td colspan="3"><strong>ضريبة القيمة المضافة {format_percentage_display(financials['vat_rate']) if financials else '0%'}</strong></td>
+<td><strong>{format_currency(financials['vat_amount']) if financials else '0'} ريال سعودي</strong></td>
+</tr>
+<tr>
+<td colspan="3"><strong>الإجمالي شامل الضريبة</strong></td>
+<td><strong>{format_currency(total)} ريال سعودي</strong></td>
 </tr>
 </table>
 
