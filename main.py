@@ -1023,9 +1023,20 @@ for column_name, column_definition in {
     "vat_amount": "REAL DEFAULT 0",
     "grand_total_with_vat": "REAL DEFAULT 0",
     "vat_enabled": "INTEGER NOT NULL DEFAULT 1",
+    "pricing_version": "INTEGER",
 }.items():
     if column_name not in quote_columns:
         conn.execute(f"ALTER TABLE quotes ADD COLUMN {column_name} {column_definition}")
+
+contract_columns = {row["name"] for row in conn.execute("PRAGMA table_info(contracts)").fetchall()}
+for column_name, column_definition in {
+    "contract_subtotal_before_vat": "REAL",
+    "contract_vat_amount": "REAL",
+    "contract_total": "REAL",
+    "financial_snapshot_locked": "INTEGER NOT NULL DEFAULT 0",
+}.items():
+    if column_name not in contract_columns:
+        conn.execute(f"ALTER TABLE contracts ADD COLUMN {column_name} {column_definition}")
 
 for statement in [
     "ALTER TABLE project_expenses ADD COLUMN category TEXT",
@@ -2059,7 +2070,7 @@ def calculate_quote_financials(quote_id: int) -> dict | None:
     conn = get_db()
     try:
         quote = conn.execute(
-            "SELECT overhead_rate, profit_rate, vat_rate, COALESCE(vat_enabled, 1) AS vat_enabled FROM quotes WHERE id = ?",
+            "SELECT overhead_rate, profit_rate, vat_rate, COALESCE(vat_enabled, 1) AS vat_enabled, pricing_version FROM quotes WHERE id = ?",
             (quote_id,),
         ).fetchone()
         if not quote:
@@ -2073,6 +2084,23 @@ def calculate_quote_financials(quote_id: int) -> dict | None:
             (decimal_from_value(item["qty"]) * decimal_from_value(item["unit_price"]) for item in items),
             Decimal("0"),
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        pricing_version = int(quote["pricing_version"] or 1)
+        if pricing_version < 2:
+            legacy_total = float(items_total)
+            return {
+                "pricing_version": 1,
+                "items_total": legacy_total,
+                "overhead_rate": 0.0,
+                "overhead_amount": 0.0,
+                "base_after_overhead": legacy_total,
+                "profit_rate": 0.0,
+                "profit_amount": 0.0,
+                "subtotal_before_vat": legacy_total,
+                "vat_rate": 0.0,
+                "vat_enabled": 0,
+                "vat_amount": 0.0,
+                "grand_total_with_vat": legacy_total,
+            }
         overhead_rate = decimal_from_value(19 if quote["overhead_rate"] is None else quote["overhead_rate"])
         profit_rate = decimal_from_value(15 if quote["profit_rate"] is None else quote["profit_rate"])
         vat_rate = decimal_from_value(15 if quote["vat_rate"] is None else quote["vat_rate"])
@@ -2085,6 +2113,7 @@ def calculate_quote_financials(quote_id: int) -> dict | None:
         grand_total_with_vat = subtotal_before_vat + vat_amount
 
         values = {
+            "pricing_version": 2,
             "items_total": float(items_total),
             "overhead_rate": float(overhead_rate),
             "overhead_amount": float(overhead_amount),
@@ -2788,7 +2817,7 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     font_name = get_pdf_report_font_name()
     company_profile = WORKS_COMPANY_PROFILE
     items_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
-    financials = financials or calculate_quote_financials(quote["id"]) or {
+    financials = financials or calculate_contract_financials(contract["id"]) or {
         "items_total": items_total,
         "subtotal_before_vat": items_total,
         "vat_rate": 0,
@@ -3411,6 +3440,58 @@ def get_contract_project(conn, contract_row):
     ).fetchone()
 
 
+def get_contract_effective_financials(conn, contract_row, project_row=None) -> dict | None:
+    """Return the locked contract value without repricing an existing contract."""
+    if not contract_row:
+        return None
+    contract_keys = set(contract_row.keys())
+    snapshot_locked = (
+        "financial_snapshot_locked" in contract_keys
+        and bool(contract_row["financial_snapshot_locked"])
+        and "contract_total" in contract_keys
+        and contract_row["contract_total"] is not None
+    )
+    if snapshot_locked:
+        subtotal = safe_float(contract_row["contract_subtotal_before_vat"])
+        vat_amount = safe_float(contract_row["contract_vat_amount"])
+        total = safe_float(contract_row["contract_total"])
+        return {
+            "pricing_version": 2,
+            "items_total": subtotal,
+            "subtotal_before_vat": subtotal,
+            "vat_rate": (vat_amount / subtotal * 100) if subtotal > 0 else 0.0,
+            "vat_enabled": int(vat_amount > 0),
+            "vat_amount": vat_amount,
+            "grand_total_with_vat": total,
+        }
+
+    project_row = project_row or get_contract_project(conn, contract_row)
+    if project_row and "contract_value" in project_row.keys() and safe_float(project_row["contract_value"]) > 0:
+        historical_total = safe_float(project_row["contract_value"])
+        return {
+            "pricing_version": 1,
+            "items_total": historical_total,
+            "subtotal_before_vat": historical_total,
+            "vat_rate": 0.0,
+            "vat_enabled": 0,
+            "vat_amount": 0.0,
+            "grand_total_with_vat": historical_total,
+        }
+
+    if contract_row["quote_id"]:
+        return calculate_quote_financials(contract_row["quote_id"])
+    return None
+
+
+def calculate_contract_financials(contract_id: int) -> dict | None:
+    conn = get_db()
+    try:
+        contract = conn.execute("SELECT * FROM contracts WHERE id = ?", (contract_id,)).fetchone()
+        return get_contract_effective_financials(conn, contract)
+    finally:
+        conn.close()
+
+
 def calculate_project_contract_total(conn, project_row) -> float:
     contract = None
     items = []
@@ -3420,10 +3501,11 @@ def calculate_project_contract_total(conn, project_row) -> float:
             (project_row["contract_id"],)
         ).fetchone()
     contract_total = 0.0
-    if contract and contract["quote_id"]:
-        financials = calculate_quote_financials(contract["quote_id"])
+    if contract:
+        financials = get_contract_effective_financials(conn, contract, project_row)
         if financials:
             contract_total = safe_float(financials["grand_total_with_vat"])
+    if contract and contract["quote_id"]:
         items = conn.execute(
             "SELECT qty, unit_price FROM quote_items WHERE quote_id = ?",
             (contract["quote_id"],)
@@ -8142,8 +8224,8 @@ def save_quote(
 
     cur.execute("""
         INSERT INTO quotes 
-        (company, client, status, client_id, client_address, project_location, duration, vat_enabled)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (company, client, status, client_id, client_address, project_location, duration, vat_enabled, pricing_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         company,
         client,
@@ -8153,6 +8235,7 @@ def save_quote(
         project_location,
         duration,
         1 if vat_enabled else 0,
+        2,
     ))
 
     quote_id = cur.lastrowid
@@ -8648,12 +8731,14 @@ def update_quote_profit_rate(
         return partner_guard
 
     conn = get_db()
-    conn.execute(
-        "UPDATE quotes SET profit_rate = ? WHERE id = ? AND company = ?",
+    result = conn.execute(
+        "UPDATE quotes SET profit_rate = ? WHERE id = ? AND company = ? AND pricing_version = 2",
         (profit_rate, quote_id, company),
     )
     conn.commit()
     conn.close()
+    if result.rowcount == 0:
+        return HTMLResponse("<h2>العرض القديم غير قابل لإعادة التسعير تلقائياً.</h2>", status_code=409)
     calculate_quote_financials(quote_id)
     return RedirectResponse(url=f"/quote/{quote_id}?company=works", status_code=303)
 
@@ -8671,11 +8756,13 @@ def update_quote_vat_setting(request: Request, quote_id: int, company: str = "wo
         linked = conn.execute("SELECT id FROM contracts WHERE quote_id = ? LIMIT 1", (quote_id,)).fetchone()
         if linked:
             return HTMLResponse("<h2>لا يمكن تغيير طريقة الضريبة بعد ربط العرض بعقد.</h2>", status_code=409)
-        conn.execute(
-            "UPDATE quotes SET vat_enabled = ? WHERE id = ? AND company = ?",
+        result = conn.execute(
+            "UPDATE quotes SET vat_enabled = ? WHERE id = ? AND company = ? AND pricing_version = 2",
             (1 if vat_enabled else 0, quote_id, company),
         )
         conn.commit()
+        if result.rowcount == 0:
+            return HTMLResponse("<h2>العرض القديم غير قابل لإعادة التسعير تلقائياً.</h2>", status_code=409)
     finally:
         conn.close()
     calculate_quote_financials(quote_id)
@@ -8743,8 +8830,17 @@ def convert_to_contract(request: Request, quote_id: int, company: str = ""):
         if not contract_id:
             cur = conn.cursor()
             cur.execute(
-                "INSERT INTO contracts (company, quote_id, status, source_type, manual_project_id) VALUES (?, ?, ?, ?, ?)",
-                (company, quote_id, "ساري", CONTRACT_RECORD_SOURCE_QUOTE, None)
+                """INSERT INTO contracts (
+                       company, quote_id, status, source_type, manual_project_id,
+                       contract_subtotal_before_vat, contract_vat_amount, contract_total,
+                       financial_snapshot_locked
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                (
+                    company, quote_id, "ساري", CONTRACT_RECORD_SOURCE_QUOTE, None,
+                    safe_float(financials["subtotal_before_vat"]) if financials else 0.0,
+                    safe_float(financials["vat_amount"]) if financials else 0.0,
+                    effective_contract_value,
+                )
             )
             contract_id = cur.lastrowid
 
@@ -8754,16 +8850,11 @@ def convert_to_contract(request: Request, quote_id: int, company: str = ""):
         ).fetchone()
         if existing_project:
             project_id = existing_project["id"]
-            if effective_contract_value > 0:
-                conn.execute(
-                    "UPDATE projects SET contract_value = ? WHERE id = ? AND company = ?",
-                    (effective_contract_value, project_id, company),
-                )
         else:
             quote_keys = set(quote.keys())
             project_name = (quote["project_location"] or "").strip() or f"مشروع عرض {quote_id}"
             project_client = (quote["client"] or "").strip() or "غير محدد"
-            start_date = ""
+            start_date = date.today().isoformat()
             end_date = ""
             status = "جاري"
             conn.execute(
@@ -9332,7 +9423,7 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
 
     conn.close()
 
-    financials = calculate_quote_financials(quote["id"])
+    financials = calculate_contract_financials(contract["id"])
     items_total = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
     subtotal_before_vat = safe_float(financials["subtotal_before_vat"]) if financials else items_total
     total = safe_float(financials["grand_total_with_vat"]) if financials else items_total
