@@ -5161,6 +5161,20 @@ def build_daily_activity_report_data():
             ORDER BY datetime(request.created_at) DESC, request.id DESC
             """
         ).fetchall()
+        client_portal_views = conn.execute(
+            """
+            SELECT access.user_id, access.project_id, access.last_portal_view_at,
+                   users.full_name AS client_name, users.username AS client_username,
+                   projects.name AS project_name
+            FROM client_project_access access
+            JOIN users ON users.id = access.user_id AND users.role = 'client'
+            JOIN projects ON projects.id = access.project_id
+            WHERE substr(access.last_portal_view_at, 1, 10) = ?
+            ORDER BY datetime(access.last_portal_view_at) DESC
+            LIMIT 10
+            """,
+            (today,),
+        ).fetchall()
     finally:
         conn.close()
 
@@ -5171,6 +5185,7 @@ def build_daily_activity_report_data():
         "property_expenses": property_expenses,
         "maintenance_updates": maintenance_updates,
         "client_requests": client_requests,
+        "client_portal_views": client_portal_views,
     }
 
 
@@ -5281,6 +5296,24 @@ def daily_activity_report(request: Request):
         </article>"""
     client_requests_section = f"""<div class="client-requests-panel"><div class="client-requests-title"><h3>طلبات العملاء الجديدة</h3><span>{len(data['client_requests'])}</span></div>{client_requests_html or '<p>لا توجد طلبات عملاء جديدة خلال آخر 7 أيام.</p>'}</div>"""
 
+    client_portal_lines = []
+    for item in data["client_portal_views"]:
+        client_name = escape(item["client_name"] or item["client_username"] or "عميل")
+        project_name = escape(item["project_name"] or "-")
+        viewed_at = datetime.strptime(item["last_portal_view_at"], "%Y-%m-%d %H:%M:%S")
+        hour = viewed_at.hour % 12 or 12
+        period = "ص" if viewed_at.hour < 12 else "م"
+        last_view = f"اليوم {hour}:{viewed_at.minute:02d} {period}"
+        client_portal_lines.append(
+            f'<li class="daily-activity-good">العميل: {client_name}<br>المشروع: {project_name}<br>آخر دخول: {last_view}</li>'
+        )
+    client_portal_section = f"""
+    <div class="inventory-panel" style="text-align:right;margin:18px 0;">
+        <h3>آخر دخول للعملاء</h3>
+        <ul style="line-height:2.1;margin:0;padding-right:22px;">{''.join(client_portal_lines) or '<li>لا يوجد دخول للعملاء اليوم</li>'}</ul>
+    </div>
+    """
+
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
@@ -5359,6 +5392,8 @@ def daily_activity_report(request: Request):
     <p>{data['today']}</p>
 
     {client_requests_section}
+
+    {client_portal_section}
 
     <div class="inventory-panel" style="text-align:right;margin:18px 0;">
         <h3>تحليل سريع</h3>

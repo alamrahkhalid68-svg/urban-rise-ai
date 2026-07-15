@@ -198,6 +198,7 @@ def init_client_portal_schema():
     _column(conn, "client_material_receipt_images", "show_to_client INTEGER NOT NULL DEFAULT 0")
     _column(conn, "client_project_access", "portal_enabled INTEGER NOT NULL DEFAULT 0")
     _column(conn, "client_project_access", "portal_published INTEGER NOT NULL DEFAULT 0")
+    _column(conn, "client_project_access", "last_portal_view_at TEXT")
     _column(conn, "client_portal_settings", "published INTEGER NOT NULL DEFAULT 0")
     _column(conn, "projects", "duration_days INTEGER")
     _column(conn, "contracts", "duration_days INTEGER")
@@ -390,6 +391,27 @@ def _as_date(value):
         return None
 
 
+def _row_date(row, *column_names):
+    if not row:
+        return None
+    keys = set(row.keys())
+    for column_name in column_names:
+        if column_name in keys:
+            parsed = _as_date(row[column_name])
+            if parsed:
+                return parsed
+    return None
+
+
+def _project_start_date(project, contract):
+    """Resolve a real project/contract start date without using activity timestamps."""
+    return (
+        _row_date(project, "start_date")
+        or _row_date(contract, "start_date", "created_at")
+        or _row_date(project, "created_at")
+    )
+
+
 def _progress_details(project, contract, quote, appendices, phases, today=None):
     original = 0
     source = ""
@@ -402,7 +424,7 @@ def _progress_details(project, contract, quote, appendices, phases, today=None):
     if not original and "duration_days" in project.keys():
         original = _duration_days(project["duration_days"])
         source = "المشروع" if original else ""
-    start = _as_date(project["start_date"])
+    start = _project_start_date(project, contract)
     if not original and start:
         end = _as_date(project["end_date"])
         if end and end >= start:
@@ -413,14 +435,13 @@ def _progress_details(project, contract, quote, appendices, phases, today=None):
                 if (a["status"] or "").strip().lower() in {s.lower() for s in approved})
     total = original + extra
     elapsed = max(0, ((today or date.today()) - start).days) if start else 0
-    timeline = min(100, round(elapsed * 100 / total)) if start and total > 0 else None
+    timeline = min(100, max(0, round(elapsed * 100 / total, 2))) if start and total > 0 else None
     phase = _phase_progress(phases)
-    candidates = [value for value in (timeline, phase) if value is not None]
-    overall = min(candidates) if candidates else 0
+    overall = phase if phase is not None else (timeline if timeline is not None else 0)
     expected = start + timedelta(days=total) if start and total > 0 else None
     return dict(progress=overall, timeline_progress=timeline, phase_progress=phase,
                 duration_days=total, original_duration_days=original, appendix_extra_days=extra,
-                elapsed_days=min(elapsed, total) if total else elapsed,
+                elapsed_days=elapsed,
                 remaining_days=max(0, total - elapsed) if total else None,
                 expected_delivery=expected.isoformat() if expected else "", duration_source=source,
                 progress_label="التقدم العام" if phase is not None else "التقدم حسب الجدول الزمني")
@@ -500,10 +521,8 @@ def _project_context(conn, project_id, client_user_id=None):
                 images.append(image_item)
         receipt_data.append((receipt, items, images))
     collections = conn.execute("SELECT COALESCE(SUM(amount),0) total FROM project_collections WHERE project_id=? AND COALESCE(collection_status,'') NOT IN ('ملغي','ملغاة')", (project_id,)).fetchone()["total"] or 0
-    contract_value = float(project["contract_value"] or 0)
-    if not contract_value and project["contract_id"]:
-        row = conn.execute("""SELECT COALESCE(SUM(qi.qty*qi.unit_price),0) total FROM contracts c JOIN quote_items qi ON qi.quote_id=c.quote_id WHERE c.id=?""", (project["contract_id"],)).fetchone()
-        contract_value = float(row["total"] or 0)
+    from main import calculate_project_contract_total
+    contract_value = calculate_project_contract_total(conn, project)
     contract = conn.execute("SELECT * FROM contracts WHERE id=?", (project["contract_id"],)).fetchone() if project["contract_id"] else None
     quote = conn.execute("SELECT * FROM quotes WHERE id=?", (contract["quote_id"],)).fetchone() if contract and contract["quote_id"] else None
     approved_contract_statuses = {"ساري", "معتمد", "نشط", "active", "approved"}
@@ -572,6 +591,12 @@ def register_client_portal(app):
         context.update(request=request, user=user, available_projects=available, empty=False,
                        portal_available=bool((is_admin_preview or (access and access["portal_enabled"] and access["portal_published"]))
                                              and context["settings"]["enabled"] and context["settings"]["published"]))
+        if not is_admin_preview and context["portal_available"]:
+            conn.execute(
+                "UPDATE client_project_access SET last_portal_view_at=? WHERE user_id=? AND project_id=?",
+                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user["id"], selected),
+            )
+            conn.commit()
         conn.close()
         return TEMPLATES.TemplateResponse(request, "client_portal.html", context)
 
