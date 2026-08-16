@@ -6,7 +6,6 @@ new tables and additive, nullable/defaulted columns so existing workflows remain
 unchanged.
 """
 from datetime import date, datetime, timedelta
-from html import escape
 from pathlib import Path
 import os
 import logging
@@ -114,6 +113,7 @@ def init_client_portal_schema():
         prepared INTEGER NOT NULL DEFAULT 0,
         page_title TEXT DEFAULT 'متابعة مشروعي',
         progress_override REAL,
+        timeline_flexibility_rate REAL NOT NULL DEFAULT 30,
         current_phase TEXT,
         client_note TEXT,
         announcement TEXT,
@@ -200,6 +200,7 @@ def init_client_portal_schema():
     _column(conn, "client_project_access", "portal_published INTEGER NOT NULL DEFAULT 0")
     _column(conn, "client_project_access", "last_portal_view_at TEXT")
     _column(conn, "client_portal_settings", "published INTEGER NOT NULL DEFAULT 0")
+    _column(conn, "client_portal_settings", "timeline_flexibility_rate REAL NOT NULL DEFAULT 30")
     _column(conn, "projects", "duration_days INTEGER")
     _column(conn, "contracts", "duration_days INTEGER")
     _column(conn, "contract_appendices", "appendix_extra_days INTEGER NOT NULL DEFAULT 0")
@@ -412,7 +413,8 @@ def _project_start_date(project, contract):
     )
 
 
-def _progress_details(project, contract, quote, appendices, phases, today=None):
+def _progress_details(project, contract, quote, appendices, phases, first_daily_date=None,
+                      flexibility_rate=30, today=None):
     original = 0
     source = ""
     if contract and "duration_days" in contract.keys():
@@ -424,27 +426,22 @@ def _progress_details(project, contract, quote, appendices, phases, today=None):
     if not original and "duration_days" in project.keys():
         original = _duration_days(project["duration_days"])
         source = "المشروع" if original else ""
-    start = _project_start_date(project, contract)
-    if not original and start:
-        end = _as_date(project["end_date"])
-        if end and end >= start:
-            original = (end - start).days
-            source = "المشروع"
-    approved = {"ساري", "معتمد", "مدفوع", "نشط", "active", "approved", "paid"}
-    extra = sum(max(0, int(a["appendix_extra_days"] or 0)) for a in appendices
-                if (a["status"] or "").strip().lower() in {s.lower() for s in approved})
-    total = original + extra
+    start = _as_date(first_daily_date)
+    try:
+        flex = max(0, float(flexibility_rate))
+    except (TypeError, ValueError):
+        flex = 30.0
+    effective_duration = original * (1 + flex / 100)
     elapsed = max(0, ((today or date.today()) - start).days) if start else 0
-    timeline = min(100, max(0, round(elapsed * 100 / total, 2))) if start and total > 0 else None
-    phase = _phase_progress(phases)
-    overall = phase if phase is not None else (timeline if timeline is not None else 0)
-    expected = start + timedelta(days=total) if start and total > 0 else None
-    return dict(progress=overall, timeline_progress=timeline, phase_progress=phase,
-                duration_days=total, original_duration_days=original, appendix_extra_days=extra,
+    timeline = min(100, max(0, round(elapsed * 100 / effective_duration, 2))) if start and effective_duration > 0 else 0
+    expected = start + timedelta(days=effective_duration) if start and effective_duration > 0 else None
+    return dict(progress=timeline, timeline_progress=timeline, phase_progress=None,
+                duration_days=original, original_duration_days=original, appendix_extra_days=0,
                 elapsed_days=elapsed,
-                remaining_days=max(0, total - elapsed) if total else None,
+                remaining_days=max(0, effective_duration - elapsed) if start and effective_duration > 0 else None,
                 expected_delivery=expected.isoformat() if expected else "", duration_source=source,
-                progress_label="التقدم العام" if phase is not None else "التقدم حسب الجدول الزمني")
+                progress_label="التقدم حسب الجدول الزمني",
+                timeline_flexibility_rate=flex, effective_duration=effective_duration)
 
 
 def _ensure_settings(conn, project_id):
@@ -464,12 +461,13 @@ def _is_visible(controls, item_type, item_id, default=True):
     return bool(row["visible_to_client"]) if row else default
 
 
-def _payment_status(amount, paid_before, paid_total):
+def _payment_status(amount, paid_before, paid_total, timeline_progress, due_progress_threshold):
+    """Resolve one payment's status from collections first, then timeline eligibility."""
     if paid_total >= paid_before + amount - 0.01:
         return "paid"
     if paid_total > paid_before:
-        return "due"
-    return "not_due"
+        return "partial"
+    return "due" if timeline_progress >= due_progress_threshold else "not_due"
 
 
 def _project_context(conn, project_id, client_user_id=None):
@@ -486,6 +484,10 @@ def _project_context(conn, project_id, client_user_id=None):
                     (SELECT id FROM client_project_phases WHERE project_id=? AND status='completed')""", (project_id, project_id))
     conn.commit()
     daily_source = conn.execute("SELECT * FROM project_daily WHERE project_id=? ORDER BY date DESC,id DESC", (project_id,)).fetchall()
+    first_daily_date = conn.execute(
+        "SELECT MIN(date) AS first_date FROM project_daily WHERE project_id=? AND date IS NOT NULL AND TRIM(date)<>''",
+        (project_id,),
+    ).fetchone()["first_date"]
     daily = []
     for row in daily_source:
         if not _is_visible(controls, "daily", row["id"], True):
@@ -542,16 +544,31 @@ def _project_context(conn, project_id, client_user_id=None):
         if _is_visible(controls, "appendix", appendix["id"], appendix_approved):
             title = appendix["short_description"] or f"ملحق عقد رقم {appendix['id']}"
             documents.append({"id": appendix["id"], "title": title, "document_type": "appendix", "file_path": f"/client-portal/appendix/{appendix['id']}", "created_at": f"{appendix['status'] or ''} · {float(appendix['total'] or 0):,.0f} ر.س"})
+    flexibility_rate = settings["timeline_flexibility_rate"] if "timeline_flexibility_rate" in settings.keys() else 30
+    progress_details = _progress_details(
+        project, contract, quote, appendices, phases,
+        first_daily_date=first_daily_date, flexibility_rate=flexibility_rate,
+    )
     has_source_payments = bool(contract and contract["quote_id"])
     if has_source_payments:
         quote_payments = conn.execute("SELECT * FROM quote_payments WHERE quote_id=? ORDER BY id", (contract["quote_id"],)).fetchall()
         paid_cursor = 0.0
+        due_progress_threshold = 0.0
         for payment in quote_payments:
-            amount = contract_value * float(payment["percentage"] or 0) / 100
+            percentage = float(payment["percentage"] or 0)
+            amount = contract_value * percentage / 100
             title = payment["title"] or "دفعة تعاقدية"
             if _is_visible(controls, "payment", payment["id"], True):
-                payments.append({"id": payment["id"], "title": title, "amount": amount, "due_reason": title, "status": _payment_status(amount, paid_cursor, float(collections))})
+                payments.append({
+                    "id": payment["id"], "title": title, "percentage": percentage,
+                    "amount": amount, "due_reason": title,
+                    "status": _payment_status(
+                        amount, paid_cursor, float(collections),
+                        progress_details["timeline_progress"], due_progress_threshold,
+                    ),
+                })
             paid_cursor += amount
+            due_progress_threshold += percentage
     if not has_source_payments:
         for manual in conn.execute("SELECT * FROM client_payment_schedule WHERE project_id=? AND show_to_client=1 ORDER BY id", (project_id,)).fetchall():
             if _is_visible(controls, "portal_payment", manual["id"], True):
@@ -560,7 +577,6 @@ def _project_context(conn, project_id, client_user_id=None):
         if _is_visible(controls, "portal_document", manual_doc["id"], True):
             documents.append(dict(manual_doc))
     next_payment = next((p for p in payments if p["status"] not in {"paid"}), None)
-    progress_details = _progress_details(project, contract, quote, appendices, phases)
     return dict(project=project, settings=settings, phases=phases, daily=daily, payments=payments,
                 documents=documents, requests=requests, request_attachments=request_attachments, receipts=receipt_data, **progress_details,
                 contract_value=contract_value, paid=float(collections), remaining=max(0, contract_value-float(collections)),
@@ -599,109 +615,6 @@ def register_client_portal(app):
             conn.commit()
         conn.close()
         return TEMPLATES.TemplateResponse(request, "client_portal.html", context)
-
-    @app.get("/admin/project/{project_id}/client-portal/html-debug", response_class=HTMLResponse)
-    def client_portal_html_debug(request: Request, project_id: int):
-        admin = _admin(request)
-        if not admin:
-            return HTMLResponse("غير مصرح", status_code=403)
-
-        conn = get_db()
-        context = _project_context(conn, project_id, None)
-        if not context:
-            conn.close()
-            return HTMLResponse("المشروع غير موجود", status_code=404)
-        available = conn.execute(
-            "SELECT id,name FROM projects WHERE id=?", (project_id,)
-        ).fetchall()
-        project_clients = conn.execute(
-            """SELECT u.id,u.username,u.is_active
-               FROM users u JOIN client_project_access a ON a.user_id=u.id
-               WHERE a.project_id=? ORDER BY u.id""",
-            (project_id,),
-        ).fetchall()
-        client_selection_debug = []
-        for client in project_clients:
-            client_project_ids = _client_project_ids(conn, client["id"])
-            client_selection_debug.append({
-                "user_id": client["id"],
-                "username": client["username"],
-                "is_active": client["is_active"],
-                "project_ids": client_project_ids,
-                "default_selected_project": client_project_ids[0] if client_project_ids else None,
-                "selects_requested_project": bool(
-                    project_id in client_project_ids
-                    and (client_project_ids[0] if client_project_ids else None) == project_id
-                ),
-            })
-        context.update(
-            request=request,
-            user=admin,
-            available_projects=available,
-            empty=False,
-            portal_available=bool(context["settings"]["enabled"] and context["settings"]["published"]),
-        )
-        conn.close()
-
-        rendered_html = TEMPLATES.get_template("client_portal.html").render(context)
-        updates_match = re.search(
-            r'(<section class="panel" id="updates">.*?</section>)',
-            rendered_html,
-            flags=re.DOTALL,
-        )
-        updates_html = updates_match.group(1) if updates_match else ""
-        daily_debug = []
-        for item in context.get("daily", []):
-            daily_debug.append({
-                "id": item.get("id"),
-                "date": item.get("date"),
-                "attachment_path": item.get("attachment_path"),
-                "attachment_url": item.get("attachment_url"),
-                "client_image_visible": bool(item.get("client_image_visible")),
-                "template_image_condition": bool(
-                    item.get("attachment_url") and item.get("client_image_visible")
-                ),
-            })
-
-        return HTMLResponse(
-            "<!doctype html><html><head><meta charset='utf-8'><title>Client portal HTML debug</title>"
-            "<style>body{font-family:Arial;margin:24px}pre{white-space:pre-wrap;word-break:break-word;"
-            "background:#f5f5f5;border:1px solid #ddd;padding:16px}table{border-collapse:collapse;width:100%}"
-            "th,td{border:1px solid #ccc;padding:7px;text-align:left;vertical-align:top}</style></head><body>"
-            f"<h1>Rendered client portal updates — project {project_id}</h1>"
-            f"<p><b>Template:</b> templates/client_portal.html<br><b>Final daily IDs:</b> "
-            f"{escape(str([item['id'] for item in daily_debug]))}</p>"
-            "<h2>Real client /client-portal default project selection</h2>"
-            "<table><thead><tr><th>User ID</th><th>Username</th><th>Active</th>"
-            "<th>All linked project IDs</th><th>Default selected project</th>"
-            "<th>Default is requested project</th></tr></thead><tbody>"
-            + "".join(
-                "<tr>"
-                f"<td>{item['user_id']}</td><td>{escape(str(item['username']))}</td>"
-                f"<td>{item['is_active']}</td><td>{escape(str(item['project_ids']))}</td>"
-                f"<td>{escape(str(item['default_selected_project']))}</td>"
-                f"<td>{item['selects_requested_project']}</td></tr>"
-                for item in client_selection_debug
-            )
-            + "</tbody></table>"
-            "<h2>Final daily data</h2><table><thead><tr><th>ID</th><th>Date</th>"
-            "<th>attachment_path</th><th>attachment_url</th><th>image visible</th>"
-            "<th>template condition</th></tr></thead><tbody>"
-            + "".join(
-                "<tr>"
-                f"<td>{escape(str(item['id']))}</td><td>{escape(str(item['date']))}</td>"
-                f"<td>{escape(str(item['attachment_path']))}</td>"
-                f"<td>{escape(str(item['attachment_url']))}</td>"
-                f"<td>{item['client_image_visible']}</td>"
-                f"<td>{item['template_image_condition']}</td></tr>"
-                for item in daily_debug
-            )
-            + "</tbody></table><h2>Exact rendered #updates HTML</h2>"
-            f"<pre>{escape(updates_html)}</pre>"
-            "<h2>Rendered preview</h2>"
-            + (updates_html or "<p>#updates section was not found in rendered HTML.</p>")
-            + "</body></html>"
-        )
 
     @app.post("/client-portal/change-request")
     def create_change_request(request: Request, project_id: int = Form(...), title: str = Form(...),
@@ -814,12 +727,15 @@ def register_client_portal(app):
         return TEMPLATES.TemplateResponse(request, "client_portal_admin.html", context)
 
     @app.post("/admin/project/{project_id}/client-portal/settings")
-    def save_settings(request: Request, project_id: int, page_title: str = Form("متابعة مشروعي"), progress_override: str = Form(""), current_phase: str = Form(""), client_note: str = Form(""), announcement: str = Form(""), manager_name: str = Form(""), manager_whatsapp: str = Form(""), expected_delivery: str = Form(""), enabled: str = Form("")):
+    def save_settings(request: Request, project_id: int, page_title: str = Form("متابعة مشروعي"), progress_override: str = Form(""), timeline_flexibility_rate: str = Form(""), current_phase: str = Form(""), client_note: str = Form(""), announcement: str = Form(""), manager_name: str = Form(""), manager_whatsapp: str = Form(""), expected_delivery: str = Form(""), enabled: str = Form("")):
         if not _admin(request): return HTMLResponse("غير مصرح", status_code=403)
         try: progress = max(0, min(100, float(progress_override))) if progress_override.strip() else None
         except ValueError: progress = None
         conn=get_db(); _ensure_settings(conn,project_id)
-        conn.execute("""UPDATE client_portal_settings SET enabled=?,page_title=?,progress_override=?,current_phase=?,client_note=?,announcement=?,project_manager_name=?,project_manager_whatsapp=?,expected_delivery=?,updated_at=? WHERE project_id=?""", (1 if enabled else 0,page_title.strip() or "متابعة مشروعي",progress,current_phase.strip(),client_note.strip(),announcement.strip(),manager_name.strip(),manager_whatsapp.strip(),expected_delivery.strip(),_now(),project_id))
+        current_settings = conn.execute("SELECT timeline_flexibility_rate FROM client_portal_settings WHERE project_id=?", (project_id,)).fetchone()
+        try: flexibility = max(0, float(timeline_flexibility_rate)) if timeline_flexibility_rate.strip() else float(current_settings["timeline_flexibility_rate"] or 30)
+        except (TypeError, ValueError): flexibility = 30.0
+        conn.execute("""UPDATE client_portal_settings SET enabled=?,page_title=?,progress_override=?,timeline_flexibility_rate=?,current_phase=?,client_note=?,announcement=?,project_manager_name=?,project_manager_whatsapp=?,expected_delivery=?,updated_at=? WHERE project_id=?""", (1 if enabled else 0,page_title.strip() or "متابعة مشروعي",progress,flexibility,current_phase.strip(),client_note.strip(),announcement.strip(),manager_name.strip(),manager_whatsapp.strip(),expected_delivery.strip(),_now(),project_id))
         conn.execute("UPDATE client_project_access SET portal_enabled=? WHERE project_id=?", (1 if enabled else 0, project_id))
         conn.commit(); conn.close(); return RedirectResponse(f"/admin/project/{project_id}/client-portal",303)
 
