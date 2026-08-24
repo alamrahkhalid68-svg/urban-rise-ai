@@ -491,7 +491,7 @@ def validate_user_form(role: str, company: str, section: str, redirect_target: s
             )
         if clean_role == "employee" and clean_section != "inventory":
             return RedirectResponse(
-                url=build_redirect_url(redirect_target, error="صفحة الإدارة العامة تخصص الموظف للمستودع فقط"),
+                url=build_redirect_url(redirect_target, error="القسم المحدد غير متاح في الإدارة العامة"),
                 status_code=303,
             )
 

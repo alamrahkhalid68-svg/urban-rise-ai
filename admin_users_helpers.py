@@ -30,6 +30,7 @@ COMPANY_PAGE_CONFIG = {
         "sections": [
             ("daily_log", "السجل اليومي"),
             ("expenses", "المصروفات"),
+            ("asset_custody_manager", "متعهد السيارات"),
         ],
     },
     "realestate": {
@@ -103,6 +104,7 @@ def get_section_label(company: str, section: str) -> str:
         "daily_log": "السجل اليومي",
         "expenses": "المصروفات",
         "inventory": "المستودع",
+        "asset_custody_manager": "متعهد السيارات",
         "property_accounts": "موظف إدارة الأملاك / الحسابات",
         "maintenance": "موظف الصيانة",
         "active_projects": "مدير المشاريع النشطة",

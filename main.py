@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from auth import get_current_user, get_user_by_id, is_admin, is_employee, is_owner, is_partner, is_project_manager, is_tenant, password_matches, require_login, require_role
 from admin_users import router as admin_users_router
+from assets_custody import register_assets_custody
 from access_control import ensure_company_access, ensure_employee_any_section_access, ensure_employee_section_access, ensure_property_access, ensure_request_belongs_to_tenant, ensure_tenant_access, get_accessible_property_ids, get_employee_allowed_sections, get_primary_tenant_id, get_user_company_access_rows, get_user_tenant_access_ids, normalize_access_value, user_has_company_access, user_has_property_access, user_has_tenant_access
 from fastapi.staticfiles import StaticFiles
 from db import get_db
@@ -68,6 +69,10 @@ PROTECTED_ROUTE_PREFIXES = (
     "/contracts",
     "/contract",
     "/employees",
+    "/employee/",
+    "/assets-custody",
+    "/vehicles",
+    "/vehicle/",
     "/new-employee",
     "/save-employee",
     "/realestate-development",
@@ -1303,6 +1308,8 @@ UPLOAD_CATEGORIES = (
     "client_materials",
     "property",
     "misc",
+    "vehicle_oil",
+    "vehicle_custody",
 )
 
 
@@ -4082,6 +4089,21 @@ def is_works_daily_log_only_employee(user, company: str) -> bool:
     return get_employee_allowed_sections(user["id"], company) == {"daily_log"}
 
 
+def is_asset_custody_contractor(user) -> bool:
+    if not user or not is_employee(user):
+        return False
+    return get_employee_allowed_sections(user["id"], "works") == {"asset_custody_manager"}
+
+
+def is_asset_custody_allowed_path(path: str) -> bool:
+    normalized_path = (path or "/").rstrip("/") or "/"
+    if normalized_path in {"/assets-custody", "/session-info", "/logout"}:
+        return True
+    if normalized_path.startswith("/vehicle/") or normalized_path.startswith("/uploads/"):
+        return True
+    return False
+
+
 def is_works_daily_log_allowed_path(path: str) -> bool:
     normalized_path = (path or "/").rstrip("/") or "/"
     if normalized_path in {
@@ -4565,6 +4587,8 @@ def get_role_landing_url(user) -> str:
         return "/property-management"
 
     if is_employee(user):
+        if is_asset_custody_contractor(user):
+            return "/assets-custody"
         access_rows = get_user_company_access_rows(user["id"])
         fallback_company = ""
         for row in access_rows:
@@ -4767,6 +4791,15 @@ async def authentication_middleware(request: Request, call_next):
                 "صلاحية موظف السجل اليومي تقتصر على السجل اليومي واستلام مواد العميل",
                 back_url="/projects?company=works",
             )
+
+        if request.state.current_user and is_asset_custody_contractor(request.state.current_user):
+            if path in {"/", "/portal"}:
+                return RedirectResponse(url="/assets-custody", status_code=303)
+            if not is_asset_custody_allowed_path(path):
+                return access_denied_response(
+                    "صلاحية متعهد السيارات تقتصر على نظام العهد والسيارات",
+                    back_url="/assets-custody",
+                )
 
         return await call_next(request)
     except Exception as exc:
@@ -9729,7 +9762,7 @@ def employees_page(request: Request, company: str = ""):
         rows += f"""
 <tr>
     <td>{e['id']}</td>
-    <td>{e['name']}</td>
+    <td><a href="/employee/{e['id']}" class="action-btn">{escape(e['name'] or '')}</a></td>
     <td>{e['role']}</td>
     <td>{manage_html}</td>
 </tr>
@@ -9746,16 +9779,29 @@ def employees_page(request: Request, company: str = ""):
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
+<body class="system-dark employees-page" dir="rtl">
 <div class="dashboard">
 {HOME_BUTTON}
-    <h1>الموظفين</h1>
+    <div class="page-heading-row">
+        <div>
+            <h1>الموظفين</h1>
+            <p class="section-subtitle">إدارة الموظفين والعهد المرتبطة بهم</p>
+        </div>
+        <a href="/company/{company}" class="glass-btn back-btn">⬅ رجوع</a>
+    </div>
+
+    <div class="employees-action-grid">
+        <a href="/assets-custody" class="company-card {company} employees-action-card">
+            <h2>🚗 العهد والسيارات</h2>
+            <p>متابعة السيارات والعداد والزيت وعهد الموظفين</p>
+        </a>
+        {create_card}
+    </div>
 
     {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
-    {create_card}
 
-    <br><br>
-
-    <table border="1" style="background:white;margin:auto;width:80%;">
+    <div class="inventory-panel inventory-table-panel employees-table-panel">
+    <table class="employees-table">
         <tr>
             <th>رقم</th>
             <th>الاسم</th>
@@ -9764,10 +9810,9 @@ def employees_page(request: Request, company: str = ""):
         </tr>
         {rows if rows else "<tr><td colspan='4'>لا توجد موظفين</td></tr>"}
     </table>
-
-    <br>
-    <a href="/company/{company}" class="glass-btn back-btn">⬅ رجوع</a>
+    </div>
 </div>
+</body>
 """
 
 @app.get("/new-employee", response_class=HTMLResponse)
@@ -21509,4 +21554,5 @@ def delete_logistics_equipment(equipment_id: int, company: str = ""):
 # Client portal routes and additive schema are isolated in their own module.
 from client_portal import register_client_portal
 register_client_portal(app)
+register_assets_custody(app)
 
