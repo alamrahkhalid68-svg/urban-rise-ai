@@ -37,6 +37,23 @@
     </header>
 
     <main class="public-main">
+        <section class="intro-video-section" aria-labelledby="intro-video-heading">
+            <h2 id="intro-video-heading">تعرف على مجموعة أوربان رايز</h2>
+            <div class="intro-video-frame">
+                <video id="intro-video" class="intro-video" autoplay muted loop playsinline preload="metadata" poster="/static/landing/background.jpg" aria-label="الفيديو التعريفي لمجموعة أوربان رايز">
+                    <source src="/static/videos/urban-rise-intro.mp4" type="video/mp4">
+                </video>
+                <audio id="intro-audio" src="/static/audio/urban-rise-elegant.mp3" loop preload="none" hidden></audio>
+                <button id="intro-sound-toggle" class="intro-sound-toggle" type="button" aria-label="تشغيل صوت الفيديو" aria-pressed="false" title="تشغيل صوت الفيديو">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path d="M11 5 6 9H3v6h3l5 4Z" />
+                        <path class="intro-sound-off" d="m16 9 6 6m0-6-6 6" />
+                        <path class="intro-sound-on" d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" />
+                    </svg>
+                </button>
+            </div>
+            <p id="intro-sound-status" class="intro-sound-status" role="status" hidden></p>
+        </section>
         <section class="content-section about-section">
             <div class="section-heading">
                 <p class="section-eyebrow" style="font-size: 20px; font-weight: 600;">من نحن</p>
@@ -52,6 +69,175 @@
                 تعتمد أوربان رايز على الدمج بين الخبرة التشغيلية والتقنية الحديثة من خلال نظام أوربان رايز AI، الذي
                 يساهم في تحليل المشاريع، متابعة العمليات، ودعم اتخاذ القرار بشكل ذكي.
             </p>
+        </section>
+
+        <section class="content-section impact-section" aria-labelledby="impact-heading">
+            <div class="section-heading">
+                <p class="section-eyebrow">حجم أعمالنا</p>
+                <h3 id="impact-heading">أرقام تعكس حجم أعمالنا</h3>
+            </div>
+            <div class="impact-grid">
+                <article class="impact-card">
+                    <p class="impact-value" aria-label="+221">
+                        <span class="impact-number" data-target="221" data-prefix="+" dir="ltr" aria-hidden="true">+221</span>
+                    </p>
+                    <h4>مشروع منفذ</h4>
+                    <p class="impact-description">تشطيب، ترميم، صيانة ونظافة</p>
+                </article>
+                <article class="impact-card">
+                    <p class="impact-value" aria-label="+19,000 م²">
+                        <span class="impact-number" data-target="19000" data-prefix="+" dir="ltr" aria-hidden="true">+19,000</span>
+                        <span class="impact-unit" aria-hidden="true">م²</span>
+                    </p>
+                    <h4>مساحات مشاريع وأعمال منفذة</h4>
+                </article>
+                <article class="impact-card">
+                    <p class="impact-value" aria-label="63">
+                        <span class="impact-number" data-target="63" data-prefix="" dir="ltr" aria-hidden="true">63</span>
+                    </p>
+                    <h4>وحدة سكنية تحت الإدارة</h4>
+                    <p class="impact-description">شقق وفلل، إلى جانب معارض تجارية ومكاتب</p>
+                </article>
+                <article class="impact-card">
+                    <p class="impact-value" aria-label="+5">
+                        <span class="impact-number" data-target="5" data-prefix="+" dir="ltr" aria-hidden="true">+5</span>
+                    </p>
+                    <h4>فروع للبنك العربي</h4>
+                    <p class="impact-description">تم تنفيذها ضمن مشاريع المجموعة</p>
+                </article>
+            </div>
+        </section>
+
+        <section class="content-section showcase-section" aria-labelledby="showcase-heading">
+            <div class="section-heading">
+                <p class="section-eyebrow">من سجل أعمالنا</p>
+                <h3 id="showcase-heading">مشاريعنا</h3>
+                <p class="section-text">سجل متنوع من المشاريع السكنية والتجارية والتنفيذية وخبرات التعاون يعكس تكامل خبرات مجموعة أوربان رايز في التطوير والبناء والتشغيل.</p>
+            </div>
+            <div class="showcase-grid">
+                <article class="showcase-card">
+                    <div class="showcase-art" aria-hidden="true">
+                        <svg viewBox="0 0 180 110" focusable="false"><path d="M12 90h156M24 90V38l24-18 24 18v52m12 0V38l24-18 24 18v52m-93 0V65h18v25m-25-40h8m16 0h8m28 40V65h18v25m-25-40h8m16 0h8" /></svg>
+                    </div>
+                    <div class="showcase-copy">
+                        <span class="showcase-badge">سكني / تطوير وتشغيل</span>
+                        <h4>كمباوند الروضة السكني</h4>
+                        <p class="showcase-location">خميس مشيط</p>
+                        <p class="showcase-description">بناء وتشغيل مجمع سكني متكامل ضمن مشاريع المجموعة.</p>
+                    </div>
+                </article>
+                <article class="showcase-card">
+                    <div class="showcase-art" aria-hidden="true">
+                        <svg viewBox="0 0 180 110" focusable="false"><path d="M10 90h160M22 90V35h54v55m12 0V20h60v70M30 35V24h38v11M32 49h34m-34 16h34m-34 16h34m32-45h40m-40 17h40m-40 17h40" /></svg>
+                    </div>
+                    <div class="showcase-copy">
+                        <span class="showcase-badge">سكني</span>
+                        <h4>كمباوند AQ</h4>
+                        <p class="showcase-location">بالقرب من مدينة الملك عبدالله الاقتصادية</p>
+                        <p class="showcase-description">مشروع سكني يعكس خبرة المجموعة في تطوير وتنفيذ المجمعات السكنية.</p>
+                    </div>
+                </article>
+                <article class="showcase-card">
+                    <div class="showcase-art" aria-hidden="true">
+                        <svg viewBox="0 0 180 110" focusable="false"><path d="M12 82h156M30 82V48l39-25 39 25v34M48 82V54h42v28m26 0V44h36v38M22 93q16-8 32 0t32 0t32 0t32 0M128 44V30m-10 5 10-9 10 9" /></svg>
+                    </div>
+                    <div class="showcase-copy">
+                        <span class="showcase-badge">سياحي / تطوير عقاري</span>
+                        <h4>شاليهات أوربان رايز</h4>
+                        <p class="showcase-location">خميس مشيط</p>
+                        <p class="showcase-description">مشروع سياحي وترفيهي بمساحة 6,200 م² يضم ستة شاليهات مستقلة.</p>
+                        <ul class="showcase-facts" aria-label="أبرز تفاصيل المشروع">
+                            <li><bdi dir="ltr">6,200</bdi> م²</li>
+                            <li><bdi dir="ltr">6</bdi> شاليهات</li>
+                        </ul>
+                    </div>
+                </article>
+                <article class="showcase-card">
+                    <div class="showcase-art" aria-hidden="true">
+                        <svg viewBox="0 0 180 110" focusable="false"><path d="M12 90h156M24 90V48l30-24 30 24v42m-44 0V64h25v26m19-30h58v30m-45 0V69h16v21" /></svg>
+                    </div>
+                    <div class="showcase-copy">
+                        <span class="showcase-badge">سكني / مقاولات</span>
+                        <h4>مشاريع الفلل السكنية</h4>
+                        <p class="showcase-description">تنفيذ فلل سكنية تشمل الأعمال الإنشائية والتشطيبات الداخلية والخارجية.</p>
+                    </div>
+                </article>
+                <article class="showcase-card">
+                    <div class="showcase-art" aria-hidden="true">
+                        <svg viewBox="0 0 180 110" focusable="false"><path d="M12 90h156M24 90V48l30-24 30 24v42m-44 0V64h25v26m32 0V19h52v71M107 33h9m14 0h9m-32 17h9m14 0h9m-32 17h9m14 0h9" /></svg>
+                    </div>
+                    <div class="showcase-copy">
+                        <span class="showcase-badge">سكني / تطوير</span>
+                        <h4>مشاريع الشقق والمجمعات السكنية</h4>
+                        <p class="showcase-description">تنفيذ وتطوير شقق ومجمعات سكنية مع التركيز على جودة المساحات والتفاصيل.</p>
+                    </div>
+                </article>
+                <article class="showcase-card">
+                    <div class="showcase-art" aria-hidden="true">
+                        <svg viewBox="0 0 180 110" focusable="false"><path d="M14 90h152M24 90V43h132v47M18 43l72-26 72 26H18m24 10v26m24-26v26m48-26v26m24-26v26M28 83h124" /></svg>
+                    </div>
+                    <div class="showcase-copy">
+                        <span class="showcase-badge">تجاري / إداري</span>
+                        <h4>البنك العربي</h4>
+                        <p class="showcase-location">فرع حي العارض وفروع أخرى</p>
+                        <p class="showcase-description">تنفيذ فرع حي العارض ضمن أعمال شملت أكثر من خمسة فروع.</p>
+                        <ul class="showcase-facts" aria-label="أبرز تفاصيل المشروع">
+                            <li><bdi dir="ltr">+5</bdi> فروع</li>
+                        </ul>
+                    </div>
+                </article>
+                <article class="showcase-card">
+                    <div class="showcase-art" aria-hidden="true">
+                        <svg viewBox="0 0 180 110" focusable="false"><path d="M12 90h156M32 90V24h116v66M42 38h96m-96 15h96m-96 15h96M54 24v66m30-66v66m30-66v66" /></svg>
+                    </div>
+                    <div class="showcase-copy">
+                        <span class="showcase-badge">تجاري / مكتبي</span>
+                        <h4>مبنى تجاري مكتبي</h4>
+                        <p class="showcase-location">طريق أبو بكر الصديق — الرياض</p>
+                        <p class="showcase-description">مشروع يجمع الاستخدام التجاري والمكتبي ضمن أعمال المجموعة.</p>
+                    </div>
+                </article>
+                <article class="showcase-card">
+                    <div class="showcase-art" aria-hidden="true">
+                        <svg viewBox="0 0 180 110" focusable="false"><path d="M12 90h156M24 90V27h132v63M24 43h132M36 54h26v36m15-36h26v36m15-36h26v36M32 27V16h116v11M38 36h104" /></svg>
+                    </div>
+                    <div class="showcase-copy">
+                        <span class="showcase-badge">تجاري</span>
+                        <h4>المعارض والمحلات التجارية</h4>
+                        <p class="showcase-description">بناء وتجهيز معارض ومحلات تجارية ضمن مشاريع استثمارية وتشغيلية متعددة.</p>
+                    </div>
+                </article>
+            </div>
+
+            <div class="showcase-cooperation" aria-labelledby="cooperation-heading">
+                <h4 id="cooperation-heading">خبرات تعاون في البنية التحتية والمرافق</h4>
+                <ul class="cooperation-grid">
+                    <li class="cooperation-item">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 16q3-3 6 0t6 0t6 0M3 21q3-3 6 0t6 0t6 0M8 12V4h8v8M6 12h12" /></svg>
+                        <span>مشروع الواجهة البحرية في جيزان.</span>
+                    </li>
+                    <li class="cooperation-item">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m3 10 9-7 9 7M5 9v12h14V9M9 21v-7h6v7" /></svg>
+                        <span>إسكان النازحين بأحد المسارحة.</span>
+                    </li>
+                    <li class="cooperation-item">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 21l4-13 4 13M9 17h6M5 5a10 10 0 0 0 0 8m14-8a10 10 0 0 1 0 8M8 7a6 6 0 0 0 0 4m8-4a6 6 0 0 1 0 4" /></svg>
+                        <span>أبراج اتصالات وزارة الداخلية بالمنطقة الجنوبية.</span>
+                    </li>
+                    <li class="cooperation-item">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m13 3-8 11h6l-1 7 9-12h-6l1-6" /></svg>
+                        <span>أعمال كهرباء في محايل عسير ورجال ألمع.</span>
+                    </li>
+                    <li class="cooperation-item">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3S5 11 5 15a7 7 0 0 0 14 0c0-4-7-12-7-12M9 16a3 3 0 0 0 3 3" /></svg>
+                        <span>شبكة المياه في وادي بن هشبل.</span>
+                    </li>
+                    <li class="cooperation-item">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 21 8 3m8 0 3 18M12 4v3m0 4v3m0 4v3" /></svg>
+                        <span>أعمال STC واللاندسكيب والسفلتة.</span>
+                    </li>
+                </ul>
+            </div>
         </section>
 
         <section class="content-section companies-section">
@@ -72,11 +258,7 @@
                     <div class="company-content">
                         <h4>أوربان رايز للتطوير والاستثمار العقاري</h4>
                         <p>
-                            تطوير واستثمار عقاري يشمل إدارة الأملاك، تطوير المشاريع السكنية والتجارية، وتحقيق عوائد
-                            استثمارية مستدامة وفق معايير تشغيلية واضحة.
-
-                            نقدم حلول متكاملة في إدارة العقارات، متابعة العقود، وتحليل الأداء التشغيلي والمالي، بما
-                            يضمن رفع كفاءة الأصول وتعظيم العائد على المدى الطويل.
+                            نطوّر العقار من الفكرة إلى أصل استثماري. نعمل على تطوير المشاريع السكنية، والاستثمار في المشاريع التجارية، وبناء المكاتب والمحلات التجارية، والمنتجعات السياحية والمجمعات السكنية، إلى جانب إدارة الأملاك وتشغيل الأصول العقارية بما يرفع كفاءتها ويحافظ على قيمتها ويعظّم عوائدها الاستثمارية.
                         </p>
                     </div>
                 </article>
@@ -92,8 +274,7 @@
                     <div class="company-content">
                         <h4>أوربان رايز ووركس للمقاولات</h4>
                         <p>
-                            تنفيذ أعمال ومشروعات ميدانية وفق معايير واضحة لضبط الجودة والجدولة والمتابعة التنفيذية
-                            المنظمة.
+                            تنفيذ متكامل بمعايير تليق بالمشروع. نقدم حلول المقاولات من خلال أقسام متخصصة تشمل البناء والإنشاء، التشطيب والترميم، الصيانة والنظافة، وأعمال المشاريع والتعديلات الداخلية والخارجية، من التجهيز وحتى التسليم والتشغيل، بجودة تنفيذ ومتابعة منظمة.
                         </p>
                     </div>
                 </article>
@@ -109,7 +290,7 @@
                     <div class="company-content">
                         <h4>أوربان رايز لوجستك</h4>
                         <p>
-                            خدمات لوجستية تدعم جاهزية التشغيل وتُسهم في رفع كفاءة الحركة والتنسيق والإمداد بشكل موثوق.
+                            الذراع اللوجستي لمشاريع المجموعة. تدعم أعمال التطوير العقاري والمقاولات من خلال النقل، وتوريد ونقل المواد والمعدات، ودعم احتياجات المواقع والمشاريع، بما يرفع سرعة التنفيذ ويعزز تكامل سلسلة الإمداد داخل المجموعة.
                         </p>
                     </div>
                 </article>
@@ -125,69 +306,60 @@
                     <div class="company-content">
                         <h4>أوربان رايز AI</h4>
                         <p>
-                            نظام ذكي لإدارة وتشغيل الأعمال في مجالات التطوير والاستثمار العقاري، وإدارة الأملاك،
-                            والمقاولات، والخدمات اللوجستية، يربط العمليات اليومية بالتحليل ويعزز كفاءة اتخاذ القرار.
+                            العقل التشغيلي الذكي للمجموعة. منظومة ذكاء اصطناعي تربط أعمال المجموعة في منصة واحدة، وتدير المشاريع والمقاولات، إدارة الأملاك، العقود، العملاء، المصروفات والتحصيلات، الموظفين والعمليات التشغيلية واللوجستية، مع تحليل البيانات ومتابعة الأداء ودعم اتخاذ القرار.
                         </p>
                     </div>
                 </article>
             </div>
         </section>
 
-        <section class="content-section strengths-section">
+        <section class="content-section strengths-section" aria-labelledby="strengths-heading">
             <div class="section-heading">
-                <p class="section-eyebrow">مقوماتنا</p>
-                <h3>قيم تشغيلية واضحة تعكس أسلوب عمل المجموعة</h3>
+                <p class="section-eyebrow">ما يميزنا</p>
+                <h3 id="strengths-heading">لماذا أوربان رايز؟</h3>
             </div>
-
             <div class="strengths-grid">
                 <article class="strength-item">
                     <span class="strength-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" focusable="false">
-                            <path d="M12 3l7 3v5c0 4.5-3.1 8-7 10-3.9-2-7-5.5-7-10V6l7-3zm-2.5 9.5 1.8 1.8 3.7-4.1" />
-                        </svg>
+                        <svg viewBox="0 0 24 24" focusable="false"><path d="M8 4H4v4h4zm12 0h-4v4h4zM8 16H4v4h4zm12 0h-4v4h4zM8 6h8M6 8v8m12-8v8M8 18h8" /></svg>
                     </span>
-                    <h4>احترافية التشغيل</h4>
+                    <h4>التكامل القطاعي</h4>
+                    <p>شركات متخصصة تعمل ضمن منظومة واحدة من التطوير إلى التنفيذ والإدارة والتقنية.</p>
                 </article>
-
                 <article class="strength-item">
                     <span class="strength-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" focusable="false">
-                            <path d="M4 19h16M6 16V8m5 8V5m5 11v-6" />
-                        </svg>
+                        <svg viewBox="0 0 24 24" focusable="false"><path d="M12 3l7 3v5c0 4.5-3.1 8-7 10-3.9-2-7-5.5-7-10V6l7-3zm-2.5 9.5 1.8 1.8 3.7-4.1" /></svg>
                     </span>
-                    <h4>وضوح البيانات</h4>
+                    <h4>الجودة والتنفيذ</h4>
+                    <p>معايير واضحة في إدارة وتنفيذ المشاريع ومتابعة الأعمال.</p>
                 </article>
-
                 <article class="strength-item">
                     <span class="strength-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" focusable="false">
-                            <path d="M12 7v5l3 2m6-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
-                        </svg>
+                        <svg viewBox="0 0 24 24" focusable="false"><path d="M8 8h8v8H8zM9 3v5m6-5v5m-6 8v5m6-5v5M3 9h5m-5 6h5m8-6h5m-5 6h5" /></svg>
                     </span>
-                    <h4>سرعة المتابعة</h4>
+                    <h4>التقنية والذكاء الاصطناعي</h4>
+                    <p>أنظمة ذكية تربط العمليات والمشاريع والبيانات وتدعم اتخاذ القرار.</p>
                 </article>
-
                 <article class="strength-item">
                     <span class="strength-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" focusable="false">
-                            <path d="M4 6h16M4 12h10M4 18h7M17 10l3 3-3 3" />
-                        </svg>
+                        <svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h16v14H4zM8 9h8m-8 4h5M8 17h3" /></svg>
                     </span>
-                    <h4>تنظيم المشاريع</h4>
-                </article>
-
-                <article class="strength-item">
-                    <span class="strength-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" focusable="false">
-                            <path d="M9 3h6l1 3h4v5c0 5-3.5 8.9-8 10-4.5-1.1-8-5-8-10V6h4l1-3zm3 6v3m0 4h.01" />
-                        </svg>
-                    </span>
-                    <h4>حلول تقنية</h4>
+                    <h4>الشفافية والثقة</h4>
+                    <p>متابعة واضحة ومعلومات منظمة لبناء علاقات طويلة المدى مع العملاء والشركاء.</p>
                 </article>
             </div>
         </section>
 
-        <section class="content-section contact-section">
+
+        <section class="content-section public-cta" aria-labelledby="cta-heading">
+            <div>
+                <h3 id="cta-heading">مشروعك القادم يبدأ من منظومة متكاملة</h3>
+                <p>من التطوير والاستثمار إلى التنفيذ والإدارة والتشغيل والدعم اللوجستي والذكاء الاصطناعي.</p>
+            </div>
+            <a class="public-cta-link" href="#contact">تواصل معنا <span aria-hidden="true">←</span></a>
+        </section>
+
+        <section class="content-section contact-section" id="contact">
             <div class="section-heading">
                 <p class="section-eyebrow">التواصل</p>
                 <h3>معلومات التواصل</h3>
@@ -241,5 +413,135 @@
     <footer class="public-footer">
         <p>Urban Rise Group</p>
     </footer>
+    <script>
+        (() => {
+            const video = document.getElementById('intro-video');
+            const audio = document.getElementById('intro-audio');
+            const button = document.getElementById('intro-sound-toggle');
+            const status = document.getElementById('intro-sound-status');
+            let soundEnabled = false;
+            let pageLeft = false;
+            let playAttempt = 0;
+
+            // Elegant is the only audible track, including when native media state changes.
+            video.muted = true;
+            video.addEventListener('volumechange', () => {
+                if (!video.muted) video.muted = true;
+            });
+
+            function updateButton() {
+                const playing = !audio.paused && !pageLeft;
+                const label = playing ? 'كتم صوت الفيديو' : 'تشغيل صوت الفيديو';
+                button.setAttribute('aria-pressed', String(playing));
+                button.setAttribute('aria-label', label);
+                button.title = label;
+            }
+
+            async function playSound() {
+                const attempt = ++playAttempt;
+                try {
+                    await audio.play();
+                    if (!soundEnabled || pageLeft) audio.pause();
+                } catch {
+                    if (attempt === playAttempt) {
+                        soundEnabled = false;
+                        audio.pause();
+                        showSoundError();
+                    }
+                }
+                updateButton();
+            }
+
+            button.addEventListener('click', () => {
+                status.hidden = true;
+                soundEnabled = !soundEnabled;
+                if (soundEnabled && !pageLeft) {
+                    playSound();
+                } else {
+                    // Pause preserves the position for the next sound-button click.
+                    ++playAttempt;
+                    audio.pause();
+                    updateButton();
+                }
+            });
+            audio.addEventListener('play', () => {
+                if (!soundEnabled || pageLeft) audio.pause();
+                updateButton();
+            });
+            audio.addEventListener('pause', updateButton);
+            function showSoundError() {
+                status.textContent = 'تعذر تشغيل صوت الفيديو. حاول مرة أخرى.';
+                status.hidden = false;
+            }
+
+            audio.addEventListener('error', () => {
+                soundEnabled = false;
+                ++playAttempt;
+                audio.pause();
+                showSoundError();
+                updateButton();
+            });
+
+            function setPageLeft(hidden) {
+                pageLeft = hidden;
+                if (hidden) {
+                    ++playAttempt;
+                    audio.pause();
+                }
+                else if (soundEnabled) playSound();
+                updateButton();
+            }
+            window.addEventListener('pagehide', () => setPageLeft(true));
+            window.addEventListener('pageshow', () => setPageLeft(false));
+
+        })();
+
+        (() => {
+            const section = document.querySelector('.impact-section');
+            const counters = Array.from(section.querySelectorAll('.impact-number'));
+            const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+            const format = new Intl.NumberFormat('en-US');
+            let started = false;
+            let frame;
+            let observer;
+
+            function paint(progress) {
+                counters.forEach(counter => {
+                    const value = Math.round(Number(counter.dataset.target) * progress);
+                    counter.textContent = counter.dataset.prefix + format.format(value);
+                });
+            }
+
+            function finish() {
+                started = true;
+                cancelAnimationFrame(frame);
+                if (observer) observer.disconnect();
+                paint(1);
+            }
+
+            if (motion.matches || !('IntersectionObserver' in window)) {
+                finish();
+                return;
+            }
+
+            paint(0);
+            observer = new IntersectionObserver(entries => {
+                if (started || !entries.some(entry => entry.isIntersecting)) return;
+                started = true;
+                observer.disconnect();
+                const start = performance.now();
+                function tick(now) {
+                    const progress = Math.min((now - start) / 1800, 1);
+                    paint(1 - Math.pow(1 - progress, 3));
+                    if (progress < 1) frame = requestAnimationFrame(tick);
+                }
+                frame = requestAnimationFrame(tick);
+            }, { threshold: 0.15 });
+            observer.observe(section);
+            motion.addEventListener('change', event => {
+                if (event.matches) finish();
+            });
+        })();
+    </script>
 </body>
 </html>
