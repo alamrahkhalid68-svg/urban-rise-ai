@@ -2180,6 +2180,9 @@ def draw_pdf_luxury_page_background(canvas, doc):
     canvas.restoreState()
 
 
+CUSTOMER_QUOTE_CONTRACT_PDF_MOBILE = "0568207659"
+
+
 def draw_works_contract_pdf_frame(canvas, doc):
     canvas.saveState()
     canvas.setFillColor(colors.HexColor("#F6F1E7"))
@@ -2195,7 +2198,7 @@ def draw_works_contract_pdf_frame(canvas, doc):
         doc.pagesize[0] / 2,
         footer_y,
         format_arabic_pdf_text(
-            f"الرقم الوطني الموحد {WORKS_COMPANY_PROFILE['national_number']} / {WORKS_COMPANY_PROFILE['address']} / جوال {WORKS_COMPANY_PROFILE['mobile']}"
+            f"الرقم الوطني الموحد {WORKS_COMPANY_PROFILE['national_number']} / {WORKS_COMPANY_PROFILE['address']} / جوال {getattr(doc, 'company_contact_mobile', WORKS_COMPANY_PROFILE['mobile'])}"
         ),
     )
     canvas.restoreState()
@@ -2809,7 +2812,7 @@ def build_quote_report_pdf(quote, items, payments, company: str = "", financials
         Spacer(1, 10),
         Paragraph(format_arabic_pdf_text(footer_text), body_style),
         Spacer(1, 8),
-        Paragraph(format_arabic_pdf_text("بيانات التواصل: 0566005668 | kalamrah505@gmail.com | الرياض - حي النرجس - طريق أبو بكر الصديق"), subtitle_style),
+        Paragraph(format_arabic_pdf_text(f"بيانات التواصل: {CUSTOMER_QUOTE_CONTRACT_PDF_MOBILE} | kalamrah505@gmail.com | الرياض - حي النرجس - طريق أبو بكر الصديق"), subtitle_style),
     ])
 
     doc = SimpleDocTemplate(file_path, pagesize=landscape(A4), rightMargin=16 * mm, leftMargin=16 * mm, topMargin=16 * mm, bottomMargin=14 * mm)
@@ -2962,7 +2965,7 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
                 contract_paragraph("ويشار إليها فيما بعد بـ \"الطرف الأول\" أو \"المقاول\".", body_style, contract_column_width),
                 Spacer(1, 4),
                 contract_paragraph(f"الرقم الوطني الموحد: {company_profile['national_number']}", subtitle_style, contract_column_width),
-                contract_paragraph(f"جوال: {company_profile['mobile']}", subtitle_style, contract_column_width),
+                contract_paragraph(f"جوال: {CUSTOMER_QUOTE_CONTRACT_PDF_MOBILE}", subtitle_style, contract_column_width),
             ],
         ]
     ], colWidths=[82 * mm, 82 * mm], hAlign="RIGHT")
@@ -3114,6 +3117,7 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     story.extend([signature_table])
 
     doc = SimpleDocTemplate(file_path, pagesize=A4, rightMargin=22 * mm, leftMargin=22 * mm, topMargin=24 * mm, bottomMargin=18 * mm)
+    doc.company_contact_mobile = CUSTOMER_QUOTE_CONTRACT_PDF_MOBILE
     doc.build(story, onFirstPage=draw_works_contract_pdf_frame, onLaterPages=draw_works_contract_pdf_frame)
     return file_path, file_name
 
@@ -8427,22 +8431,25 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
     if not isinstance(access_result, sqlite3.Row):
         return access_result
     is_read_only_works_partner = is_works_partner_user(access_result, company)
-    financials = calculate_quote_financials(quote_id)
     from datetime import date
     conn = get_db()
 
     quote = conn.execute(
-        "SELECT * FROM quotes WHERE id = ?",
-        (quote_id,)
+        "SELECT * FROM quotes WHERE id = ? AND company = ?",
+        (quote_id, company)
     ).fetchone()
 
+    if not quote:
+        conn.close()
+        return HTMLResponse("عرض السعر غير موجود", status_code=404)
+
     items = conn.execute(
-        "SELECT description, qty, unit_price FROM quote_items WHERE quote_id = ?",
+        "SELECT * FROM quote_items WHERE quote_id = ? ORDER BY id",
         (quote_id,)
     ).fetchall()
 
     payments = conn.execute(
-        "SELECT * FROM quote_payments WHERE quote_id = ?",
+        "SELECT * FROM quote_payments WHERE quote_id = ? ORDER BY id",
         (quote_id,)
     ).fetchall()
 
@@ -8458,6 +8465,7 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
 
     conn.close()
 
+    financials = calculate_quote_financials(quote_id)
     rows = ""
     total = 0
     for i in items:
@@ -8465,7 +8473,7 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
         total += line
         rows += f"""
         <tr>
-            <td>{i['description']}</td>
+            <td>{escape(i['description'] or '')}{quote_row_controls(quote_id, company, 'items', i) if not is_read_only_works_partner else ''}</td>
             <td>{i['qty']}</td>
             <td>{i['unit_price']}</td>
             <td>{line}</td>
@@ -8474,14 +8482,19 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
 
     payment_rows = ""
     for p in payments:
-        amount = (p["percentage"] / 100) * financials["grand_total_with_vat"]
+        amount = calculate_percentage_amount(financials["grand_total_with_vat"], p["percentage"])
         payment_rows += f"""
         <tr>
-            <td>{p['title']}</td>
+            <td>{escape(p['title'] or '')}{quote_row_controls(quote_id, company, 'payments', p) if not is_read_only_works_partner else ''}</td>
             <td>{p['percentage']} %</td>
             <td>{round(amount,2)} ريال</td>
         </tr>
         """
+
+    payment_percentage_total = sum((decimal_from_value(p["percentage"]) for p in payments), Decimal("0"))
+    payment_notice = f"مجموع نسب الدفعات الحالي {payment_percentage_total.normalize():f}%"
+    if payment_percentage_total > 100:
+        payment_notice += " — تنبيه: مجموع نسب الدفعات يتجاوز 100%"
 
     today = date.today().strftime("%Y-%m-%d")
 
@@ -8566,10 +8579,10 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
 <textarea id="quote-item-description" name="description" rows="6" style="width:100%; resize: vertical;" required></textarea>
 
 الكمية:
-<input type="number" step="0.01" name="qty" required>
+<input type="number" step="any" min="0" name="qty" required>
 
 سعر الوحدة:
-<input id="quote-item-unit-price" type="number" step="0.01" name="unit_price" required>
+<input id="quote-item-unit-price" type="number" step="any" min="0" name="unit_price" required>
 
 <button type="submit" class="glass-btn gold-text">&#10133; إضافة بند</button>
 </form>
@@ -8596,7 +8609,7 @@ if (pricingItemReference) {{
 <input type="text" name="title" required>
 
 النسبة:
-<input type="number" step="0.01" name="percentage" required>
+<input type="number" step="any" min="0" name="percentage" required>
 
 <button type="submit" class="glass-btn gold-text">إضافة دفعة</button>
 
@@ -8697,6 +8710,7 @@ URBAN RISE<br>WORKS
 <br><br>
 
 <h3>الدفعات</h3>
+<p role="status">{payment_notice}</p>
 
 {quote_payment_form_html}
 
@@ -8735,7 +8749,6 @@ def quote_report(request: Request, quote_id: int, company: str = ""):
     if normalize_access_value(company) != "works":
         return HTMLResponse("<h2>هذه الميزة متاحة لشركة المقاولات فقط</h2>", status_code=403)
 
-    financials = calculate_quote_financials(quote_id)
     conn = get_db()
     quote = conn.execute(
         "SELECT * FROM quotes WHERE id = ? AND company = ?",
@@ -8749,39 +8762,89 @@ def quote_report(request: Request, quote_id: int, company: str = ""):
         (quote_id,)
     ).fetchall()
     payments = conn.execute(
-        "SELECT * FROM quote_payments WHERE quote_id = ?",
+        "SELECT * FROM quote_payments WHERE quote_id = ? ORDER BY id",
         (quote_id,)
     ).fetchall()
     conn.close()
 
+    financials = calculate_quote_financials(quote_id)
     file_path, file_name = build_quote_report_pdf(
         quote, items, payments, company=company, financials=financials
     )
     return FileResponse(path=file_path, filename=file_name, media_type="application/pdf")
 
-@app.post("/add-item/{quote_id}", response_class=HTMLResponse)
-def add_item(
-    request: Request,
-    quote_id: int,
-    company: str = "",
-    description: str = Form(...),
-    qty: float = Form(...),
-    unit_price: float = Form(...)
-):
+def quote_row_controls(quote_id, company, kind, row):
+    base = f"/quote/{quote_id}/{kind}/{row['id']}"
+    query = f"?company={escape(company, quote=True)}"
+    if kind == "items":
+        fields = f'''<label>الوصف<textarea name="description" required>{escape(row['description'] or '')}</textarea></label>
+            <label>الكمية<input type="number" name="qty" min="0" step="any" value="{row['qty']}" required></label>
+            <label>سعر الوحدة<input type="number" name="unit_price" min="0" step="any" value="{row['unit_price']}" required></label>'''
+        confirmation = "هل أنت متأكد من حذف هذا البند؟"
+    else:
+        fields = f'''<label>اسم الدفعة<input name="title" value="{escape(row['title'] or '', quote=True)}" required></label>
+            <label>النسبة<input type="number" name="percentage" min="0" step="any" value="{row['percentage']}" required></label>'''
+        confirmation = "هل أنت متأكد من حذف هذه الدفعة؟"
+    return f'''<div style="margin-top:6px;text-align:right;">
+        <details><summary style="cursor:pointer;">تعديل</summary>
+        <form action="{base}/edit{query}" method="post" style="display:grid;gap:6px;min-width:140px;">
+        {fields}<button type="submit" class="glass-btn">حفظ</button></form></details>
+        <form action="{base}/delete{query}" method="post" onsubmit="return confirm('{confirmation}')">
+        <button type="submit" class="glass-btn" style="padding:4px 10px;">حذف</button></form></div>'''
+
+
+def mutate_quote_row(request, quote_id, company, kind, action, row_id=None, values=()):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
+    statements = {
+        ("items", "add"): "INSERT INTO quote_items (description, qty, unit_price, quote_id) VALUES (?, ?, ?, ?)",
+        ("items", "edit"): "UPDATE quote_items SET description=?, qty=?, unit_price=? WHERE quote_id=? AND id=?",
+        ("items", "delete"): "DELETE FROM quote_items WHERE quote_id=? AND id=?",
+        ("payments", "add"): "INSERT INTO quote_payments (title, percentage, quote_id) VALUES (?, ?, ?)",
+        ("payments", "edit"): "UPDATE quote_payments SET title=?, percentage=? WHERE quote_id=? AND id=?",
+        ("payments", "delete"): "DELETE FROM quote_payments WHERE quote_id=? AND id=?",
+    }
+    if action != "delete":
+        try:
+            label = values[0].strip()
+            numbers = [Decimal(str(value)) for value in values[1:]]
+            if not label or any(not value.is_finite() or value < 0 or value > Decimal("1e15") for value in numbers):
+                raise ValueError
+            values = (label, *(str(value) for value in numbers))
+        except (ArithmeticError, ValueError):
+            return HTMLResponse("أدخل وصفًا وقيمًا رقمية صالحة غير سالبة ضمن النطاق المسموح.", status_code=422)
     conn = get_db()
-    conn.execute(
-        "INSERT INTO quote_items (quote_id, description, qty, unit_price) VALUES (?, ?, ?, ?)",
-        (quote_id, description, qty, unit_price)
-    )
-    conn.commit()
-    conn.close()
+    try:
+        if not conn.execute("SELECT id FROM quotes WHERE id=? AND company=?", (quote_id, company)).fetchone():
+            return HTMLResponse("عرض السعر غير موجود", status_code=404)
+        params = (*values, quote_id) if action == "add" else (*values, quote_id, row_id)
+        result = conn.execute(statements[(kind, action)], params)
+        if result.rowcount != 1:
+            return HTMLResponse("البند أو الدفعة غير موجودة في هذا العرض", status_code=404)
+        conn.commit()
+    finally:
+        conn.close()
+    calculate_quote_financials(quote_id)
     return RedirectResponse(url=f"/quote/{quote_id}?company={company}", status_code=303)
+
+
+@app.post("/add-item/{quote_id}")
+def add_item(request: Request, quote_id: int, company: str = "", description: str = Form(...), qty: str = Form(...), unit_price: str = Form(...)):
+    return mutate_quote_row(request, quote_id, company, "items", "add", values=(description, qty, unit_price))
+
+
+@app.post("/quote/{quote_id}/items/{item_id}/edit")
+def edit_quote_item(request: Request, quote_id: int, item_id: int, company: str = "", description: str = Form(...), qty: str = Form(...), unit_price: str = Form(...)):
+    return mutate_quote_row(request, quote_id, company, "items", "edit", item_id, (description, qty, unit_price))
+
+
+@app.post("/quote/{quote_id}/items/{item_id}/delete")
+def delete_quote_item(request: Request, quote_id: int, item_id: int, company: str = ""):
+    return mutate_quote_row(request, quote_id, company, "items", "delete", item_id)
 
 
 @app.post("/quote/{quote_id}/update-profit-rate")
@@ -8838,31 +8901,19 @@ def update_quote_vat_setting(request: Request, quote_id: int, company: str = "wo
 
 
 @app.post("/add-payment/{quote_id}")
-def add_payment(
-    request: Request,
-    quote_id: int,
-    company: str = "",
-    title: str = Form(...),
-    percentage: float = Form(...)
-):
-    access_result = ensure_company_access(request, company)
-    if not isinstance(access_result, sqlite3.Row):
-        return access_result
-    partner_guard = ensure_not_works_partner_write(access_result, company)
-    if not isinstance(partner_guard, sqlite3.Row):
-        return partner_guard
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO quote_payments (quote_id, title, percentage) VALUES (?, ?, ?)",
-        (quote_id, title, percentage)
-    )
-    conn.commit()
-    conn.close()
+def add_payment(request: Request, quote_id: int, company: str = "", title: str = Form(...), percentage: str = Form(...)):
+    return mutate_quote_row(request, quote_id, company, "payments", "add", values=(title, percentage))
 
-    return RedirectResponse(
-        url=f"/quote/{quote_id}?company={company}",
-        status_code=303
-    )
+
+@app.post("/quote/{quote_id}/payments/{payment_id}/edit")
+def edit_quote_payment(request: Request, quote_id: int, payment_id: int, company: str = "", title: str = Form(...), percentage: str = Form(...)):
+    return mutate_quote_row(request, quote_id, company, "payments", "edit", payment_id, (title, percentage))
+
+
+@app.post("/quote/{quote_id}/payments/{payment_id}/delete")
+def delete_quote_payment(request: Request, quote_id: int, payment_id: int, company: str = ""):
+    return mutate_quote_row(request, quote_id, company, "payments", "delete", payment_id)
+
 
 # ======================
 # تحويل عرض إلى عقد
