@@ -3,6 +3,7 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import PlainTextResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from auth import get_current_user, get_user_by_id, is_admin, is_employee, is_owner, is_partner, is_project_manager, is_tenant, password_matches, require_login, require_role
 from admin_users import router as admin_users_router
@@ -4816,6 +4817,38 @@ app.add_middleware(
     secret_key=os.getenv("URBANRISE_SESSION_SECRET", "urban-rise-ai-internal-session-secret"),
     same_site="lax",
 )
+
+
+@app.middleware("http")
+async def public_domain_middleware(request: Request, call_next):
+    host = (request.url.hostname or "").lower()
+    if host in {"urban-rise-ai.onrender.com", "www.urbanrise.sa"}:
+        path = request.scope.get("raw_path", b"/").decode("ascii")
+        query = request.scope.get("query_string", b"").decode("ascii")
+        target = f"https://urbanrise.sa{path}"
+        if query:
+            target += f"?{query}"
+        return RedirectResponse(target, status_code=308)
+
+    response = await call_next(request)
+    if request.url.path not in {"/", "/robots.txt", "/sitemap.xml"}:
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    return response
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+def robots_txt():
+    return "User-agent: *\nDisallow: /\nAllow: /$\nSitemap: https://urbanrise.sa/sitemap.xml\n"
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    return Response(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        '<url><loc>https://urbanrise.sa/</loc></url></urlset>',
+        media_type="application/xml",
+    )
 
 
 @app.get("/logout")
@@ -21606,4 +21639,3 @@ def delete_logistics_equipment(equipment_id: int, company: str = ""):
 from client_portal import register_client_portal
 register_client_portal(app)
 register_assets_custody(app)
-
