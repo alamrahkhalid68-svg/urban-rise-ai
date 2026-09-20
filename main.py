@@ -4828,7 +4828,7 @@ async def public_domain_middleware(request: Request, call_next):
         target = f"https://urbanrise.sa{path}"
         if query:
             target += f"?{query}"
-        return RedirectResponse(target, status_code=308)
+        return RedirectResponse(target, status_code=301)
 
     response = await call_next(request)
     if request.url.path not in {"/", "/robots.txt", "/sitemap.xml"}:
