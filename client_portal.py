@@ -41,7 +41,7 @@ PHASE_STATUSES = {"not_started", "in_progress", "completed", "awaiting_client", 
 REQUEST_STATUSES = {"new", "reviewing", "assigned", "awaiting_client", "approved", "implemented", "rejected", "closed"}
 REQUEST_TYPES = {"change", "inquiry", "note", "maintenance", "materials"}
 logger = logging.getLogger("urbanrise.client_requests")
-PORTAL_HOME_URL = "https://urban-rise-ai.onrender.com/"
+PORTAL_HOME_URL = "https://urbanrise.sa"
 ACCESS_CARD_DIR = Path("tmp/client_portal_access_cards")
 
 
@@ -292,8 +292,9 @@ def _build_client_access_card(project, client_name, username, password, token):
             y -= 17
         y -= 32
     ar("رابط الدخول:", y, 10, muted)
-    pdf.setFont("Helvetica", 10); pdf.setFillColor(white); pdf.drawString(card_x + 38, y - 19, PORTAL_HOME_URL)
-    qr = qrcode.QRCode(version=3, box_size=8, border=2); qr.add_data(PORTAL_HOME_URL); qr.make(fit=True)
+    portal_url = f"{PORTAL_HOME_URL}/client-portal?project_id={int(project['id'])}"
+    pdf.setFont("Helvetica", 10); pdf.setFillColor(white); pdf.drawString(card_x + 38, y - 19, "urbanrise.sa")
+    qr = qrcode.QRCode(version=3, box_size=8, border=2); qr.add_data(portal_url); qr.make(fit=True)
     qr_buffer = BytesIO(); qr.make_image(fill_color="#14201d", back_color="#f7f1e4").save(qr_buffer, format="PNG"); qr_buffer.seek(0)
     qr_size = 112; pdf.drawImage(ImageReader(qr_buffer), card_x + 38, card_y + 92, qr_size, qr_size, mask="auto")
     ar("امسح الرمز لفتح الصفحة الرئيسية", card_y + 136, 10, muted)
