@@ -11,6 +11,7 @@ from assets_custody import register_assets_custody
 from access_control import ensure_company_access, ensure_employee_any_section_access, ensure_employee_section_access, ensure_property_access, ensure_request_belongs_to_tenant, ensure_tenant_access, get_accessible_property_ids, get_employee_allowed_sections, get_primary_tenant_id, get_user_company_access_rows, get_user_tenant_access_ids, normalize_access_value, user_has_company_access, user_has_property_access, user_has_tenant_access
 from fastapi.staticfiles import StaticFiles
 from db import get_db
+from featured_projects import published_projects, register_featured_projects
 from html import escape
 import json
 import logging
@@ -4831,22 +4832,25 @@ async def public_domain_middleware(request: Request, call_next):
         return RedirectResponse(target, status_code=301)
 
     response = await call_next(request)
-    if request.url.path not in {"/", "/robots.txt", "/sitemap.xml"}:
+    if request.url.path not in {"/", "/works", "/robots.txt", "/sitemap.xml"} and not (request.url.path.startswith("/works/projects/") and response.status_code == 200):
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
     return response
 
 
 @app.get("/robots.txt", response_class=PlainTextResponse)
 def robots_txt():
-    return "User-agent: *\nDisallow: /\nAllow: /$\nSitemap: https://urbanrise.sa/sitemap.xml\n"
+    return "User-agent: *\nDisallow: /\nAllow: /$\nAllow: /works$\nAllow: /works/projects/\nSitemap: https://urbanrise.sa/sitemap.xml\n"
 
 
 @app.get("/sitemap.xml")
 def sitemap_xml():
+    from xml.sax.saxutils import escape as xml_escape
+    project_urls = ''.join(f'<url><loc>https://urbanrise.sa/works/projects/{xml_escape(p["slug"])}</loc></url>' for p in published_projects())
     return Response(
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
-        '<url><loc>https://urbanrise.sa/</loc></url></urlset>',
+        '<url><loc>https://urbanrise.sa/</loc></url>'
+        '<url><loc>https://urbanrise.sa/works</loc></url>' + project_urls + '</urlset>',
         media_type="application/xml",
     )
 
@@ -4862,7 +4866,9 @@ def logout(request: Request):
 def render_internal_portal(user) -> HTMLResponse:
     admin_users_button = ""
     daily_report_button = ""
+    featured_projects_button = ""
     if is_admin(user):
+        featured_projects_button = '<a href="/admin/featured-projects" class="portal-admin-btn">المشاريع المختارة للموقع</a>'
         admin_users_button = '<a href="/admin/users" class="portal-admin-btn">تسجيل مستخدم جديد</a>'
         conn = get_db()
         unread_requests = conn.execute("""SELECT COUNT(*) total FROM client_change_requests
@@ -5087,7 +5093,7 @@ def render_internal_portal(user) -> HTMLResponse:
     <section class="portal-hero">
         <h1 class="portal-title">Urban Rise AI</h1>
         <p class="portal-kicker">بوابة إدارة مجموعة أوربان رايز</p>
-        <div class="portal-admin-actions">{daily_report_button}{admin_users_button}</div>
+        <div class="portal-admin-actions">{daily_report_button}{admin_users_button}{featured_projects_button}</div>
     </section>
 
     <section class="portal-company-grid" aria-label="بوابات الشركات">
@@ -5135,6 +5141,11 @@ def home(request: Request):
             "request": request,
         },
     )
+
+
+@app.get("/works", response_class=HTMLResponse)
+def works_home(request: Request):
+    return templates.TemplateResponse(request, "works_home.html", {"featured_projects": published_projects()})
 
 
 @app.get("/portal", response_class=HTMLResponse)
@@ -21638,4 +21649,5 @@ def delete_logistics_equipment(equipment_id: int, company: str = ""):
 # Client portal routes and additive schema are isolated in their own module.
 from client_portal import register_client_portal
 register_client_portal(app)
+register_featured_projects(app, templates)
 register_assets_custody(app)
