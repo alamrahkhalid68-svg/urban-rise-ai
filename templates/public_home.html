@@ -45,13 +45,6 @@
                     <source src="/static/videos/urban-rise-intro.mp4" type="video/mp4">
                 </video>
                 <audio id="intro-audio" src="/static/audio/urban-rise-elegant.mp3" loop preload="none" hidden></audio>
-                <button id="intro-sound-toggle" class="intro-sound-toggle" type="button" aria-label="تشغيل صوت الفيديو" aria-pressed="false" title="تشغيل صوت الفيديو">
-                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                        <path d="M11 5 6 9H3v6h3l5 4Z" />
-                        <path class="intro-sound-off" d="m16 9 6 6m0-6-6 6" />
-                        <path class="intro-sound-on" d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" />
-                    </svg>
-                </button>
             </div>
             <p id="intro-sound-status" class="intro-sound-status" role="status" hidden></p>
         </section>
@@ -277,6 +270,7 @@
                         <p>
                             تنفيذ متكامل بمعايير تليق بالمشروع. نقدم حلول المقاولات من خلال أقسام متخصصة تشمل البناء والإنشاء، التشطيب والترميم، الصيانة والنظافة، وأعمال المشاريع والتعديلات الداخلية والخارجية، من التجهيز وحتى التسليم والتشغيل، بجودة تنفيذ ومتابعة منظمة.
                         </p>
+                        <a class="works-card-link" href="/works">عرض الخدمات والمشاريع</a>
                     </div>
                 </article>
 
@@ -357,7 +351,6 @@
                 <h3 id="cta-heading">مشروعك القادم يبدأ من منظومة متكاملة</h3>
                 <p>من التطوير والاستثمار إلى التنفيذ والإدارة والتشغيل والدعم اللوجستي والذكاء الاصطناعي.</p>
             </div>
-            <a class="public-cta-link" href="#contact">تواصل معنا <span aria-hidden="true">←</span></a>
         </section>
 
         <section class="content-section contact-section" id="contact">
@@ -410,6 +403,18 @@
             </div>
         </section>
     </main>
+
+    <button id="intro-sound-toggle" class="intro-sound-toggle" type="button" aria-label="تشغيل صوت الفيديو" aria-pressed="false" title="تشغيل صوت الفيديو">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M11 5 6 9H3v6h3l5 4Z" />
+            <path class="intro-sound-off" d="m16 9 6 6m0-6-6 6" />
+            <path class="intro-sound-on" d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" />
+        </svg>
+    </button>
+    <a class="public-cta-link" href="https://wa.me/966545687944?text=%D8%A7%D9%84%D8%B3%D9%84%D8%A7%D9%85%20%D8%B9%D9%84%D9%8A%D9%83%D9%85%D8%8C%20%D8%A3%D8%B1%D8%BA%D8%A8%20%D9%81%D9%8A%20%D8%A7%D9%84%D8%A7%D8%B3%D8%AA%D9%81%D8%B3%D8%A7%D8%B1%20%D8%B9%D9%86%20%D8%AE%D8%AF%D9%85%D8%A7%D8%AA%20%D9%85%D8%AC%D9%85%D9%88%D8%B9%D8%A9%20%D8%A3%D9%88%D8%B1%D8%A8%D8%A7%D9%86%20%D8%B1%D8%A7%D9%8A%D8%B2." target="_blank" rel="noopener noreferrer" aria-label="تواصل معنا عبر واتساب">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 11.6a8 8 0 0 1-11.6 7.1L4 20l1.3-4.4A8 8 0 1 1 20 11.6Z"/><path d="M9 8.5c.4 2.6 2.1 4.4 4.8 5.2l1.4-1.1 1.5.8-.3 1.7c-4.3 1.2-8.1-2.6-8.2-6.2Z"/></svg>
+        <span>تواصل معنا</span>
+    </a>
 
     <footer class="public-footer">
         <p>Urban Rise Group</p>

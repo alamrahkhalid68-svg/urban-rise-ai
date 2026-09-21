@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>المشاريع المختارة للموقع | Urban Rise AI</title>
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="stylesheet" href="/static/featured-projects.css">
+  <script src="/static/featured-projects-admin.js" defer></script>
+</head>
+<body class="featured-admin">
+<main class="admin-shell">
+  <nav><a href="/portal">العودة للوحة الإدارة</a> · <a href="/admin/featured-projects">كل المشاريع</a></nav>
+  <h1>المشاريع المختارة للموقع</h1>
+  <p>أضف المشروع والصور التي تريد عرضها في موقع Urban Rise Works. هذه المشاريع مستقلة عن مشاريع العملاء والتقارير اليومية.</p>
+  <section class="admin-panel" aria-labelledby="project-form-title">
+    <h2 id="project-form-title">{{ 'تعديل المشروع' if project else 'إضافة مشروع' }}</h2>
+    {% if project %}<p class="admin-slug">الرابط الناتج: <a href="/works/projects/{{ project.slug }}" dir="ltr">/works/projects/{{ project.slug }}</a></p>{% endif %}
+    <form id="featured-project-form" method="post" action="/admin/featured-projects/save" enctype="multipart/form-data">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="project_id" value="{{ project.id if project else 0 }}">
+      <label>اسم المشروع<input name="name" maxlength="120" required value="{{ project.name if project else '' }}"></label>
+      <label>نوع الخدمة<select name="service" required>{% for service in services %}<option value="{{ service }}" {% if project and project.service == service %}selected{% endif %}>{{ service }}</option>{% endfor %}</select></label>
+      <label class="admin-wide">وصف مختصر<textarea name="summary" maxlength="350" required>{{ project.summary if project else '' }}</textarea></label>
+      <label class="admin-wide">وصف تفصيلي (اختياري)<textarea name="description" maxlength="5000" rows="5">{{ project.description if project else '' }}</textarea></label>
+      <div class="admin-upload-grid">
+        <label class="admin-upload-label">إرفاق صورة الغلاف<input id="cover-image-input" type="file" name="cover_image" accept="image/jpeg,image/png,image/webp"></label>
+        <label class="admin-upload-label">إرفاق صور المشروع<input id="gallery-images-input" type="file" name="gallery_images" accept="image/jpeg,image/png,image/webp" multiple></label>
+      </div>
+      <p class="admin-upload-note">JPG أو PNG أو WebP · 8 ميجابايت للصورة · حتى 10 صور في كل حفظ</p>
+      <p id="selected-image-count" class="admin-count" aria-live="polite">الصور الجديدة المختارة: 0</p>
+      <div id="new-image-preview" class="admin-images admin-new-preview" aria-label="معاينة الصور المختارة"></div>
+      {% if images %}
+      <div class="admin-existing admin-wide">
+        <h3>الصور الحالية</h3>
+        <p>يمكن تغيير الغلاف أو النص البديل أو الترتيب أو تحديد الصور المراد حذفها، ثم حفظ كل التعديلات مرة واحدة.</p>
+        <div class="admin-images">
+          {% for image in images %}
+          <article class="admin-image-card" data-existing-image="{{ image.id }}">
+            <img src="{{ image.thumbnail_url }}" alt="{{ image.alt }}" width="180" height="135">
+            <input type="hidden" name="existing_image" value="{{ image.id }}">
+            <label class="admin-radio"><input type="radio" name="cover_choice" value="existing-{{ image.id }}" {% if image.is_cover %}checked{% endif %}> صورة الغلاف</label>
+            <label>وصف الصورة<input name="existing_alt_{{ image.id }}" maxlength="180" value="{{ image.alt }}" required></label>
+            <label>ترتيب الصورة<input type="number" name="existing_order_{{ image.id }}" min="-100000" max="100000" value="{{ image.sort_order }}"></label>
+            <label class="admin-delete-choice"><input type="checkbox" name="remove_image" value="{{ image.id }}"> حذف الصورة عند الحفظ</label>
+          </article>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      <label>ترتيب الظهور<input name="sort_order" type="number" min="-100000" max="100000" value="{{ project.sort_order if project else 0 }}" required></label>
+      <label>الحالة<select name="status"><option value="draft" {% if not project or project.status == 'draft' %}selected{% endif %}>مسودة</option><option value="published" {% if project and project.status == 'published' %}selected{% endif %}>منشور</option></select></label>
+      <label class="checkbox admin-wide"><input name="featured" type="checkbox" {% if project and project.featured %}checked{% endif %}> مشروع مميز</label>
+      <div class="admin-wide"><button type="submit">حفظ المشروع</button></div>
+    </form>
+  </section>
+  <section class="admin-panel" aria-labelledby="projects-list-title">
+    <h2 id="projects-list-title">جميع المشاريع المختارة</h2>
+    <div class="admin-list">
+      {% for item in projects %}
+      <article>
+        <div><strong>{{ item.name }}</strong><small>{{ item.service }} · {{ 'منشور' if item.status == 'published' else 'مسودة' }} · ترتيب {{ item.sort_order }} · {{ item.updated_at }}</small><small dir="ltr">/works/projects/{{ item.slug }}</small></div>
+        <a href="/admin/featured-projects?edit={{ item.id }}">تعديل المشروع والصور</a>
+        <form method="post" action="/admin/featured-projects/{{ item.id }}/delete" onsubmit="return confirm('حذف المشروع وصوره نهائيًا؟ لا يمكن التراجع.')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger">حذف</button></form>
+      </article>
+      {% else %}<p>لا توجد مشاريع مختارة بعد.</p>{% endfor %}
+    </div>
+  </section>
+</main>
+</body>
+</html>
