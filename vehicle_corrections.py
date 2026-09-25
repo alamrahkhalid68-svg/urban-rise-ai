@@ -13,13 +13,12 @@ from db import get_db
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
-RECORD_LABELS = {"odometer": "قراءة العداد", "oil": "تغيير الزيت", "incident": "الحادث / الواقعة", "maintenance": "الصيانة", "vehicle": "بيانات السيارة", "assignment": "التسليم والاسترجاع", "employee_login": "ربط حساب الموظف"}
+RECORD_LABELS = {"odometer": "قراءة العداد", "oil": "تغيير الزيت", "incident": "الحادث / الواقعة", "maintenance": "الصيانة", "vehicle": "بيانات السيارة", "assignment": "التسليم والاسترجاع"}
 
 
 def migrate(conn):
     additions = {
         "vehicles": {"oil_interval": "INTEGER NOT NULL DEFAULT 5000"},
-        "employees": {"user_id": "INTEGER REFERENCES users(id)"},
         "vehicle_odometer_logs": {"notes": "TEXT", "source_kind": "TEXT", "source_id": "INTEGER"},
         "vehicle_oil_changes": {"notes": "TEXT", "next_change_odometer": "INTEGER", "next_change_date": "TEXT"},
     }
@@ -31,7 +30,6 @@ def migrate(conn):
             if name not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
     conn.executescript("""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_login ON employees(user_id) WHERE user_id IS NOT NULL;
         CREATE TABLE IF NOT EXISTS vehicle_maintenance (
             id INTEGER PRIMARY KEY, vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
             service_date TEXT NOT NULL, odometer INTEGER NOT NULL CHECK(odometer>=0),
@@ -71,21 +69,10 @@ def migrate(conn):
                 AND x.reading=l.reading AND substr(x.recorded_at,1,10)=substr(l.recorded_at,1,10))=1""", (source,))
 
 
-def owns_vehicle(conn, user, vehicle_id):
-    return bool(user and user["role"] == "employee" and conn.execute("""
-        SELECT 1 FROM vehicle_assignments a JOIN employees e ON e.id=a.employee_id
-        WHERE a.vehicle_id=? AND a.status='assigned' AND e.user_id=?
-    """, (vehicle_id, user["id"])).fetchone())
-
-
-def has_vehicle_custody(user):
-    if not user or user["role"] != "employee":
-        return False
-    conn = get_db()
-    try:
-        return bool(conn.execute("SELECT 1 FROM employees e JOIN vehicle_assignments a ON a.employee_id=e.id WHERE e.user_id=? AND a.status='assigned'", (user["id"],)).fetchone())
-    finally:
-        conn.close()
+def vehicle_manager(conn, user):
+    return bool(user and user["role"] == "employee" and conn.execute(
+        "SELECT 1 FROM user_company_access WHERE user_id=? AND section='asset_custody_manager' AND company IN ('works','all') LIMIT 1",
+        (user["id"],)).fetchone())
 
 
 def vehicle_guard(request, vehicle_id, *, view=False):
@@ -94,14 +81,14 @@ def vehicle_guard(request, vehicle_id, *, view=False):
         return None, RedirectResponse("/login", status_code=303)
     if is_admin(user):
         return user, None
-    with get_db() as conn:
-        allowed = owns_vehicle(conn, user, vehicle_id)
-        if view:
-            allowed = allowed or bool(conn.execute("SELECT 1 FROM user_company_access WHERE user_id=? AND section='asset_custody_manager' AND company IN ('works','all')", (user["id"],)).fetchone())
-    conn.close()
+    conn = get_db()
+    try:
+        allowed = vehicle_manager(conn, user)
+    finally:
+        conn.close()
     if allowed:
         return user, None
-    return None, HTMLResponse("<h2 dir='rtl'>لا يمكنك تعديل أو استخدام سيارة غير مسلّمة لك</h2>", status_code=403)
+    return None, HTMLResponse("<h2 dir='rtl'>ليس لديك صلاحية استخدام السيارات</h2>", status_code=403)
 
 
 # Explicit field allowlists: submitted IDs, authors, assignments and roles are never writable.
@@ -127,8 +114,7 @@ def can_edit(conn, user, vehicle_id, kind, row):
         return True
     if kind == "odometer" and row["source_kind"] in ("delivery", "return"):
         return False
-    return (kind not in ("vehicle", "assignment") and owns_vehicle(conn, user, vehicle_id)
-            and row["recorded_by"] == user["id"])
+    return kind not in ("vehicle", "assignment") and vehicle_manager(conn, user)
 
 
 def audit_update(conn, vehicle_id, kind, table, old, changes, user):
@@ -285,8 +271,8 @@ async def new_maintenance(request: Request, vehicle_id: int):
         conn = get_db()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            if not is_admin(user) and not owns_vehicle(conn, user, vehicle_id):
-                return HTMLResponse("السيارة غير مسلّمة لك", status_code=403)
+            if not is_admin(user) and not vehicle_manager(conn, user):
+                return HTMLResponse("ليس لديك صلاحية استخدام السيارات", status_code=403)
             if not conn.execute("SELECT 1 FROM vehicles WHERE id=?", (vehicle_id,)).fetchone():
                 return HTMLResponse("السيارة غير موجودة", status_code=404)
             conn.execute("INSERT INTO vehicle_maintenance(vehicle_id,service_date,odometer,service_type,notes,recorded_at,recorded_by) VALUES(?,?,?,?,?,?,?)", (vehicle_id, changes["service_date"], changes["odometer"], changes["service_type"], changes["notes"], datetime.now().isoformat(timespec="seconds"), user["id"]))
@@ -297,42 +283,9 @@ async def new_maintenance(request: Request, vehicle_id: int):
     return edit_page(request, vehicle_id, "maintenance", 0, values, fields)
 
 
-@router.api_route("/vehicle/{vehicle_id}/employee-login", methods=["GET", "POST"])
-async def employee_login(request: Request, vehicle_id: int):
-    user, denied = vehicle_guard(request, vehicle_id)
-    if denied:
-        return denied
-    if not is_admin(user):
-        return HTMLResponse("ربط حساب الموظف متاح للأدمن فقط", status_code=403)
-    conn = get_db()
-    try:
-        values = dict(await request.form()) if request.method == "POST" else {}
-        if request.method == "POST":
-            conn.execute("BEGIN IMMEDIATE")
-        employee = conn.execute("SELECT e.* FROM employees e JOIN vehicle_assignments a ON a.employee_id=e.id WHERE a.vehicle_id=? AND a.status='assigned'", (vehicle_id,)).fetchone()
-        if not employee:
-            return HTMLResponse("سلّم السيارة لموظف أولًا عبر نظام العهد الحالي", status_code=400)
-        users = conn.execute("SELECT id,full_name,username FROM users WHERE role='employee' AND is_active=1 ORDER BY full_name,id").fetchall()
-        error = ""
-        if request.method == "POST":
-            try:
-                uid = int(values.get("user_id", "0")) or None
-                if uid and uid not in {u["id"] for u in users}:
-                    raise ValueError()
-                audit_update(conn, vehicle_id, "employee_login", "employees", employee, {"user_id": uid}, user)
-                conn.commit()
-                return RedirectResponse(f"/vehicle/{vehicle_id}?message=تم+حفظ+ربط+حساب+الموظف", status_code=303)
-            except (ValueError, sqlite3.IntegrityError):
-                conn.rollback()
-                error = "اختر حساب موظف نشط غير مرتبط بموظف آخر"
-        return templates.TemplateResponse(request=request, name="vehicle_employee_login.html", context={"employee": employee, "users": users, "selected": values.get("user_id", str(employee["user_id"] or "")), "vehicle_id": vehicle_id, "error": error}, status_code=400 if error else 200)
-    finally:
-        conn.close()
-
-
 def detail_context(conn, user, vehicle_id):
     admin = is_admin(user)
-    own = owns_vehicle(conn, user, vehicle_id)
+    manager = vehicle_manager(conn, user)
     editable = {}
     for kind, (table, _) in FIELDS.items():
         rows = conn.execute(f"SELECT * FROM {table} WHERE " + ("id=?" if kind == "vehicle" else "vehicle_id=?"), (vehicle_id,)).fetchall()
@@ -344,7 +297,7 @@ def detail_context(conn, user, vehicle_id):
             item["old_values"] = json.loads(item["old_values"])
             item["new_values"] = json.loads(item["new_values"])
             audits.append(item)
-    return {"editable": editable, "is_vehicle_admin": admin, "can_operate": admin or own, "can_manage_custody": admin,
+    return {"editable": editable, "is_vehicle_admin": admin, "can_operate": admin or manager, "can_manage_custody": admin,
             "audits": audits, "record_labels": RECORD_LABELS,
-            "field_labels": {kind: {f[0]: f[1] for f in fields} for kind, (_, fields) in FIELDS.items()} | {"employee_login": {"user_id": "حساب الموظف"}},
+            "field_labels": {kind: {f[0]: f[1] for f in fields} for kind, (_, fields) in FIELDS.items()},
             "maintenance": conn.execute("SELECT * FROM vehicle_maintenance WHERE vehicle_id=? ORDER BY service_date DESC,id DESC", (vehicle_id,)).fetchall()}

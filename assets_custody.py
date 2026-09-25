@@ -17,7 +17,7 @@ from reportlab.platypus import Image as ReportLabImage, PageBreak, Paragraph, Si
 
 from auth import get_current_user, is_admin
 from db import get_db
-from vehicle_corrections import migrate, vehicle_guard, detail_context, owns_vehicle, router as corrections_router
+from vehicle_corrections import migrate, vehicle_guard, detail_context, router as corrections_router
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
@@ -116,12 +116,10 @@ def dashboard(request:Request):
     user=getattr(request.state,"current_user",None) or get_current_user(request)
     if not user:return RedirectResponse("/login",status_code=303)
     _,denied=_guard(request)
+    if denied:return denied
     conn=get_db()
-    if denied and not conn.execute("SELECT 1 FROM employees e JOIN vehicle_assignments a ON a.employee_id=e.id WHERE e.user_id=? AND a.status='assigned'",(user["id"],)).fetchone():
-        conn.close();return denied
     rows=conn.execute("""SELECT v.*,e.name employee_name,l.recorded_at last_odometer_update FROM vehicles v LEFT JOIN vehicle_assignments a ON a.vehicle_id=v.id AND a.status='assigned' LEFT JOIN employees e ON e.id=a.employee_id LEFT JOIN vehicle_odometer_logs l ON l.id=(SELECT id FROM vehicle_odometer_logs x WHERE x.vehicle_id=v.id ORDER BY x.recorded_at DESC,x.id DESC LIMIT 1)""").fetchall(); vehicles=[]
     for row in rows:
-        if denied and not owns_vehicle(conn,user,row["id"]):continue
         oil=conn.execute("SELECT * FROM vehicle_oil_changes WHERE vehicle_id=? ORDER BY change_date DESC,id DESC LIMIT 1",(row["id"],)).fetchone(); item=dict(row); item["oil"]=calculate_oil_status(row["current_odometer"],oil); item["days"]=_days_since(row["last_odometer_update"]); item["stale"]=item["days"] is None or item["days"]>7; vehicles.append(item)
     conn.close(); vehicles.sort(key=lambda x:(x["oil"]["sort_rank"],0 if x["stale"] else 1,x["plate_number"]))
     return templates.TemplateResponse(request=request,name="assets_dashboard.html",context={"vehicles":vehicles,"can_create_vehicle":is_admin(user),"home_url":"/assets-custody" if not is_admin(user) else "/"})
