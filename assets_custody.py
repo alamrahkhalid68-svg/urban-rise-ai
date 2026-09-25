@@ -17,6 +17,7 @@ from reportlab.platypus import Image as ReportLabImage, PageBreak, Paragraph, Si
 
 from auth import get_current_user, is_admin
 from db import get_db
+from vehicle_corrections import migrate, vehicle_guard, detail_context, owns_vehicle, router as corrections_router
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
@@ -45,6 +46,7 @@ def init_assets_custody_schema():
             conn.execute(f"ALTER TABLE vehicle_assignments ADD COLUMN {column_name} {column_definition}")
     conn.execute("UPDATE vehicle_assignments SET delivery_odometer=(SELECT reading FROM vehicle_odometer_logs WHERE vehicle_id=vehicle_assignments.vehicle_id AND recorded_at<=vehicle_assignments.delivered_at||'T23:59:59' ORDER BY recorded_at DESC,id DESC LIMIT 1) WHERE delivery_odometer IS NULL")
     conn.execute("UPDATE vehicle_assignments SET delivery_odometer=(SELECT current_odometer FROM vehicles WHERE id=vehicle_assignments.vehicle_id) WHERE delivery_odometer IS NULL")
+    migrate(conn)
     conn.commit(); conn.close()
 
 
@@ -52,6 +54,8 @@ def calculate_oil_status(current_odometer, oil_change):
     if not oil_change:
         return {"has_cycle": False, "used": 0, "remaining": None, "interval": None, "next_change": None, "progress": 0, "status": "not_set", "label": "سجّل أول تغيير زيت", "sort_rank": 4}
     start, interval = int(oil_change["odometer"]), int(oil_change["oil_interval"])
+    target = dict(oil_change).get("next_change_odometer") or start + interval
+    interval = target - start
     used = max(int(current_odometer) - start, 0); remaining = interval - used
     threshold = interval * .10; progress = min(max(used / interval * 100, 0), 100)
     if remaining < 0: status, label, rank = "overdue", f"متأخر عن تغيير الزيت بـ {abs(remaining):,} كم", 0
@@ -75,6 +79,10 @@ def _admin_vehicle_guard(request, denied_message="إدارة السيارات م
     if not user:return None,RedirectResponse("/login",status_code=303)
     if is_admin(user):return user,None
     return None,HTMLResponse(f"<h2 dir='rtl'>{denied_message}</h2>",status_code=403)
+
+
+def _vehicle_view_guard(request,vehicle_id):
+    return vehicle_guard(request,vehicle_id,view=True)
 
 
 def _days_since(value):
@@ -105,10 +113,15 @@ def _save_images(files, assignment_id, image_type, user_id, incident_id=None):
 
 @router.get("/assets-custody",response_class=HTMLResponse)
 def dashboard(request:Request):
-    user,denied=_guard(request)
-    if denied:return denied
-    conn=get_db(); rows=conn.execute("""SELECT v.*,e.name employee_name,l.recorded_at last_odometer_update FROM vehicles v LEFT JOIN vehicle_assignments a ON a.vehicle_id=v.id AND a.status='assigned' LEFT JOIN employees e ON e.id=a.employee_id LEFT JOIN vehicle_odometer_logs l ON l.id=(SELECT id FROM vehicle_odometer_logs x WHERE x.vehicle_id=v.id ORDER BY x.recorded_at DESC,x.id DESC LIMIT 1)""").fetchall(); vehicles=[]
+    user=getattr(request.state,"current_user",None) or get_current_user(request)
+    if not user:return RedirectResponse("/login",status_code=303)
+    _,denied=_guard(request)
+    conn=get_db()
+    if denied and not conn.execute("SELECT 1 FROM employees e JOIN vehicle_assignments a ON a.employee_id=e.id WHERE e.user_id=? AND a.status='assigned'",(user["id"],)).fetchone():
+        conn.close();return denied
+    rows=conn.execute("""SELECT v.*,e.name employee_name,l.recorded_at last_odometer_update FROM vehicles v LEFT JOIN vehicle_assignments a ON a.vehicle_id=v.id AND a.status='assigned' LEFT JOIN employees e ON e.id=a.employee_id LEFT JOIN vehicle_odometer_logs l ON l.id=(SELECT id FROM vehicle_odometer_logs x WHERE x.vehicle_id=v.id ORDER BY x.recorded_at DESC,x.id DESC LIMIT 1)""").fetchall(); vehicles=[]
     for row in rows:
+        if denied and not owns_vehicle(conn,user,row["id"]):continue
         oil=conn.execute("SELECT * FROM vehicle_oil_changes WHERE vehicle_id=? ORDER BY change_date DESC,id DESC LIMIT 1",(row["id"],)).fetchone(); item=dict(row); item["oil"]=calculate_oil_status(row["current_odometer"],oil); item["days"]=_days_since(row["last_odometer_update"]); item["stale"]=item["days"] is None or item["days"]>7; vehicles.append(item)
     conn.close(); vehicles.sort(key=lambda x:(x["oil"]["sort_rank"],0 if x["stale"] else 1,x["plate_number"]))
     return templates.TemplateResponse(request=request,name="assets_dashboard.html",context={"vehicles":vehicles,"can_create_vehicle":is_admin(user),"home_url":"/assets-custody" if not is_admin(user) else "/"})
@@ -133,6 +146,7 @@ def create_vehicle(request:Request,vehicle_type:str=Form(...),make:str=Form(...)
         conn.execute("INSERT INTO vehicle_odometer_logs(vehicle_id,reading,recorded_at,recorded_by) VALUES(?,?,?,?)",(vid,current_odometer,now,user["id"]))
         if employee_id:
             assignment_id=conn.execute("INSERT INTO vehicle_assignments(vehicle_id,employee_id,delivered_at,status,accessories,created_by,delivery_odometer,delivery_notes) VALUES(?,?,?,'assigned',?,?,?,?)",(vid,employee_id,delivered_at or date.today().isoformat(),accessories,user["id"],current_odometer,delivery_notes)).lastrowid
+            conn.execute("UPDATE vehicle_odometer_logs SET source_kind='delivery',source_id=? WHERE vehicle_id=? AND recorded_at=?",(assignment_id,vid,now))
             conn.executemany("INSERT INTO vehicle_assignment_images(assignment_id,incident_id,image_type,image_path,uploaded_at,uploaded_by) VALUES(?,?,?,?,?,?)",_save_images(delivery_images,assignment_id,"delivery",user["id"]))
         conn.commit()
     except sqlite3.IntegrityError:conn.rollback();conn.close();return HTMLResponse("رقم اللوحة أو الهيكل مستخدم مسبقًا",status_code=400)
@@ -141,11 +155,11 @@ def create_vehicle(request:Request,vehicle_type:str=Form(...),make:str=Form(...)
 
 @router.get("/vehicle/{vehicle_id}",response_class=HTMLResponse)
 def vehicle_detail(request:Request,vehicle_id:int,message:str="",error:str=""):
-    user,denied=_guard(request)
+    user,denied=_vehicle_view_guard(request,vehicle_id)
     if denied:return denied
     conn=get_db(); bundle=_bundle(conn,vehicle_id)
     if not bundle:conn.close();return HTMLResponse("السيارة غير موجودة",status_code=404)
-    vehicle,assignment,oil,log=bundle; oils=conn.execute("SELECT * FROM vehicle_oil_changes WHERE vehicle_id=? ORDER BY change_date DESC,id DESC",(vehicle_id,)).fetchall(); log_rows=conn.execute("SELECT l.*,u.full_name recorder_name FROM vehicle_odometer_logs l LEFT JOIN users u ON u.id=l.recorded_by WHERE l.vehicle_id=? ORDER BY l.recorded_at DESC,l.id DESC LIMIT 20",(vehicle_id,)).fetchall(); assignments=conn.execute("SELECT a.*,e.name employee_name FROM vehicle_assignments a JOIN employees e ON e.id=a.employee_id WHERE a.vehicle_id=? ORDER BY a.id DESC",(vehicle_id,)).fetchall();employees=conn.execute("SELECT id,name,company FROM employees ORDER BY name").fetchall();images=conn.execute("SELECT * FROM vehicle_assignment_images WHERE assignment_id IN (SELECT id FROM vehicle_assignments WHERE vehicle_id=?) OR incident_id IN (SELECT id FROM vehicle_incidents WHERE vehicle_id=?) ORDER BY id",(vehicle_id,vehicle_id)).fetchall();incidents=conn.execute("SELECT i.*,e.name employee_name,u.full_name recorder_name FROM vehicle_incidents i LEFT JOIN vehicle_assignments a ON a.id=i.assignment_id LEFT JOIN employees e ON e.id=a.employee_id LEFT JOIN users u ON u.id=i.recorded_by WHERE i.vehicle_id=? ORDER BY i.incident_date DESC,i.id DESC",(vehicle_id,)).fetchall();conn.close();days=_days_since(log["recorded_at"] if log else None)
+    vehicle,assignment,oil,log=bundle; oils=conn.execute("SELECT * FROM vehicle_oil_changes WHERE vehicle_id=? ORDER BY change_date DESC,id DESC",(vehicle_id,)).fetchall(); log_rows=conn.execute("SELECT l.*,u.full_name recorder_name FROM vehicle_odometer_logs l LEFT JOIN users u ON u.id=l.recorded_by WHERE l.vehicle_id=? ORDER BY l.recorded_at DESC,l.id DESC",(vehicle_id,)).fetchall(); assignments=conn.execute("SELECT a.*,e.name employee_name FROM vehicle_assignments a JOIN employees e ON e.id=a.employee_id WHERE a.vehicle_id=? ORDER BY a.id DESC",(vehicle_id,)).fetchall();employees=conn.execute("SELECT id,name,company FROM employees ORDER BY name").fetchall();images=conn.execute("SELECT * FROM vehicle_assignment_images WHERE assignment_id IN (SELECT id FROM vehicle_assignments WHERE vehicle_id=?) OR incident_id IN (SELECT id FROM vehicle_incidents WHERE vehicle_id=?) ORDER BY id",(vehicle_id,vehicle_id)).fetchall();incidents=conn.execute("SELECT i.*,e.name employee_name,u.full_name recorder_name FROM vehicle_incidents i LEFT JOIN vehicle_assignments a ON a.id=i.assignment_id LEFT JOIN employees e ON e.id=a.employee_id LEFT JOIN users u ON u.id=i.recorded_by WHERE i.vehicle_id=? ORDER BY i.incident_date DESC,i.id DESC",(vehicle_id,)).fetchall();extra=detail_context(conn,user,vehicle_id);conn.close();days=_days_since(log["recorded_at"] if log else None)
     logs=[]
     for index,row in enumerate(log_rows):
         item=dict(row); item["distance_since_previous"] = item["reading"]-log_rows[index+1]["reading"] if index+1<len(log_rows) else None; logs.append(item)
@@ -155,7 +169,7 @@ def vehicle_detail(request:Request,vehicle_id:int,message:str="",error:str=""):
         if image["incident_id"]:images_by_incident.setdefault(image["incident_id"],[]).append(image)
     assignment_days=_days_since(assignment["delivered_at"]) if assignment else None
     assignment_mileage=vehicle["current_odometer"]-(assignment["delivery_odometer"] or vehicle["current_odometer"]) if assignment else 0
-    return templates.TemplateResponse(request=request,name="vehicle_detail.html",context={"vehicle":vehicle,"assignment":assignment,"assignment_days":assignment_days,"assignment_mileage":assignment_mileage,"assignment_images":images_by_assignment,"incident_images":images_by_incident,"incidents":incidents,"active_oil_change":oil,"oil":calculate_oil_status(vehicle["current_odometer"],oil),"oil_history":oils,"logs":logs,"assignments":assignments,"employees":employees,"days":days,"stale":days is None or days>7,"today":date.today().isoformat(),"message":message,"error":error,"can_delete_vehicle":is_admin(user),"home_url":"/assets-custody" if not is_admin(user) else "/"})
+    return templates.TemplateResponse(request=request,name="vehicle_detail.html",context={**extra,"vehicle":vehicle,"assignment":assignment,"assignment_days":assignment_days,"assignment_mileage":assignment_mileage,"assignment_images":images_by_assignment,"incident_images":images_by_incident,"incidents":incidents,"active_oil_change":oil,"oil":calculate_oil_status(vehicle["current_odometer"],oil),"oil_history":oils,"logs":logs,"assignments":assignments,"employees":employees,"days":days,"stale":days is None or days>7,"today":date.today().isoformat(),"message":message,"error":error,"can_delete_vehicle":is_admin(user),"home_url":"/assets-custody" if not is_admin(user) else "/"})
 
 
 @router.post("/vehicle/{vehicle_id}/delete")
@@ -193,60 +207,66 @@ def delete_vehicle(request:Request,vehicle_id:int):
 
 
 @router.post("/vehicle/{vehicle_id}/odometer")
-def update_odometer(request:Request,vehicle_id:int,reading:int=Form(...)):
-    user,denied=_guard(request)
+def update_odometer(request:Request,vehicle_id:int,reading:int=Form(...),notes:str=Form("")):
+    user,denied=vehicle_guard(request,vehicle_id)
     if denied:return denied
     conn=get_db();v=conn.execute("SELECT * FROM vehicles WHERE id=?",(vehicle_id,)).fetchone()
     if not v:conn.close();return HTMLResponse("السيارة غير موجودة",status_code=404)
     if reading<v["current_odometer"]:conn.close();return RedirectResponse(f"/vehicle/{vehicle_id}?error=لا+يمكن+إدخال+قراءة+أقل+من+آخر+قراءة",status_code=303)
-    conn.execute("UPDATE vehicles SET current_odometer=? WHERE id=?",(reading,vehicle_id));conn.execute("INSERT INTO vehicle_odometer_logs(vehicle_id,reading,recorded_at,recorded_by) VALUES(?,?,?,?)",(vehicle_id,reading,datetime.now().isoformat(timespec="seconds"),user["id"]));conn.commit();conn.close();msg="تم تسجيل القراءة (السيارة لم تتحرك)" if reading==v["current_odometer"] else "تم تحديث قراءة العداد";return RedirectResponse(f"/vehicle/{vehicle_id}?message={msg}",status_code=303)
+    conn.execute("UPDATE vehicles SET current_odometer=? WHERE id=?",(reading,vehicle_id));conn.execute("INSERT INTO vehicle_odometer_logs(vehicle_id,reading,recorded_at,recorded_by) VALUES(?,?,?,?)",(vehicle_id,reading,datetime.now().isoformat(timespec="seconds"),user["id"]));conn.execute("UPDATE vehicle_odometer_logs SET notes=? WHERE id=last_insert_rowid()",(notes.strip(),));conn.commit();conn.close();msg="تم تسجيل القراءة (السيارة لم تتحرك)" if reading==v["current_odometer"] else "تم تحديث قراءة العداد";return RedirectResponse(f"/vehicle/{vehicle_id}?message={msg}",status_code=303)
 
 
 @router.post("/vehicle/{vehicle_id}/oil-change")
 def oil_change(request:Request,vehicle_id:int,odometer:int=Form(...),oil_interval:int=Form(...),change_date:str=Form(...),odometer_image:UploadFile=File(...)):
-    user,denied=_guard(request)
+    user,denied=vehicle_guard(request,vehicle_id)
     if denied:return denied
     if oil_interval not in (5000,10000):return HTMLResponse("دورة الزيت غير صحيحة",status_code=400)
     if not odometer_image.filename or not (odometer_image.content_type or "").startswith("image/"):return RedirectResponse(f"/vehicle/{vehicle_id}?error=صورة+العداد+مطلوبة",status_code=303)
     conn=get_db();v=conn.execute("SELECT * FROM vehicles WHERE id=?",(vehicle_id,)).fetchone()
     if not v:conn.close();return HTMLResponse("السيارة غير موجودة",status_code=404)
     if odometer<v["current_odometer"]:conn.close();return RedirectResponse(f"/vehicle/{vehicle_id}?error=قراءة+تغيير+الزيت+أقل+من+العداد+الحالي",status_code=303)
+    try:
+        if date.fromisoformat(change_date)>date.today():raise ValueError()
+    except ValueError:
+        conn.close();return HTMLResponse("تاريخ تغيير الزيت غير صحيح",status_code=400)
+    if not is_admin(user):
+        oil_interval=v["oil_interval"]
     from main import save_upload_file
     path=save_upload_file(odometer_image,"vehicle_oil");now=datetime.now().isoformat(timespec="seconds")
     if not path:conn.close();return RedirectResponse(f"/vehicle/{vehicle_id}?error=تعذر+حفظ+الصورة",status_code=303)
-    conn.execute("INSERT INTO vehicle_oil_changes(vehicle_id,change_date,odometer,oil_interval,odometer_image,recorded_at,recorded_by) VALUES(?,?,?,?,?,?,?)",(vehicle_id,change_date,odometer,oil_interval,path,now,user["id"]))
-    if odometer>v["current_odometer"]:conn.execute("UPDATE vehicles SET current_odometer=? WHERE id=?",(odometer,vehicle_id));conn.execute("INSERT INTO vehicle_odometer_logs(vehicle_id,reading,recorded_at,recorded_by) VALUES(?,?,?,?)",(vehicle_id,odometer,now,user["id"]))
+    oil_id=conn.execute("INSERT INTO vehicle_oil_changes(vehicle_id,change_date,odometer,oil_interval,odometer_image,recorded_at,recorded_by) VALUES(?,?,?,?,?,?,?)",(vehicle_id,change_date,odometer,oil_interval,path,now,user["id"])).lastrowid
+    if odometer>v["current_odometer"]:conn.execute("UPDATE vehicles SET current_odometer=? WHERE id=?",(odometer,vehicle_id));conn.execute("INSERT INTO vehicle_odometer_logs(vehicle_id,reading,recorded_at,recorded_by) VALUES(?,?,?,?)",(vehicle_id,odometer,now,user["id"]));conn.execute("UPDATE vehicle_odometer_logs SET source_kind='oil',source_id=? WHERE id=last_insert_rowid()",(oil_id,))
     conn.commit();conn.close();return RedirectResponse(f"/vehicle/{vehicle_id}?message=بدأت+دورة+زيت+جديدة",status_code=303)
 
 
 @router.post("/vehicle/{vehicle_id}/assign")
 def assign(request:Request,vehicle_id:int,employee_id:int=Form(...),delivered_at:str=Form(...),delivery_odometer:int=Form(...),accessories:str=Form(""),delivery_notes:str=Form(""),delivery_images:list[UploadFile]=File([])):
-    user,denied=_guard(request)
+    user,denied=_admin_vehicle_guard(request,"تغيير الموظف المستلم وإدارة تسليم السيارة متاح للأدمن فقط")
     if denied:return denied
     conn=get_db()
     if conn.execute("SELECT 1 FROM vehicle_assignments WHERE vehicle_id=? AND status='assigned'",(vehicle_id,)).fetchone():conn.close();return RedirectResponse(f"/vehicle/{vehicle_id}?error=يجب+استرجاع+العهدة+الحالية+أولاً",status_code=303)
     vehicle=conn.execute("SELECT current_odometer FROM vehicles WHERE id=?",(vehicle_id,)).fetchone()
     if not vehicle or delivery_odometer<vehicle["current_odometer"]:conn.close();return RedirectResponse(f"/vehicle/{vehicle_id}?error=عداد+التسليم+أقل+من+العداد+الحالي",status_code=303)
     assignment_id=conn.execute("INSERT INTO vehicle_assignments(vehicle_id,employee_id,delivered_at,status,accessories,created_by,delivery_odometer,delivery_notes) VALUES(?,?,?,'assigned',?,?,?,?)",(vehicle_id,employee_id,delivered_at,accessories,user["id"],delivery_odometer,delivery_notes)).lastrowid
-    if delivery_odometer>vehicle["current_odometer"]:conn.execute("UPDATE vehicles SET current_odometer=? WHERE id=?",(delivery_odometer,vehicle_id));conn.execute("INSERT INTO vehicle_odometer_logs(vehicle_id,reading,recorded_at,recorded_by) VALUES(?,?,?,?)",(vehicle_id,delivery_odometer,datetime.now().isoformat(timespec="seconds"),user["id"]))
+    if delivery_odometer>vehicle["current_odometer"]:conn.execute("UPDATE vehicles SET current_odometer=? WHERE id=?",(delivery_odometer,vehicle_id));conn.execute("INSERT INTO vehicle_odometer_logs(vehicle_id,reading,recorded_at,recorded_by) VALUES(?,?,?,?)",(vehicle_id,delivery_odometer,datetime.now().isoformat(timespec="seconds"),user["id"]));conn.execute("UPDATE vehicle_odometer_logs SET source_kind='delivery',source_id=? WHERE id=last_insert_rowid()",(assignment_id,))
     conn.executemany("INSERT INTO vehicle_assignment_images(assignment_id,incident_id,image_type,image_path,uploaded_at,uploaded_by) VALUES(?,?,?,?,?,?)",_save_images(delivery_images,assignment_id,"delivery",user["id"]));conn.execute("UPDATE vehicles SET custody_status='assigned' WHERE id=?",(vehicle_id,));conn.commit();conn.close();return RedirectResponse(f"/vehicle/{vehicle_id}?message=تم+تسليم+السيارة",status_code=303)
 
 
 @router.post("/vehicle/{vehicle_id}/return")
 def return_vehicle(request:Request,vehicle_id:int,returned_at:str=Form(...),return_odometer:int=Form(...),return_notes:str=Form(""),return_images:list[UploadFile]=File([])):
-    user,denied=_guard(request)
+    user,denied=_admin_vehicle_guard(request,"تغيير الموظف المستلم وإدارة تسليم السيارة متاح للأدمن فقط")
     if denied:return denied
     conn=get_db();vehicle=conn.execute("SELECT current_odometer FROM vehicles WHERE id=?",(vehicle_id,)).fetchone();assignment=conn.execute("SELECT * FROM vehicle_assignments WHERE vehicle_id=? AND status='assigned'",(vehicle_id,)).fetchone()
     if not vehicle or not assignment:conn.close();return RedirectResponse(f"/vehicle/{vehicle_id}?error=لا+توجد+عهدة+نشطة",status_code=303)
     if return_odometer<vehicle["current_odometer"] or return_odometer<(assignment["delivery_odometer"] or 0):conn.close();return RedirectResponse(f"/vehicle/{vehicle_id}?error=عداد+الاسترجاع+أقل+من+آخر+قراءة",status_code=303)
     conn.execute("UPDATE vehicle_assignments SET status='returned',returned_at=?,return_odometer=?,return_notes=? WHERE id=?",(returned_at,return_odometer,return_notes,assignment["id"]));conn.executemany("INSERT INTO vehicle_assignment_images(assignment_id,incident_id,image_type,image_path,uploaded_at,uploaded_by) VALUES(?,?,?,?,?,?)",_save_images(return_images,assignment["id"],"return",user["id"]));
-    if return_odometer>vehicle["current_odometer"]:conn.execute("UPDATE vehicles SET current_odometer=? WHERE id=?",(return_odometer,vehicle_id));conn.execute("INSERT INTO vehicle_odometer_logs(vehicle_id,reading,recorded_at,recorded_by) VALUES(?,?,?,?)",(vehicle_id,return_odometer,datetime.now().isoformat(timespec="seconds"),user["id"]))
+    if return_odometer>vehicle["current_odometer"]:conn.execute("UPDATE vehicles SET current_odometer=? WHERE id=?",(return_odometer,vehicle_id));conn.execute("INSERT INTO vehicle_odometer_logs(vehicle_id,reading,recorded_at,recorded_by) VALUES(?,?,?,?)",(vehicle_id,return_odometer,datetime.now().isoformat(timespec="seconds"),user["id"]));conn.execute("UPDATE vehicle_odometer_logs SET source_kind='return',source_id=? WHERE id=last_insert_rowid()",(assignment["id"],))
     conn.execute("UPDATE vehicles SET custody_status='returned' WHERE id=?",(vehicle_id,));conn.commit();conn.close();return RedirectResponse(f"/vehicle/{vehicle_id}?message=تم+استرجاع+السيارة+وحفظ+تقرير+الحالة",status_code=303)
 
 
 @router.post("/vehicle/{vehicle_id}/incidents")
 def add_incident(request:Request,vehicle_id:int,incident_date:str=Form(...),odometer:int=Form(...),notes:str=Form(...),incident_images:list[UploadFile]=File([])):
-    user,denied=_guard(request)
+    user,denied=vehicle_guard(request,vehicle_id)
     if denied:return denied
     conn=get_db();vehicle=conn.execute("SELECT current_odometer FROM vehicles WHERE id=?",(vehicle_id,)).fetchone();assignment=conn.execute("SELECT id FROM vehicle_assignments WHERE vehicle_id=? AND status='assigned' ORDER BY id DESC LIMIT 1",(vehicle_id,)).fetchone()
     if not vehicle:conn.close();return HTMLResponse("السيارة غير موجودة",status_code=404)
@@ -257,7 +277,8 @@ def add_incident(request:Request,vehicle_id:int,incident_date:str=Form(...),odom
 
 def _p(text,style):
     from main import format_arabic_pdf_text
-    return Paragraph(format_arabic_pdf_text(str(text or "-")),style)
+    from html import escape
+    return Paragraph(escape(format_arabic_pdf_text(str(text or "-"))),style)
 
 
 def _make_pdf(title,employee,details,delivered_at,accessories=""):
@@ -267,7 +288,7 @@ def _make_pdf(title,employee,details,delivered_at,accessories=""):
 
 @router.get("/vehicle/{vehicle_id}/custody.pdf")
 def vehicle_pdf(request:Request,vehicle_id:int,assignment_id:int|None=None):
-    _,denied=_guard(request)
+    _,denied=_vehicle_view_guard(request,vehicle_id)
     if denied:return denied
     conn=get_db();v=conn.execute("SELECT * FROM vehicles WHERE id=?",(vehicle_id,)).fetchone();a=conn.execute("SELECT a.*,e.name,e.role,e.company FROM vehicle_assignments a JOIN employees e ON e.id=a.employee_id WHERE a.vehicle_id=? AND (? IS NULL OR a.id=?) ORDER BY a.id DESC LIMIT 1",(vehicle_id,assignment_id,assignment_id)).fetchone();conn.close()
     if not v or not a:return HTMLResponse("لا توجد عهدة سيارة لإصدارها",status_code=404)
@@ -292,11 +313,11 @@ def _pdf_images(story, title, images, style, heading):
 
 @router.get("/vehicle/{vehicle_id}/assignment/{assignment_id}/final-report.pdf")
 def assignment_final_report_pdf(request:Request,vehicle_id:int,assignment_id:int):
-    _,denied=_guard(request)
+    _,denied=_vehicle_view_guard(request,vehicle_id)
     if denied:return denied
     conn=get_db();vehicle=conn.execute("SELECT * FROM vehicles WHERE id=?",(vehicle_id,)).fetchone();assignment=conn.execute("SELECT a.*,e.name,e.role,e.company FROM vehicle_assignments a JOIN employees e ON e.id=a.employee_id WHERE a.id=? AND a.vehicle_id=?",(assignment_id,vehicle_id)).fetchone()
     if not vehicle or not assignment or assignment["status"]!="returned":conn.close();return HTMLResponse("تقرير نهاية العهدة متاح بعد الاسترجاع",status_code=400)
-    images=conn.execute("SELECT * FROM vehicle_assignment_images WHERE assignment_id=? ORDER BY id",(assignment_id,)).fetchall();incidents=conn.execute("SELECT * FROM vehicle_incidents WHERE assignment_id=? ORDER BY incident_date,id",(assignment_id,)).fetchall();incident_images=conn.execute("SELECT ai.* FROM vehicle_assignment_images ai JOIN vehicle_incidents i ON i.id=ai.incident_id WHERE i.assignment_id=? ORDER BY ai.id",(assignment_id,)).fetchall();oils=conn.execute("SELECT change_date,odometer,oil_interval FROM vehicle_oil_changes WHERE vehicle_id=? AND change_date>=? AND change_date<=? ORDER BY change_date,id",(vehicle_id,assignment["delivered_at"][:10],assignment["returned_at"][:10])).fetchall();conn.close()
+    images=conn.execute("SELECT * FROM vehicle_assignment_images WHERE assignment_id=? ORDER BY id",(assignment_id,)).fetchall();incidents=conn.execute("SELECT * FROM vehicle_incidents WHERE assignment_id=? ORDER BY incident_date,id",(assignment_id,)).fetchall();incident_images=conn.execute("SELECT ai.* FROM vehicle_assignment_images ai JOIN vehicle_incidents i ON i.id=ai.incident_id WHERE i.assignment_id=? ORDER BY ai.id",(assignment_id,)).fetchall();oils=conn.execute("SELECT change_date,odometer,oil_interval FROM vehicle_oil_changes WHERE vehicle_id=? AND change_date>=? AND change_date<=? ORDER BY change_date,id",(vehicle_id,assignment["delivered_at"][:10],assignment["returned_at"][:10])).fetchall();maintenance=conn.execute("SELECT * FROM vehicle_maintenance WHERE vehicle_id=? AND service_date>=? AND service_date<=? ORDER BY service_date,id",(vehicle_id,assignment["delivered_at"][:10],assignment["returned_at"][:10])).fetchall();conn.close()
     from main import get_pdf_report_font_name
     font=get_pdf_report_font_name();style=ParagraphStyle("final_ar",fontName=font,fontSize=10.5,leading=17,alignment=2);heading=ParagraphStyle("final_h",parent=style,fontSize=15,leading=22,textColor=colors.HexColor("#8a6a20"));path=os.path.join(tempfile.gettempdir(),f"assignment_final_{assignment_id}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.pdf");doc=SimpleDocTemplate(path,pagesize=A4,rightMargin=16*mm,leftMargin=16*mm,topMargin=16*mm,bottomMargin=16*mm)
     mileage=(assignment["return_odometer"] or 0)-(assignment["delivery_odometer"] or 0);story=[_p("Urban Rise Works – أعمال أوربان رايز للمقاولات",heading),Spacer(1,4*mm),_p("تقرير نهاية عهدة سيارة",heading),Spacer(1,5*mm)]
@@ -311,6 +332,9 @@ def assignment_final_report_pdf(request:Request,vehicle_id:int,assignment_id:int
     if oils:
         oil_table=Table([[_p(f"{x['oil_interval']:,} كم",style),_p(f"{x['odometer']:,} كم",style),_p(x["change_date"],style)] for x in oils],colWidths=[50*mm,50*mm,50*mm]);oil_table.setStyle(TableStyle([("GRID",(0,0),(-1,-1),.5,colors.grey)]));story.append(oil_table)
     else:story.append(_p("لا توجد تغييرات زيت مسجلة خلال هذه العهدة.",style))
+    story.extend([Spacer(1,5*mm),_p("سجلات الصيانة خلال العهدة",heading)])
+    for service in maintenance:
+        story.extend([_p(f"{service['service_date']} — {service['service_type']} — {service['odometer']:,} كم",style),_p(service["notes"],style)])
     story.extend([Spacer(1,12*mm),_p("توقيع الموظف: ____________________      توقيع مسؤول الاستلام: ____________________",style),Spacer(1,7*mm),_p("التاريخ: ____________________                 الختم: ____________________",style)]);doc.build(story);return FileResponse(path,media_type="application/pdf",filename=f"vehicle-assignment-final-{assignment_id}.pdf")
 
 
@@ -347,4 +371,4 @@ def asset_pdf(request:Request,employee_id:int,asset_id:int):
 
 
 def register_assets_custody(app):
-    init_assets_custody_schema();app.include_router(router)
+    init_assets_custody_schema();app.include_router(router);app.include_router(corrections_router)
