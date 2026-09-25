@@ -8,6 +8,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from auth import get_current_user, get_user_by_id, is_admin, is_employee, is_owner, is_partner, is_project_manager, is_tenant, password_matches, require_login, require_role
 from admin_users import router as admin_users_router
 from assets_custody import register_assets_custody
+from vehicle_corrections import has_vehicle_custody
 from access_control import ensure_company_access, ensure_employee_any_section_access, ensure_employee_section_access, ensure_property_access, ensure_request_belongs_to_tenant, ensure_tenant_access, get_accessible_property_ids, get_employee_allowed_sections, get_primary_tenant_id, get_user_company_access_rows, get_user_tenant_access_ids, normalize_access_value, user_has_company_access, user_has_property_access, user_has_tenant_access
 from fastapi.staticfiles import StaticFiles
 from db import get_db
@@ -4614,6 +4615,8 @@ def get_role_landing_url(user) -> str:
             if fallback_company == "realestate":
                 return get_realestate_landing_url(user)
             return f"/company/{fallback_company}"
+        if has_vehicle_custody(user):
+            return "/assets-custody"
 
     if is_active_projects_project_manager(user):
         project_ids = get_assigned_investment_project_ids(user["id"])
@@ -4792,6 +4795,10 @@ async def authentication_middleware(request: Request, call_next):
             request.state.current_user
             and is_works_daily_log_only_employee(request.state.current_user, "works")
             and not is_works_daily_log_allowed_path(path)
+            and not (
+                (path == "/assets-custody" or path.startswith("/vehicle/"))
+                and has_vehicle_custody(request.state.current_user)
+            )
         ):
             return access_denied_response(
                 "صلاحية موظف السجل اليومي تقتصر على السجل اليومي واستلام مواد العميل",
@@ -4867,6 +4874,7 @@ def render_internal_portal(user) -> HTMLResponse:
     admin_users_button = ""
     daily_report_button = ""
     featured_projects_button = ""
+    vehicle_button = '<a href="/assets-custody" class="portal-admin-btn">سياراتي المسلّمة</a>' if has_vehicle_custody(user) else ""
     if is_admin(user):
         featured_projects_button = '<a href="/admin/featured-projects" class="portal-admin-btn">المشاريع المختارة للموقع</a>'
         admin_users_button = '<a href="/admin/users" class="portal-admin-btn">تسجيل مستخدم جديد</a>'
@@ -5093,7 +5101,7 @@ def render_internal_portal(user) -> HTMLResponse:
     <section class="portal-hero">
         <h1 class="portal-title">Urban Rise AI</h1>
         <p class="portal-kicker">بوابة إدارة مجموعة أوربان رايز</p>
-        <div class="portal-admin-actions">{daily_report_button}{admin_users_button}{featured_projects_button}</div>
+        <div class="portal-admin-actions">{daily_report_button}{admin_users_button}{featured_projects_button}{vehicle_button}</div>
     </section>
 
     <section class="portal-company-grid" aria-label="بوابات الشركات">
