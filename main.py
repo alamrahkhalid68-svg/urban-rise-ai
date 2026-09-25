@@ -4832,14 +4832,14 @@ async def public_domain_middleware(request: Request, call_next):
         return RedirectResponse(target, status_code=301)
 
     response = await call_next(request)
-    if request.url.path not in {"/", "/works", "/robots.txt", "/sitemap.xml"} and not (request.url.path.startswith("/works/projects/") and response.status_code == 200):
+    if request.url.path not in {"/", "/works", "/works/build", "/works/care", "/robots.txt", "/sitemap.xml"} and not (request.url.path.startswith("/works/projects/") and response.status_code == 200):
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
     return response
 
 
 @app.get("/robots.txt", response_class=PlainTextResponse)
 def robots_txt():
-    return "User-agent: *\nDisallow: /\nAllow: /$\nAllow: /works$\nAllow: /works/projects/\nSitemap: https://urbanrise.sa/sitemap.xml\n"
+    return "User-agent: *\nDisallow: /\nAllow: /$\nAllow: /works$\nAllow: /works/build$\nAllow: /works/care$\nAllow: /works/projects/\nSitemap: https://urbanrise.sa/sitemap.xml\n"
 
 
 @app.get("/sitemap.xml")
@@ -4850,7 +4850,9 @@ def sitemap_xml():
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
         '<url><loc>https://urbanrise.sa/</loc></url>'
-        '<url><loc>https://urbanrise.sa/works</loc></url>' + project_urls + '</urlset>',
+        '<url><loc>https://urbanrise.sa/works</loc></url>'
+        '<url><loc>https://urbanrise.sa/works/build</loc></url>'
+        '<url><loc>https://urbanrise.sa/works/care</loc></url>' + project_urls + '</urlset>',
         media_type="application/xml",
     )
 
@@ -5145,7 +5147,17 @@ def home(request: Request):
 
 @app.get("/works", response_class=HTMLResponse)
 def works_home(request: Request):
+    return templates.TemplateResponse(request, "works_gateway.html")
+
+
+@app.get("/works/build", response_class=HTMLResponse)
+def works_build(request: Request):
     return templates.TemplateResponse(request, "works_home.html", {"featured_projects": published_projects()})
+
+
+@app.get("/works/care", response_class=HTMLResponse)
+def works_care(request: Request):
+    return templates.TemplateResponse(request, "works_care.html")
 
 
 @app.get("/portal", response_class=HTMLResponse)
