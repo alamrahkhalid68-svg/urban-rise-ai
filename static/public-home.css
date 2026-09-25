@@ -1,4 +1,4 @@
-﻿:root {
+:root {
     --page-bg: #10151b;
     --surface: rgba(255, 255, 255, 0.05);
     --surface-soft: rgba(255, 255, 255, 0.05);
@@ -421,6 +421,12 @@ body.public-home-body::before {
 .works-card-link:focus-visible {
     background: var(--gold-deep);
     color: #10151b;
+}
+
+.company-panel-works .works-card-subtitle {
+    margin: 12px 0 0;
+    color: #e9d5aa;
+    font-size: 1.05rem;
 }
 
 .company-content h4 {
