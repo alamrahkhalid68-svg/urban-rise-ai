@@ -109,3 +109,9 @@ body{background:var(--paper)}
 .works-editorial h2{margin:0 0 22px;font-size:clamp(1.9rem,3.3vw,3.4rem);letter-spacing:-.025em}
 .works-editorial p:not(.eyebrow){margin:0 0 18px;color:#4c514a;line-height:2}
 .works-editorial p:last-child{margin-bottom:0}
+.tamara-section{padding:30px 0;background:#f3eee4;border-bottom:1px solid var(--line)}
+.tamara-inner{display:flex;align-items:center;gap:28px;padding:25px 30px;border:1px solid #ded5c4;border-radius:16px;background:#faf8f2}
+.tamara-inner img{display:block;width:110px;height:auto;flex:none}
+.tamara-copy{flex:1}.tamara-copy h2{margin:0 0 7px;font-size:clamp(1.25rem,2vw,1.8rem)}
+.tamara-copy p{margin:0;color:#555a53;line-height:1.8}.tamara-inner .button{flex:none;white-space:nowrap}
+@media(max-width:700px){.tamara-section{padding:20px 0}.tamara-inner{flex-wrap:wrap;gap:16px;padding:22px}.tamara-inner img{width:90px}.tamara-copy{flex-basis:100%;order:1}.tamara-inner .button{order:2;width:auto}}
