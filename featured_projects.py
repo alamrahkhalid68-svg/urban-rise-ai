@@ -11,18 +11,19 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from starlette.datastructures import UploadFile
 
 from auth import get_current_user, is_admin
-from db import get_db
+from db import DB_PATH, get_db
 
 SERVICES = ("ترميم المنازل", "التشطيب والتعديلات الداخلية", "البناء والملاحق", "الصيانة والنظافة", "خدمات اتحاد الملاك")
-UPLOAD_DIR = Path(__file__).resolve().parent / "static" / "uploads" / "featured-projects"
-PUBLIC_DIR = "/static/uploads/featured-projects/"
+UPLOAD_DIR = Path(DB_PATH).resolve().parent / "featured-projects"
+PUBLIC_DIR = "/works/media/featured-projects/"
 MAX_BYTES = 8 * 1024 * 1024
-IMAGE_RE = re.compile(r"^/static/uploads/featured-projects/[0-9a-f]{32}(?:_thumb)?\.webp$")
+IMAGE_RE = re.compile(r"^/works/media/featured-projects/[0-9a-f]{32}(?:_thumb)?\.webp$")
+FILE_RE = re.compile(r"^[0-9a-f]{32}(?:_thumb)?\.webp$")
 
 
 @contextmanager
@@ -112,7 +113,9 @@ def make_slug(db, name):
 
 def safe_unlink(url):
     if IMAGE_RE.fullmatch(url or ""):
-        (UPLOAD_DIR / url.rsplit("/", 1)[-1]).unlink(missing_ok=True)
+        path = UPLOAD_DIR / url.rsplit("/", 1)[-1]
+        if path.resolve().is_relative_to(UPLOAD_DIR.resolve()):
+            path.unlink(missing_ok=True)
 
 
 async def save_image(upload: UploadFile):
@@ -154,6 +157,15 @@ async def save_image(upload: UploadFile):
 
 def register_featured_projects(app, templates):
     init_schema()
+
+    @app.get("/works/media/featured-projects/{filename}")
+    def media(filename: str):
+        if not FILE_RE.fullmatch(filename):
+            raise HTTPException(404)
+        path = UPLOAD_DIR / filename
+        if not path.is_file() or not path.resolve().is_relative_to(UPLOAD_DIR.resolve()):
+            raise HTTPException(404)
+        return FileResponse(path, media_type="image/webp")
 
     @app.get("/admin/featured-projects")
     def index(request: Request, edit: int = 0):
