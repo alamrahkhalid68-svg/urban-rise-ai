@@ -78,6 +78,16 @@ body{background:var(--paper)}
 .js-motion .reveal.is-visible{opacity:1;transform:translateY(0)}
 @media(max-width:600px){.hero:before{background:linear-gradient(270deg,rgba(31,33,30,.78),rgba(38,39,34,.57)),linear-gradient(0deg,rgba(34,35,31,.39),transparent 55%)}.thread-section:before{opacity:.3;animation:none}.hero:after{opacity:.22;animation:none}.service-card{min-height:0;padding:20px 23px}.service-no{margin-bottom:12px}.projects-stage{min-height:210px}.contact-section{padding-bottom:115px}.floating-whatsapp,.floating-sound{bottom:14px;width:48px;height:48px}.floating-whatsapp{right:14px}.floating-sound{left:14px}}
 @media(prefers-reduced-motion:reduce){.hero:after,.thread-section:before,.js-motion .process-list li.is-visible span{animation:none}.js-motion .reveal{opacity:1;transform:none;transition:none}.projects-stage,.projects-stage:after,.floating-whatsapp,.floating-sound{transition:none}}
+.site-footer{padding:30px 0 calc(105px + env(safe-area-inset-bottom))}
+.site-footer .footer-inner{display:block;text-align:center}
+.site-footer .footer-identity strong{display:block;color:#f7f0e1;font-size:1.3rem;line-height:1.4}
+.site-footer .footer-identity span{display:block;margin-top:4px;color:#e5c998;font-size:.96rem;font-weight:700}
+.site-footer .footer-identity p{margin:5px 0 0;color:#c8c2b7;font-size:.87rem}
+.site-footer .footer-identity a{color:inherit;text-decoration:underline;text-decoration-color:#a68a5c;text-underline-offset:3px}
+.site-footer .footer-meta{margin-top:22px;padding-top:15px;border-top:1px solid rgba(197,166,117,.3)}
+.site-footer .footer-meta p{margin:0;color:#aaa69d;font-size:.77rem;line-height:1.7}
+@media(prefers-reduced-motion:no-preference){@supports(animation-timeline:view()){.site-footer .footer-inner{animation:footer-rise linear both;animation-timeline:view();animation-range:entry 0% entry 100%}}}
+@keyframes footer-rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
 
 /* Keep the supplied logo image intact; the text stays in its own column. */
 .site-header{position:relative;color:#2b2d29;background:#f6f0e5;border-bottom:1px solid #ded2be}
