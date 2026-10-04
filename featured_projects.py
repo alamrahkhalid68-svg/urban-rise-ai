@@ -320,5 +320,5 @@ def register_featured_projects(app, templates):
                 raise HTTPException(404)
             images = [dict(i) for i in db.execute("SELECT * FROM featured_project_images WHERE project_id=? ORDER BY sort_order,id", (row["id"],))]
         project = dict(row)
-        message = quote(f"السلام عليكم، شاهدت مشروع {project['name']} في Urban Rise Works وأرغب في طلب معاينة وعرض سعر.")
-        return templates.TemplateResponse(request, "works_project_detail.html", {"project": project, "images": images, "whatsapp": f"https://wa.me/966545687944?text={message}"})
+        message = quote("السلام عليكم، أرغب في طلب معاينة وعرض سعر لخدمات التشطيب والترميم من أوربان رايز ووركس.")
+        return templates.TemplateResponse(request, "works_project_detail.html", {"project": project, "images": images, "whatsapp": f"https://wa.me/966568207659?text={message}"})

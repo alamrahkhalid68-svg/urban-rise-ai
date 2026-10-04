@@ -14840,10 +14840,11 @@ def build_realestate_owner_property_dashboard(
                     "status": contract_status,
                 })
 
+    linked_maintenance_ids = {item["maintenance_request_id"] for item in manual_expenses if item["maintenance_request_id"]}
     maintenance_total = 0.0
     completed_maintenance_for_owner = []
     for item in maintenance_items:
-        amount = safe_amount(item["actual_cost"]) if safe_amount(item["actual_cost"]) > 0 else safe_amount(item["estimated_cost"])
+        amount = 0.0 if item["id"] in linked_maintenance_ids else safe_amount(item["actual_cost"])
         maintenance_total += amount
         item_keys = item.keys()
         status_value = (item["status"] if "status" in item_keys else "") or ""
@@ -15626,7 +15627,9 @@ def property_management_dashboard(request: Request, property_id: int):
     latest_supervisor = supervisors[0] if supervisors else None
     expected_revenue = 0.0
     collected_revenue = 0.0
-    total_expenses = sum(((item["actual_cost"] or item["estimated_cost"]) or 0) for item in maintenance)
+    linked_maintenance_ids = {item["maintenance_request_id"] for item in manual_expenses if item["maintenance_request_id"]}
+    total_expenses = sum(safe_amount(item["actual_cost"]) for item in maintenance if item["id"] not in linked_maintenance_ids)
+    total_expenses += sum(safe_amount(item["amount"]) for item in manual_expenses)
     today = date.today()
     expiring_contracts = []
     due_soon_installments = []
@@ -15988,8 +15991,9 @@ def property_revenue_dashboard(request: Request, property_id: int):
                 "amount": amount,
             })
 
+    linked_maintenance_ids = {item["maintenance_request_id"] for item in manual_expenses if item["maintenance_request_id"]}
     for item in maintenance_items:
-        expense_amount = safe_amount(item["actual_cost"]) if safe_amount(item["actual_cost"]) > 0 else safe_amount(item["estimated_cost"])
+        expense_amount = 0.0 if item["id"] in linked_maintenance_ids else safe_amount(item["actual_cost"])
         total_expenses += expense_amount
         unit_label = item["unit_name"] or "بدون وحدة محددة"
         expense_totals_by_unit[unit_label] = expense_totals_by_unit.get(unit_label, 0.0) + expense_amount
@@ -16424,6 +16428,7 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
     conn.close()
 
     category_labels = property_expense_category_labels()
+    category_labels["maintenance"] = "صيانة"
     feedback_html = render_page_feedback(message, error)
     empty_colspan = "9" if not is_owner_view_only else "8"
     installment_status_labels = {
@@ -16433,7 +16438,9 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
     }
     total_revenue = sum(safe_amount(contract["rent"]) for contract in contracts)
 
+    linked_maintenance_ids = {item["maintenance_request_id"] for item in manual_expenses if item["maintenance_request_id"]}
     maintenance_total = 0.0
+    estimated_maintenance_total = sum(safe_amount(item["estimated_cost"]) for item in maintenance_items)
     operational_total = 0.0
     category_totals = {}
     unit_totals = {}
@@ -16453,7 +16460,7 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
 
     maintenance_rows = ""
     for item in maintenance_items:
-        amount = safe_amount(item["actual_cost"]) if safe_amount(item["actual_cost"]) > 0 else safe_amount(item["estimated_cost"])
+        amount = 0.0 if item["id"] in linked_maintenance_ids else safe_amount(item["actual_cost"])
         maintenance_total += amount
         category_totals["maintenance"] = category_totals.get("maintenance", 0.0) + amount
         month_key = (parse_safe_date(item["created_at"]) or parse_safe_date(item["completed_date"]) or parse_safe_date(item["updated_at"]))
@@ -16480,8 +16487,15 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
     manual_rows = ""
     for item in manual_expenses:
         amount = safe_amount(item["amount"])
-        operational_total += amount
-        category_key = item["category"] or "other"
+        if item["maintenance_request_id"]:
+            maintenance_total += amount
+            category_key = "maintenance"
+            if item["unit_id"] in unit_breakdown:
+                unit_breakdown[item["unit_id"]]["maintenance_total"] += amount
+                unit_breakdown[item["unit_id"]]["overall_total"] += amount
+        else:
+            operational_total += amount
+            category_key = item["category"] or "other"
         category_totals[category_key] = category_totals.get(category_key, 0.0) + amount
         month_key = parse_safe_date(item["expense_date"]) or parse_safe_date(item["created_at"])
         if month_key:
@@ -16489,7 +16503,7 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
             monthly_totals[label] = monthly_totals.get(label, 0.0) + amount
         if item["unit_id"]:
             unit_totals[item["unit_id"]] = unit_totals.get(item["unit_id"], 0.0) + amount
-            if item["unit_id"] in unit_breakdown:
+            if item["unit_id"] in unit_breakdown and not item["maintenance_request_id"]:
                 unit_breakdown[item["unit_id"]]["operational_total"] += amount
                 unit_breakdown[item["unit_id"]]["overall_total"] += amount
 
@@ -16503,7 +16517,7 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
             """
         manual_rows += f"""
         <tr>
-            <td>{category_labels.get(category_key, category_key or '-')}</td>
+            <td>{'صيانة' if item['maintenance_request_id'] else category_labels.get(category_key, category_key or '-')}</td>
             <td>{item['unit_name'] or '-'}</td>
             <td>{amount:,.0f} ريال</td>
             <td>{item['expense_date'] or '-'}</td>
@@ -16705,6 +16719,12 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
     for key in ["salary", "electricity", "water", "cleaning", "security", "event_preparation", "marketing", "government_fees", "furniture", "hospitality", "emergency", "other"]:
         category_options += f'<option value="{key}">{category_labels[key]}</option>'
 
+    maintenance_options = '<option value="">غير مرتبط بطلب صيانة</option>'
+    for item in maintenance_items:
+        title = escape(str(item["title"] or item["maintenance_type"] or "طلب صيانة"))
+        unit_name = escape(str(item["unit_name"] or "بدون وحدة"))
+        maintenance_options += f'<option value="{item["id"]}">#{item["id"]} - {title} - {unit_name}</option>'
+
     add_expense_section = ""
     if not is_owner_view_only:
         add_expense_section = f"""
@@ -16725,6 +16745,9 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
 
             <label>الوحدة</label>
             <select name="unit_id">{unit_options}</select>
+
+            <label>مرتبط بطلب صيانة</label>
+            <select name="maintenance_request_id">{maintenance_options}</select>
 
             <label>المبلغ</label>
             <input type="number" step="0.01" name="amount" required>
@@ -16766,8 +16789,12 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
 
     <div class="finance-summary-grid">
         <div class="finance-card finance-card-expense">
-            <span>إجمالي مصروفات الصيانة</span>
+            <span>تكلفة الصيانة الفعلية</span>
             <strong>{maintenance_total:,.0f} ريال</strong>
+        </div>
+        <div class="finance-card">
+            <span>تكلفة الصيانة المقدرة</span>
+            <strong>{estimated_maintenance_total:,.0f} ريال</strong>
         </div>
         <div class="finance-card">
             <span>إجمالي المصروفات التشغيلية</span>
@@ -16902,7 +16929,7 @@ def property_expenses_dashboard(request: Request, property_id: int, message: str
     </div>
 
     <div class="inventory-panel inventory-table-panel">
-        <h3>تفاصيل المصروفات التشغيلية</h3>
+        <h3>تفاصيل المصروفات المسجلة</h3>
         <div class="inventory-warning-table-wrap">
             <table class="finance-table">
                 <tr>
@@ -17107,6 +17134,7 @@ def save_property_expense(
     expense_type: str = Form("operational"),
     category: str = Form("other"),
     unit_id: int = Form(0),
+    maintenance_request_id: int = Form(0),
     amount: float = Form(...),
     expense_date: str = Form(""),
     vendor_or_payee: str = Form(""),
@@ -17120,6 +17148,29 @@ def save_property_expense(
     if not isinstance(access_result, sqlite3.Row):
         return access_result
     conn = get_db()
+    if maintenance_request_id:
+        conn.execute("BEGIN IMMEDIATE")
+        maintenance_request = conn.execute(
+            "SELECT property_id, unit_id FROM maintenance_requests WHERE id = ?",
+            (maintenance_request_id,),
+        ).fetchone()
+        if not maintenance_request or maintenance_request["property_id"] != property_id:
+            conn.close()
+            return RedirectResponse(
+                url=build_redirect_url(f"/property-expenses/{property_id}", error="تعذر ربط المصروف بطلب صيانة تابع لعقار مختلف."),
+                status_code=303,
+            )
+        existing_expense = conn.execute(
+            "SELECT id FROM property_expenses WHERE maintenance_request_id = ? LIMIT 1",
+            (maintenance_request_id,),
+        ).fetchone()
+        if existing_expense:
+            conn.close()
+            return RedirectResponse(
+                url=build_redirect_url(f"/property-expenses/{property_id}", error="يوجد مصروف مسجل مسبقًا لهذا الطلب."),
+                status_code=303,
+            )
+        unit_id = maintenance_request["unit_id"] or 0
     conn.execute(
         """
         INSERT INTO property_expenses (
@@ -17131,7 +17182,7 @@ def save_property_expense(
         (
             property_id,
             unit_id if unit_id else None,
-            None,
+            maintenance_request_id or None,
             expense_type,
             category,
             amount,
@@ -18364,9 +18415,38 @@ def update_property_rental_contract(
         return access_result
     conn = get_db()
     current_contract = conn.execute(
-        "SELECT unit_id FROM property_rent_contracts WHERE id = ?",
+        "SELECT * FROM property_rent_contracts WHERE id = ?",
         (contract_id,),
     ).fetchone()
+    if current_contract and current_contract["property_id"] != property_id:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(f"/property-rental-contracts?property_id={current_contract['property_id']}", error="بيانات العقار لا تطابق العقد"),
+            status_code=303,
+        )
+    existing_installments = conn.execute(
+        "SELECT amount, due_date, status FROM contract_installments WHERE contract_id = ? ORDER BY due_date, id",
+        (contract_id,),
+    ).fetchall()
+    has_paid_installments = any(row["status"] == "paid" for row in existing_installments)
+    installment_rows = build_contract_installment_rows(
+        contract_id, annual_rent, contract_duration_years, payment_frequency, start_date
+    )
+    if has_paid_installments and (
+        round_money(current_contract["rent"]) != round_money(calculate_contract_rent_value(annual_rent, contract_duration_years, payment_frequency))
+        or (current_contract["start_date"] or "") != start_date
+        or (current_contract["end_date"] or "") != end_date
+        or [(round_money(row["amount"]), row["due_date"]) for row in existing_installments]
+        != [(round_money(row[1]), row[2]) for row in installment_rows]
+    ):
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/property-rental-contracts?property_id={property_id}",
+                error="لا يمكن تعديل بيانات العقد المالية أو جدول السداد لوجود دفعات مسجلة. يمكن تصحيح الدفعات أو تعديل الجدول المستقبلي بإجراء مستقل.",
+            ),
+            status_code=303,
+        )
     old_unit_id = current_contract["unit_id"] if current_contract else 0
     resolved_tenant_id = resolve_contract_tenant_id(
         conn,
@@ -18397,15 +18477,9 @@ def update_property_rental_contract(
         """,
         (unit_id, resolved_tenant_id, rent, start_date, end_date, status, contract_id)
     )
-    conn.execute("DELETE FROM contract_installments WHERE contract_id = ?", (contract_id,))
-    installment_rows = build_contract_installment_rows(
-        contract_id=contract_id,
-        annual_rent=annual_rent,
-        contract_duration_years=contract_duration_years,
-        payment_frequency=payment_frequency,
-        contract_start_date=start_date,
-    )
-    if installment_rows:
+    if not has_paid_installments:
+        conn.execute("DELETE FROM contract_installments WHERE contract_id = ?", (contract_id,))
+    if installment_rows and not has_paid_installments:
         conn.executemany(
             """
             INSERT INTO contract_installments (contract_id, amount, due_date, status, created_at)
@@ -18439,12 +18513,19 @@ def mark_contract_installment_paid(request: Request, installment_id: int, proper
         (installment_id,),
     ).fetchone()
 
-    current_property_id = property_id or (installment["property_id"] if installment else 0)
+    current_property_id = installment["property_id"] if installment else 0
     if not installment:
         conn.close()
         return RedirectResponse(
             url=build_redirect_url(f"/property-rental-contracts?property_id={current_property_id}", error="الدفعة غير موجودة"),
             status_code=303
+        )
+
+    if property_id and property_id != current_property_id:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(f"/property-rental-contracts?property_id={current_property_id}", error="تعذر تسجيل الدفعة لعدم تطابق بيانات العقار مع العقد."),
+            status_code=303,
         )
 
     access_result = ensure_realestate_write_access(
@@ -18781,21 +18862,41 @@ def save_property_maintenance(
 
 @app.get("/update-property-maintenance-status/{maintenance_id}")
 def update_property_maintenance_status(request: Request, maintenance_id: int, status: str, property_id: int = 0):
+    conn = get_db()
+    item = conn.execute(
+        "SELECT property_id FROM maintenance_requests WHERE id = ?", (maintenance_id,)
+    ).fetchone()
+    if not item:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(f"/property-maintenance?property_id={property_id}", error="طلب الصيانة غير موجود"),
+            status_code=303,
+        )
+    actual_property_id = item["property_id"]
     access_result = ensure_realestate_write_access(
         request,
-        property_id=property_id,
+        property_id=actual_property_id,
         area="maintenance",
-        back_url=f"/property-maintenance?property_id={property_id}",
+        back_url=f"/property-maintenance?property_id={actual_property_id}",
     )
     if not isinstance(access_result, sqlite3.Row):
+        conn.close()
         return access_result
-    conn = get_db()
+    if property_id and property_id != actual_property_id:
+        conn.close()
+        return RedirectResponse(
+            url=build_redirect_url(
+                f"/property-maintenance?property_id={actual_property_id}",
+                error="تعذر تحديث طلب الصيانة لعدم تطابق بيانات العقار.",
+            ),
+            status_code=303,
+        )
     conn.execute(
         """
         UPDATE maintenance_requests
         SET status = ?, updated_at = ?, updated_by_user_id = ?,
             completed_date = CASE WHEN ? = 'completed' THEN ? ELSE completed_date END
-        WHERE id = ?
+        WHERE id = ? AND property_id = ?
         """,
         (
             status,
@@ -18803,12 +18904,13 @@ def update_property_maintenance_status(request: Request, maintenance_id: int, st
             access_result["id"],
             status,
             datetime.now().strftime("%Y-%m-%d"),
-            maintenance_id
+            maintenance_id,
+            actual_property_id,
         )
     )
     conn.commit()
     conn.close()
-    return RedirectResponse(url=f"/property-maintenance?property_id={property_id}", status_code=303)
+    return RedirectResponse(url=f"/property-maintenance?property_id={actual_property_id}", status_code=303)
 
 
 @app.get("/edit-property-maintenance/{maintenance_id}", response_class=HTMLResponse)
