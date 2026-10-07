@@ -3142,6 +3142,14 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
 
 
 def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tuple[str, str]:
+    payment_conn = get_db()
+    try:
+        appendix_payments = payment_conn.execute(
+            "SELECT * FROM contract_appendix_payments WHERE appendix_id=? ORDER BY sort_order,id",
+            (appendix["id"],),
+        ).fetchall()
+    finally:
+        payment_conn.close()
     os.makedirs("pdfs", exist_ok=True)
     file_name = f"contract_appendix_{appendix['id']}.pdf"
     file_path = os.path.join("pdfs", file_name)
@@ -3292,6 +3300,46 @@ def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tu
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
     ]))
 
+    payment_story = []
+    if appendix_payments:
+        due_fields = ("due_reason", "due_condition", "condition")
+        show_due_condition = any(
+            any(str(payment[field] or "").strip() for field in due_fields if field in payment.keys())
+            for payment in appendix_payments
+        )
+        payment_widths = [35 * mm, 25 * mm, 50 * mm, 56 * mm] if show_due_condition else [40 * mm, 30 * mm, 96 * mm]
+        payment_headers = ["المبلغ", "النسبة"] + (["شرط الاستحقاق"] if show_due_condition else []) + ["اسم الدفعة"]
+        payment_rows = [[Paragraph(format_arabic_pdf_text(label), table_header_style) for label in payment_headers]]
+        payment_total = safe_float(appendix["total"])
+        scheduled_total = 0.0
+        for index, payment in enumerate(appendix_payments):
+            percentage = safe_float(payment["percentage"])
+            amount = round(payment_total - scheduled_total, 2) if index == len(appendix_payments) - 1 else round(payment_total * percentage / 100, 2)
+            scheduled_total += amount
+            payment_cells = [
+                Paragraph(format_arabic_pdf_text(f"{format_currency(amount)} ريال"), body_style),
+                Paragraph(format_arabic_pdf_text(f"{percentage:g}%"), body_style),
+            ]
+            if show_due_condition:
+                condition = next((str(payment[field]).strip() for field in due_fields if field in payment.keys() and payment[field]), "-")
+                payment_cells.append(appendix_paragraph(condition, description_style, payment_widths[-2] - 8 * mm))
+            payment_cells.append(appendix_paragraph(payment["title"] or "-", description_style, payment_widths[-1] - 8 * mm))
+            payment_rows.append(payment_cells)
+        payments_table = Table(payment_rows, colWidths=payment_widths, repeatRows=1, splitByRow=1, hAlign="RIGHT")
+        payments_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2A22")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#F2D892")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#F6F1E7"), colors.HexColor("#EEE4CF")]),
+            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8C294")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        payment_story = [build_section_heading("دفعات ملحق العقد"), Spacer(1, 4), payments_table, Spacer(1, 8)]
+
     notes_text = (appendix["notes"] or "").strip() or "لا توجد ملاحظات أو شروط إضافية."
     story = [
         header_band,
@@ -3308,6 +3356,7 @@ def build_contract_appendix_pdf(appendix, parent_contract, project, items) -> tu
         Spacer(1, 4),
         items_table,
         Spacer(1, 8),
+        *payment_story,
         build_section_heading("ملاحظات وشروط الملحق"),
         Spacer(1, 4),
         appendix_paragraph(notes_text, body_style),
@@ -3460,29 +3509,34 @@ def works_payment_groups(conn, project):
     contract = conn.execute("SELECT * FROM contracts WHERE id=? AND company='works'", (project["contract_id"],)).fetchone() if project["contract_id"] else None
     base_total = calculate_project_contract_total(conn, project) - get_project_appendices_total(conn, project["id"])
     collections = conn.execute("SELECT * FROM project_collections WHERE project_id=? AND COALESCE(collection_status,'') NOT IN ('ملغي','ملغاة')", (project["id"],)).fetchall()
+    from client_portal import _progress_details
+    quote = conn.execute("SELECT * FROM quotes WHERE id=?", (contract["quote_id"],)).fetchone() if contract and contract["quote_id"] else None
+    first_daily = conn.execute("SELECT MIN(date) AS first_date FROM project_daily WHERE project_id=? AND date IS NOT NULL AND TRIM(date)<>''", (project["id"],)).fetchone()["first_date"]
+    settings = conn.execute("SELECT timeline_flexibility_rate FROM client_portal_settings WHERE project_id=?", (project["id"],)).fetchone()
+    timeline_progress = _progress_details(project, contract, quote, [], [], first_daily, flexibility_rate=settings["timeline_flexibility_rate"] if settings else 30)["timeline_progress"]
     groups = []
     base_rows = conn.execute("SELECT * FROM quote_payments WHERE quote_id=? ORDER BY id", (contract["quote_id"],)).fetchall() if contract and contract["quote_id"] else []
-    def add_group(name, source, appendix_id, total, rows):
-        paid = sum(safe_float(c["amount"]) for c in collections if (c["appendix_id"] or None) == appendix_id)
+    def add_group(name, source, appendix_id, total, rows, subtitle=""):
+        related = [c for c in collections if (source == "contract" and not c["appendix_id"] and c["payment_source"] in (None, "", "contract")) or (source == "appendix" and c["appendix_id"] == appendix_id and c["payment_source"] == "appendix")]
+        paid = sum(safe_float(c["amount"]) for c in related)
         payments = []
-        legacy_pool = sum(safe_float(c["amount"]) for c in collections if source == "contract" and not c["payment_source"])
         scheduled = 0.0
+        due_threshold = 0.0
         for index, row in enumerate(rows):
             amount = round(total - scheduled, 2) if source == "appendix" and index == len(rows) - 1 else round(total * safe_float(row["percentage"]) / 100, 2)
             scheduled += amount
-            applied = sum(safe_float(c["amount"]) for c in collections if c["payment_source"] == source and c["payment_id"] == row["id"])
-            if source == "contract":
-                legacy_applied = min(max(0, amount-applied), legacy_pool)
-                applied += legacy_applied
-                legacy_pool -= legacy_applied
-            payments.append(dict(id=row["id"], title=row["title"], percentage=safe_float(row["percentage"]), amount=amount, paid=applied, remaining=max(0, round(amount-applied, 2)), source=source, appendix_id=appendix_id))
-        groups.append(dict(name=name, source=source, appendix_id=appendix_id, total=total, paid=paid, remaining=total-paid, payments=payments))
-    add_group("العقد الأساسي", "contract", None, base_total, base_rows)
+            applied = sum(safe_float(c["amount"]) for c in related if c["payment_source"] == source and c["payment_id"] == row["id"])
+            status = "paid" if applied >= amount - 0.01 else "partial" if applied > 0 else "due" if timeline_progress >= due_threshold else "not_due"
+            payments.append(dict(id=row["id"], title=row["title"], percentage=safe_float(row["percentage"]), amount=amount, paid=applied, remaining=max(0, round(amount-applied, 2)), status=status, source=source, appendix_id=appendix_id))
+            due_threshold += safe_float(row["percentage"])
+        unassigned_paid = paid - sum(payment["paid"] for payment in payments)
+        groups.append(dict(name=name, subtitle=subtitle, source=source, appendix_id=appendix_id, total=total, paid=paid, remaining=total-paid, unassigned_paid=unassigned_paid, payments=payments))
+    add_group(f"العقد رقم {contract['id']}" if contract else "العقد الأساسي", "contract", None, base_total, base_rows)
     for appendix in conn.execute("SELECT * FROM contract_appendices WHERE project_id=? AND company='works' ORDER BY id", (project["id"],)).fetchall():
         rows = conn.execute("SELECT * FROM contract_appendix_payments WHERE appendix_id=? ORDER BY sort_order,id", (appendix["id"],)).fetchall()
-        add_group(appendix["short_description"] or f"ملحق عقد رقم {appendix['id']}", "appendix", appendix["id"], safe_float(appendix["total"]), rows)
+        short_title = " ".join((appendix["short_description"] or "").split())
+        add_group(f"ملحق العقد رقم {appendix['id']}", "appendix", appendix["id"], safe_float(appendix["total"]), rows, short_title if len(short_title) <= 60 else "أعمال إضافية")
         groups[-1]["appendix"] = dict(appendix)
-        groups[-1]["items"] = [dict(x) for x in conn.execute("SELECT * FROM contract_appendix_items WHERE appendix_id=? ORDER BY id", (appendix["id"],)).fetchall()]
     return groups
 
 
@@ -10684,10 +10738,20 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
 
     expenses_total = sum(safe_float(e["amount"]) for e in expenses)
     profit = contract_total - expenses_total
-    works_contract_html = "".join(f'<p>{escape(group["name"])}: {format_currency(group["total"])} ريال · المحصل {format_currency(group["paid"])} ريال · المتبقي {format_currency(group["remaining"])} ريال</p>' for group in works_groups)
+    works_contract_html = ""
     if works_groups:
         total_paid = sum(group["paid"] for group in works_groups)
-        works_contract_html += f'<p><strong>إجمالي المحصل:</strong> {format_currency(total_paid)} ريال · <strong>المتبقي من قيمة المشروع:</strong> {format_currency(contract_total-total_paid)} ريال</p>'
+        status_labels = {"paid": "تم استلامها", "partial": "مدفوعة جزئيًا", "due": "مستحقة", "not_due": "غير مستحقة"}
+        for group in works_groups:
+            payment_lines = "".join(
+                f'<p>{escape(payment["title"] or "دفعة")} · {payment["percentage"]:g}% · {format_currency(payment["amount"])} ريال · {status_labels[payment["status"]]}</p>'
+                for payment in group["payments"]
+            ) or '<p>لا يوجد جدول دفعات.</p>'
+            document_url = f'/contract-appendix-pdf/{group["appendix_id"]}?company=works' if group["appendix_id"] else f'/contract-pdf/{project["contract_id"]}?company=works'
+            subtitle = f'<p>{escape(group["subtitle"])}</p>' if group["subtitle"] else ""
+            unassigned = f'<p>تحصيلات سابقة غير مرتبطة بدفعة: {format_currency(group["unassigned_paid"])} ريال</p>' if group["unassigned_paid"] > 0.005 else ""
+            works_contract_html += f'<div class="inventory-note" style="margin:12px 0;text-align:right;"><strong>{escape(group["name"])}</strong>{subtitle}<p>القيمة {format_currency(group["total"])} ريال · المحصل {format_currency(group["paid"])} ريال · المتبقي {format_currency(group["remaining"])} ريال</p>{payment_lines}{unassigned}<a href="{document_url}" target="_blank">فتح PDF</a></div>'
+        works_contract_html += f'<p><strong>إجمالي المشروع:</strong> {format_currency(contract_total)} ريال · <strong>المحصل:</strong> {format_currency(total_paid)} ريال · <strong>المتبقي:</strong> {format_currency(contract_total-total_paid)} ريال</p>'
     works_structured_details = ""
     if normalize_access_value(company) == "works":
         project_type_label = project["project_type"] or "غير محدد"
@@ -10741,7 +10805,7 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
 <br>
 
 <h3>قيمة العقد</h3>
-<p>{format_currency(contract_total)} ريال</p>
+{'' if works_groups else f'<p>{format_currency(contract_total)} ريال</p>'}
 {works_contract_html}
 
 <h3>إجمالي المصروفات</h3>
@@ -11070,7 +11134,7 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
     if is_works_company_page and not is_read_only_works_partner:
         payment_options = "".join(
             f'<optgroup label="{escape(group["name"])}">' + "".join(
-                f'<option value="{payment["source"]}:{payment["id"]}">{escape(group["name"])} — {escape(payment["title"] or "دفعة")} ({payment["percentage"]:g}%، المبلغ {format_currency(payment["amount"])}، المحصل {format_currency(payment["paid"])}، المتبقي {format_currency(payment["remaining"])})</option>'
+                f'<option value="{payment["source"]}:{payment["id"]}" data-remaining="{payment["remaining"]:.2f}">{escape(group["name"])} — {escape(payment["title"] or "دفعة")} ({payment["percentage"]:g}%، المبلغ {format_currency(payment["amount"])}، المتبقي {format_currency(payment["remaining"])})</option>'
                 for payment in group["payments"] if payment["remaining"] > 0.005
             ) + '</optgroup>' for group in payment_groups
         )
@@ -11086,7 +11150,8 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
             <input type="hidden" name="company" value="{company}">
 
             <div class="expense-form-grid">
-                <div class="expense-form-wide"><label>الدفعة المطلوبة</label><select name="payment_key" required><option value="">اختر الدفعة</option>{payment_options}</select></div>
+                <div class="expense-form-wide"><label>الدفعة المطلوبة</label><select name="payment_key" required onchange="this.form.querySelector('[name=selected_amount]').value=this.selectedOptions[0].dataset.remaining || ''"><option value="">اختر الدفعة</option>{payment_options}</select></div>
+                <div><label>المبلغ المتبقي لهذه الدفعة</label><input name="selected_amount" type="text" readonly></div>
                 <div>
                     <label>التاريخ</label>
                     <input type="date" name="collection_date" value="{date.today().isoformat()}" required>

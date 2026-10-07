@@ -527,7 +527,6 @@ def _project_context(conn, project_id, client_user_id=None):
     from main import calculate_project_contract_total, works_payment_groups
     contract_value = calculate_project_contract_total(conn, project)
     payment_groups = works_payment_groups(conn, project) if project["company"] == "works" else []
-    base_contract_value = payment_groups[0]["total"] if payment_groups else contract_value
     contract = conn.execute("SELECT * FROM contracts WHERE id=?", (project["contract_id"],)).fetchone() if project["contract_id"] else None
     quote = conn.execute("SELECT * FROM quotes WHERE id=?", (contract["quote_id"],)).fetchone() if contract and contract["quote_id"] else None
     approved_contract_statuses = {"ساري", "معتمد", "نشط", "active", "approved"}
@@ -547,7 +546,7 @@ def _project_context(conn, project_id, client_user_id=None):
         appendix_approved = (appendix["status"] or "").strip().lower() in {s.lower() for s in approved_appendix_statuses}
         if _is_visible(controls, "appendix", appendix["id"], appendix_approved):
             visible_appendix_ids.add(appendix["id"])
-            title = appendix["short_description"] or f"ملحق عقد رقم {appendix['id']}"
+            title = f"ملحق العقد رقم {appendix['id']}"
             documents.append({"id": appendix["id"], "title": title, "document_type": "appendix", "file_path": f"/client-portal/appendix/{appendix['id']}", "created_at": f"{appendix['status'] or ''} · {float(appendix['total'] or 0):,.0f} ر.س"})
     payment_groups = [group for group in payment_groups if not group["appendix_id"] or group["appendix_id"] in visible_appendix_ids]
     flexibility_rate = settings["timeline_flexibility_rate"] if "timeline_flexibility_rate" in settings.keys() else 30
@@ -557,24 +556,9 @@ def _project_context(conn, project_id, client_user_id=None):
     )
     has_source_payments = bool(contract and contract["quote_id"])
     if has_source_payments:
-        quote_payments = conn.execute("SELECT * FROM quote_payments WHERE quote_id=? ORDER BY id", (contract["quote_id"],)).fetchall()
-        paid_cursor = 0.0
-        due_progress_threshold = 0.0
-        for payment in quote_payments:
-            percentage = float(payment["percentage"] or 0)
-            amount = base_contract_value * percentage / 100
-            title = payment["title"] or "دفعة تعاقدية"
+        for payment in payment_groups[0]["payments"] if payment_groups else []:
             if _is_visible(controls, "payment", payment["id"], True):
-                payments.append({
-                    "id": payment["id"], "title": title, "percentage": percentage,
-                    "amount": amount, "due_reason": title,
-                    "status": _payment_status(
-                        amount, paid_cursor, payment_groups[0]["paid"] if payment_groups else float(collections),
-                        progress_details["timeline_progress"], due_progress_threshold,
-                    ),
-                })
-            paid_cursor += amount
-            due_progress_threshold += percentage
+                payments.append({**payment, "due_reason": payment["title"]})
     if not has_source_payments:
         for manual in conn.execute("SELECT * FROM client_payment_schedule WHERE project_id=? AND show_to_client=1 ORDER BY id", (project_id,)).fetchall():
             if _is_visible(controls, "portal_payment", manual["id"], True):
