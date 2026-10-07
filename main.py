@@ -9651,6 +9651,9 @@ def contracts_page(request: Request, company: str = ""):
         parent_label = f"تابع للعقد رقم {appendix['parent_contract_id']}"
         project_label = appendix["project_name"] or "-"
         client_label = appendix["client"] or appendix["project_client"] or "-"
+        appendix_actions = ""
+        if not is_read_only_works_partner:
+            appendix_actions = f"""<a href="/contract-appendix/new/{appendix['parent_contract_id']}?company=works&appendix_id={appendix['id']}" class="action-btn">تعديل</a><form method="post" action="/contract-appendix/delete/{appendix['id']}" style="display:inline" onsubmit="return confirm('هل تريد حذف ملحق العقد؟ سيُحذف الملحق وبنوده ودفعاته غير المحصلة.')"><input type="hidden" name="company" value="works"><button class="action-btn delete-btn">حذف الملحق</button></form>"""
         rows += f"""
         <tr>
             <td>
@@ -9661,7 +9664,7 @@ def contracts_page(request: Request, company: str = ""):
             <td>{escape(str(client_label))}</td>
             <td>{escape(appendix["status"] or "ساري")}<br>{format_currency(safe_float(appendix["total"]))} ريال</td>
             <td>-</td>
-            <td><a href="/contract-appendix-pdf/{appendix['id']}?company={company}" class="action-btn">تحميل PDF</a>{'' if is_read_only_works_partner else f'<a href="/contract-appendix/new/{appendix["parent_contract_id"]}?company=works&appendix_id={appendix["id"]}" class="action-btn">تعديل</a><form method="post" action="/contract-appendix/delete/{appendix["id"]}" style="display:inline" onsubmit="return confirm(\'هل تريد حذف ملحق العقد؟ سيُحذف الملحق وبنوده ودفعاته غير المحصلة.\')"><input type="hidden" name="company" value="works"><button class="action-btn delete-btn">حذف الملحق</button></form>'}</td>
+            <td><a href="/contract-appendix-pdf/{appendix['id']}?company={company}" class="action-btn">تحميل PDF</a>{appendix_actions}</td>
         </tr>
         """
 
