@@ -612,6 +612,15 @@ CREATE TABLE IF NOT EXISTS contract_appendix_items (
 )
 """)
 
+# Independent schedules for works contract appendices. Existing rows are preserved.
+conn.execute("""CREATE TABLE IF NOT EXISTS contract_appendix_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    appendix_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    percentage REAL NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+)""")
+
 # المشاريع
 conn.execute("""
 CREATE TABLE IF NOT EXISTS projects (
@@ -658,6 +667,11 @@ CREATE TABLE IF NOT EXISTS project_collections (
     notes TEXT
 )
 """)
+for column in ("payment_source TEXT", "payment_id INTEGER", "appendix_id INTEGER", "contract_id INTEGER"):
+    try:
+        conn.execute(f"ALTER TABLE project_collections ADD COLUMN {column}")
+    except sqlite3.OperationalError:
+        pass
 
 conn.execute("""
 CREATE TABLE IF NOT EXISTS project_daily (
@@ -1229,6 +1243,9 @@ else:
             ("admin123", existing_admin["id"])
         )
 
+conn.execute("""INSERT INTO contract_appendix_payments(appendix_id,title,percentage,sort_order)
+    SELECT a.id,'دفعة الملحق',100,0 FROM contract_appendices a
+    WHERE a.company='works' AND NOT EXISTS(SELECT 1 FROM contract_appendix_payments p WHERE p.appendix_id=a.id)""")
 conn.commit()
 conn.close()
 
@@ -2215,7 +2232,7 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
     include_collections = normalize_access_value(company) == "works"
 
     total_expenses = sum(safe_float(expense["amount"]) for expense in expenses)
-    total_collections = sum(safe_float(collection["amount"]) for collection in collections) if include_collections else 0.0
+    total_collections = sum(safe_float(collection["amount"]) for collection in collections if (collection["collection_status"] or "") not in ("ملغي", "ملغاة")) if include_collections else 0.0
     remaining = contract_total - total_expenses
     spend_ratio = (total_expenses / contract_total * 100) if contract_total > 0 else 0.0
     total_paid = sum(
@@ -2303,14 +2320,14 @@ def build_project_expenses_report_pdf(project, expenses, contract_total: float, 
             [
                 Paragraph(format_arabic_pdf_text("المحصل"), body_style),
                 Paragraph(format_arabic_pdf_text("نسبة الصرف"), body_style),
-                Paragraph(format_arabic_pdf_text("المتبقي"), body_style),
+                Paragraph(format_arabic_pdf_text("المتبقي من المشروع"), body_style),
                 Paragraph(format_arabic_pdf_text("إجمالي المصروفات"), body_style),
                 Paragraph(format_arabic_pdf_text("قيمة العقد"), body_style),
             ],
             [
                 Paragraph(format_arabic_pdf_text(f"{format_currency(total_collections)} ريال"), body_style),
                 Paragraph(format_arabic_pdf_text(f"{spend_ratio:.1f}%"), body_style),
-                Paragraph(format_arabic_pdf_text(f"{format_currency(remaining)} ريال"), body_style),
+                Paragraph(format_arabic_pdf_text(f"{format_currency(contract_total-total_collections)} ريال"), body_style),
                 Paragraph(format_arabic_pdf_text(f"{format_currency(total_expenses)} ريال"), body_style),
                 Paragraph(format_arabic_pdf_text(f"{format_currency(contract_total)} ريال"), body_style),
             ],
@@ -3436,6 +3453,37 @@ def get_project_appendices_total(conn, project_id: int) -> float:
         (project_id,),
     ).fetchone()
     return safe_float(row["total"] if row else 0)
+
+
+def works_payment_groups(conn, project):
+    """Return base and appendix schedules with their actual collection balances."""
+    contract = conn.execute("SELECT * FROM contracts WHERE id=? AND company='works'", (project["contract_id"],)).fetchone() if project["contract_id"] else None
+    base_total = calculate_project_contract_total(conn, project) - get_project_appendices_total(conn, project["id"])
+    collections = conn.execute("SELECT * FROM project_collections WHERE project_id=? AND COALESCE(collection_status,'') NOT IN ('ملغي','ملغاة')", (project["id"],)).fetchall()
+    groups = []
+    base_rows = conn.execute("SELECT * FROM quote_payments WHERE quote_id=? ORDER BY id", (contract["quote_id"],)).fetchall() if contract and contract["quote_id"] else []
+    def add_group(name, source, appendix_id, total, rows):
+        paid = sum(safe_float(c["amount"]) for c in collections if (c["appendix_id"] or None) == appendix_id)
+        payments = []
+        legacy_pool = sum(safe_float(c["amount"]) for c in collections if source == "contract" and not c["payment_source"])
+        scheduled = 0.0
+        for index, row in enumerate(rows):
+            amount = round(total - scheduled, 2) if source == "appendix" and index == len(rows) - 1 else round(total * safe_float(row["percentage"]) / 100, 2)
+            scheduled += amount
+            applied = sum(safe_float(c["amount"]) for c in collections if c["payment_source"] == source and c["payment_id"] == row["id"])
+            if source == "contract":
+                legacy_applied = min(max(0, amount-applied), legacy_pool)
+                applied += legacy_applied
+                legacy_pool -= legacy_applied
+            payments.append(dict(id=row["id"], title=row["title"], percentage=safe_float(row["percentage"]), amount=amount, paid=applied, remaining=max(0, round(amount-applied, 2)), source=source, appendix_id=appendix_id))
+        groups.append(dict(name=name, source=source, appendix_id=appendix_id, total=total, paid=paid, remaining=total-paid, payments=payments))
+    add_group("العقد الأساسي", "contract", None, base_total, base_rows)
+    for appendix in conn.execute("SELECT * FROM contract_appendices WHERE project_id=? AND company='works' ORDER BY id", (project["id"],)).fetchall():
+        rows = conn.execute("SELECT * FROM contract_appendix_payments WHERE appendix_id=? ORDER BY sort_order,id", (appendix["id"],)).fetchall()
+        add_group(appendix["short_description"] or f"ملحق عقد رقم {appendix['id']}", "appendix", appendix["id"], safe_float(appendix["total"]), rows)
+        groups[-1]["appendix"] = dict(appendix)
+        groups[-1]["items"] = [dict(x) for x in conn.execute("SELECT * FROM contract_appendix_items WHERE appendix_id=? ORDER BY id", (appendix["id"],)).fetchall()]
+    return groups
 
 
 def get_contract_project(conn, contract_row):
@@ -9178,7 +9226,7 @@ def download_contract_attachment(request: Request, attachment_id: int):
 
 
 @app.get("/contract-appendix/new/{contract_id}", response_class=HTMLResponse)
-def new_contract_appendix_form(request: Request, contract_id: int, company: str = "works"):
+def new_contract_appendix_form(request: Request, contract_id: int, company: str = "works", appendix_id: int = 0):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
@@ -9197,6 +9245,12 @@ def new_contract_appendix_form(request: Request, contract_id: int, company: str 
         conn.close()
         return HTMLResponse("<h2>العقد الأساسي غير موجود</h2>", status_code=404)
     project = get_contract_project(conn, contract)
+    appendix = conn.execute("SELECT * FROM contract_appendices WHERE id=? AND parent_contract_id=? AND project_id=? AND company='works'", (appendix_id, contract_id, project["id"] if project else 0)).fetchone() if appendix_id else None
+    if appendix_id and not appendix:
+        conn.close()
+        return HTMLResponse("<h2>ملحق العقد غير موجود</h2>", status_code=404)
+    existing_items = conn.execute("SELECT * FROM contract_appendix_items WHERE appendix_id=? ORDER BY id", (appendix_id,)).fetchall() if appendix else []
+    existing_payments = conn.execute("SELECT * FROM contract_appendix_payments WHERE appendix_id=? ORDER BY sort_order,id", (appendix_id,)).fetchall() if appendix else []
     quote = None
     if contract["quote_id"]:
         quote = conn.execute(
@@ -9211,14 +9265,18 @@ def new_contract_appendix_form(request: Request, contract_id: int, company: str 
     client_name = (project["client"] or "").strip() or ((quote["client"] or "").strip() if quote else "")
     project_name = (project["name"] or "").strip() or f"مشروع رقم {project['id']}"
     item_rows = ""
-    for index in range(1, 7):
+    for index in range(max(6, len(existing_items) + 2)):
+        item = existing_items[index] if index < len(existing_items) else None
         item_rows += f"""
         <tr>
-            <td><textarea name="item_description" rows="3" style="width:100%;resize:vertical;" {'required' if index == 1 else ''}></textarea></td>
-            <td><input type="number" name="item_qty" step="0.01" min="0" value="1" {'required' if index == 1 else ''}></td>
-            <td><input type="number" name="item_unit_price" step="0.01" min="0" {'required' if index == 1 else ''}></td>
+            <td><textarea name="item_description" rows="3" style="width:100%;resize:vertical;" {'required' if index == 0 else ''}>{escape(item['description'] or '') if item else ''}</textarea></td>
+            <td><input type="number" name="item_qty" step="0.01" min="0" value="{item['qty'] if item else 1}" {'required' if index == 0 else ''}></td>
+            <td><input type="number" name="item_unit_price" step="0.01" min="0" value="{item['unit_price'] if item else ''}" {'required' if index == 0 else ''}></td>
         </tr>
         """
+    payment_rows = "".join(f'<tr><td><input name="payment_title" value="{escape(p["title"] or "")}" required></td><td><input type="number" name="payment_percentage" step="0.01" min="0" max="100" value="{p["percentage"]}" required></td></tr>' for p in existing_payments)
+    if not payment_rows:
+        payment_rows = '<tr><td><input name="payment_title" value="الدفعة الأولى" required></td><td><input type="number" name="payment_percentage" step="0.01" min="0" max="100" value="100" required></td></tr>'
 
     return f"""
 <meta charset="UTF-8">
@@ -9226,7 +9284,7 @@ def new_contract_appendix_form(request: Request, contract_id: int, company: str 
 <body class="system-dark">
 {HOME_BUTTON}
 <div class="dashboard">
-    <h2>ملحق عقد</h2>
+    <h2>{'تعديل ملحق العقد' if appendix else 'ملحق عقد'}</h2>
     <div class="inventory-note" style="margin:18px auto;text-align:right;max-width:900px;">
         <strong>العقد الأساسي:</strong> {contract_id}<br>
         <strong>المشروع:</strong> {escape(project_name)}<br>
@@ -9235,15 +9293,16 @@ def new_contract_appendix_form(request: Request, contract_id: int, company: str 
 
     <form action="/contract-appendix/save/{contract_id}" method="post" style="max-width:1000px;margin:auto;text-align:right;">
         <input type="hidden" name="company" value="{company}">
+        <input type="hidden" name="appendix_id" value="{appendix_id}">
 
         <label>تاريخ الملحق</label>
-        <input type="date" name="appendix_date" value="{date.today().isoformat()}">
+        <input type="date" name="appendix_date" value="{appendix['appendix_date'] if appendix else date.today().isoformat()}">
 
         <label>وصف مختصر للعمل الإضافي</label>
-        <textarea name="short_description" rows="4" style="width:100%;resize:vertical;" required></textarea>
+        <textarea name="short_description" rows="4" style="width:100%;resize:vertical;" required>{escape(appendix['short_description'] or '') if appendix else ''}</textarea>
 
         <label>مدة إضافية بالأيام (اختياري)</label>
-        <input type="number" name="appendix_extra_days" min="0" step="1" value="0">
+        <input type="number" name="appendix_extra_days" min="0" step="1" value="{appendix['appendix_extra_days'] if appendix else 0}">
 
         <h3>بنود العمل الإضافي</h3>
         <table class="table" border="1" style="width:100%;text-align:center;background:white;">
@@ -9256,10 +9315,14 @@ def new_contract_appendix_form(request: Request, contract_id: int, company: str 
         </table>
 
         <label>ملاحظات أو شروط الملحق</label>
-        <textarea name="notes" rows="4" style="width:100%;resize:vertical;"></textarea>
+        <textarea name="notes" rows="4" style="width:100%;resize:vertical;">{escape(appendix['notes'] or '') if appendix else ''}</textarea>
+
+        <h3>جدول دفعات الملحق (المجموع 100%)</h3>
+        <table class="table" border="1" style="width:100%;text-align:center;background:white;"><tr><th>اسم الدفعة</th><th>النسبة %</th></tr>{payment_rows}</table>
+        <button type="button" onclick="this.previousElementSibling.insertAdjacentHTML('beforeend', '<tr><td><input name=&quot;payment_title&quot; required></td><td><input type=&quot;number&quot; name=&quot;payment_percentage&quot; step=&quot;0.01&quot; min=&quot;0&quot; max=&quot;100&quot; required></td></tr>')">إضافة دفعة</button>
 
         <br><br>
-        <button type="submit" class="glass-btn gold-text">تحويل إلى ملحق عقد</button>
+        <button type="submit" class="glass-btn gold-text">حفظ الملحق</button>
     </form>
 
     <br>
@@ -9280,6 +9343,9 @@ def save_contract_appendix(
     item_description: list[str] = Form([]),
     item_qty: list[str] = Form([]),
     item_unit_price: list[str] = Form([]),
+    appendix_id: int = Form(0),
+    payment_title: list[str] = Form([]),
+    payment_percentage: list[str] = Form([]),
 ):
     access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
@@ -9292,6 +9358,7 @@ def save_contract_appendix(
 
     conn = get_db()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         contract = conn.execute(
             "SELECT * FROM contracts WHERE id = ? AND company = ?",
             (contract_id, company),
@@ -9301,6 +9368,11 @@ def save_contract_appendix(
         project = get_contract_project(conn, contract)
         if not project:
             return HTMLResponse("<h2>لا يوجد مشروع مرتبط بالعقد الأساسي</h2>", status_code=400)
+        appendix = conn.execute("SELECT * FROM contract_appendices WHERE id=? AND parent_contract_id=? AND project_id=? AND company='works'", (appendix_id, contract_id, project["id"])).fetchone() if appendix_id else None
+        if appendix_id and not appendix:
+            return HTMLResponse("<h2>ملحق العقد غير موجود</h2>", status_code=404)
+        has_collection = conn.execute("SELECT 1 FROM project_collections WHERE project_id=? AND appendix_id=? LIMIT 1", (project["id"], appendix_id)).fetchone() if appendix else None
+        locked_message = "لا يمكن تغيير قيمة الملحق أو جدول دفعاته لوجود دفعات محصلة عليه."
 
         cleaned_items = []
         max_len = max(len(item_description), len(item_qty), len(item_unit_price))
@@ -9315,11 +9387,58 @@ def save_contract_appendix(
             cleaned_items.append((description, qty, unit_price))
 
         if not cleaned_items:
+            if has_collection:
+                return HTMLResponse(locked_message, status_code=409)
             return RedirectResponse(url=f"/contract-appendix/new/{contract_id}?company={company}", status_code=303)
 
-        total = sum(qty * unit_price for _, qty, unit_price in cleaned_items)
-        cur = conn.cursor()
-        cur.execute(
+        total = round(sum(qty * unit_price for _, qty, unit_price in cleaned_items), 2)
+        payments = []
+        for title, percentage in zip(payment_title, payment_percentage):
+            if title.strip():
+                try:
+                    value = float(percentage)
+                except (TypeError, ValueError):
+                    if has_collection:
+                        return HTMLResponse(locked_message, status_code=409)
+                    return HTMLResponse("<h2>نسبة الدفعة غير صحيحة</h2>", status_code=400)
+                if value <= 0:
+                    if has_collection:
+                        return HTMLResponse(locked_message, status_code=409)
+                    return HTMLResponse("<h2>نسبة الدفعة يجب أن تكون أكبر من صفر</h2>", status_code=400)
+                payments.append((title.strip(), value))
+        if not payments or abs(sum(value for _, value in payments) - 100) > 0.001:
+            if has_collection:
+                return HTMLResponse(locked_message, status_code=409)
+            return HTMLResponse("<h2>يجب أن يساوي مجموع نسب دفعات الملحق 100%</h2>", status_code=400)
+        if appendix:
+            existing = conn.execute("SELECT * FROM contract_appendix_payments WHERE appendix_id=? ORDER BY sort_order,id", (appendix_id,)).fetchall()
+            if has_collection:
+                old_items = conn.execute("SELECT * FROM contract_appendix_items WHERE appendix_id=? ORDER BY id", (appendix_id,)).fetchall()
+                financial_change = (
+                    abs(total - safe_float(appendix["total"])) > 0.005
+                    or len(payments) != len(existing)
+                    or any(title != old["title"] or abs(percentage - safe_float(old["percentage"])) > 0.000001 for (title, percentage), old in zip(payments, existing))
+                    or len(cleaned_items) != len(old_items)
+                    or any(abs(qty - safe_float(old["qty"])) > 0.000001 or abs(price - safe_float(old["unit_price"])) > 0.000001 for (_, qty, price), old in zip(cleaned_items, old_items))
+                )
+                if financial_change:
+                    return HTMLResponse(locked_message, status_code=409)
+            conn.execute("UPDATE contract_appendices SET appendix_date=?,short_description=?,notes=?,total=?,appendix_extra_days=? WHERE id=?", (appendix_date or date.today().isoformat(), short_description.strip(), notes.strip(), total, max(0, appendix_extra_days), appendix_id))
+            if has_collection:
+                for (description, _, _), old in zip(cleaned_items, old_items):
+                    conn.execute("UPDATE contract_appendix_items SET description=? WHERE id=?", (description, old["id"]))
+            else:
+                conn.execute("DELETE FROM contract_appendix_items WHERE appendix_id=?", (appendix_id,))
+                for index, (title, percentage) in enumerate(payments):
+                    if index < len(existing):
+                        conn.execute("UPDATE contract_appendix_payments SET title=?,percentage=?,sort_order=? WHERE id=?", (title, percentage, index, existing[index]["id"]))
+                    else:
+                        conn.execute("INSERT INTO contract_appendix_payments(appendix_id,title,percentage,sort_order) VALUES(?,?,?,?)", (appendix_id,title,percentage,index))
+                for old in existing[len(payments):]:
+                    conn.execute("DELETE FROM contract_appendix_payments WHERE id=?", (old["id"],))
+        else:
+            cur = conn.cursor()
+            cur.execute(
             """
             INSERT INTO contract_appendices (
                 company, parent_contract_id, project_id, client, appendix_date,
@@ -9341,20 +9460,60 @@ def save_contract_appendix(
                 max(0, appendix_extra_days),
             ),
         )
-        appendix_id = cur.lastrowid
-        conn.executemany(
+            appendix_id = cur.lastrowid
+            conn.executemany("INSERT INTO contract_appendix_payments(appendix_id,title,percentage,sort_order) VALUES(?,?,?,?)", [(appendix_id,title,percentage,index) for index,(title,percentage) in enumerate(payments)])
+        if not appendix or not has_collection:
+            conn.executemany(
             """
             INSERT INTO contract_appendix_items (appendix_id, description, qty, unit_price)
             VALUES (?, ?, ?, ?)
             """,
             [(appendix_id, description, qty, unit_price) for description, qty, unit_price in cleaned_items],
-        )
+            )
         conn.commit()
         return RedirectResponse(url=f"/contracts?company={company}", status_code=303)
     except Exception as exc:
         conn.rollback()
         logger.exception("Failed to save contract appendix for contract %s", contract_id, exc_info=exc)
         return HTMLResponse("<h2>تعذر حفظ ملحق العقد</h2>", status_code=500)
+    finally:
+        conn.close()
+
+
+@app.post("/contract-appendix/delete/{appendix_id}")
+def delete_contract_appendix(request: Request, appendix_id: int, company: str = Form("works")):
+    access_result = ensure_company_access(request, company)
+    if not isinstance(access_result, sqlite3.Row):
+        return access_result
+    partner_guard = ensure_not_works_partner_write(access_result, company)
+    if not isinstance(partner_guard, sqlite3.Row):
+        return partner_guard
+    if normalize_access_value(company) != "works":
+        return HTMLResponse("غير مصرح", status_code=403)
+    conn = get_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        appendix = conn.execute("SELECT * FROM contract_appendices WHERE id=? AND company='works'", (appendix_id,)).fetchone()
+        if not appendix:
+            return HTMLResponse("ملحق العقد غير موجود", status_code=404)
+        project = conn.execute("SELECT * FROM projects WHERE id=? AND company='works'", (appendix["project_id"],)).fetchone()
+        contract = conn.execute("SELECT * FROM contracts WHERE id=? AND company='works'", (appendix["parent_contract_id"],)).fetchone()
+        linked_project = get_contract_project(conn, contract) if contract else None
+        if not project or not linked_project or linked_project["id"] != project["id"]:
+            return HTMLResponse("ارتباط الملحق بالعقد غير صحيح", status_code=400)
+        paid = conn.execute("SELECT 1 FROM project_collections WHERE appendix_id=? LIMIT 1", (appendix_id,)).fetchone()
+        if paid:
+            return HTMLResponse("لا يمكن حذف ملحق العقد لوجود دفعات محصلة عليه. يجب معالجة التحصيلات المرتبطة أولًا.", status_code=409)
+        conn.execute("DELETE FROM client_portal_item_controls WHERE project_id=? AND item_type='appendix' AND item_id=?", (project["id"], appendix_id))
+        conn.execute("DELETE FROM contract_appendix_payments WHERE appendix_id=?", (appendix_id,))
+        conn.execute("DELETE FROM contract_appendix_items WHERE appendix_id=?", (appendix_id,))
+        conn.execute("DELETE FROM contract_appendices WHERE id=?", (appendix_id,))
+        conn.commit()
+        return RedirectResponse("/contracts?company=works", status_code=303)
+    except Exception:
+        conn.rollback()
+        logger.exception("Failed to delete appendix %s", appendix_id)
+        return HTMLResponse("تعذر حذف الملحق", status_code=500)
     finally:
         conn.close()
 
@@ -9502,7 +9661,7 @@ def contracts_page(request: Request, company: str = ""):
             <td>{escape(str(client_label))}</td>
             <td>{escape(appendix["status"] or "ساري")}<br>{format_currency(safe_float(appendix["total"]))} ريال</td>
             <td>-</td>
-            <td><a href="/contract-appendix-pdf/{appendix['id']}?company={company}" class="action-btn">تحميل PDF</a></td>
+            <td><a href="/contract-appendix-pdf/{appendix['id']}?company={company}" class="action-btn">تحميل PDF</a>{'' if is_read_only_works_partner else f'<a href="/contract-appendix/new/{appendix["parent_contract_id"]}?company=works&appendix_id={appendix["id"]}" class="action-btn">تعديل</a><form method="post" action="/contract-appendix/delete/{appendix["id"]}" style="display:inline" onsubmit="return confirm(\'هل تريد حذف ملحق العقد؟ سيُحذف الملحق وبنوده ودفعاته غير المحصلة.\')"><input type="hidden" name="company" value="works"><button class="action-btn delete-btn">حذف الملحق</button></form>'}</td>
         </tr>
         """
 
@@ -10517,10 +10676,15 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
         (project_id,)
     ).fetchall()
     contract_total = calculate_project_contract_total(conn, project)
+    works_groups = works_payment_groups(conn, project) if normalize_access_value(company) == "works" else []
     conn.close()
 
     expenses_total = sum(safe_float(e["amount"]) for e in expenses)
     profit = contract_total - expenses_total
+    works_contract_html = "".join(f'<p>{escape(group["name"])}: {format_currency(group["total"])} ريال · المحصل {format_currency(group["paid"])} ريال · المتبقي {format_currency(group["remaining"])} ريال</p>' for group in works_groups)
+    if works_groups:
+        total_paid = sum(group["paid"] for group in works_groups)
+        works_contract_html += f'<p><strong>إجمالي المحصل:</strong> {format_currency(total_paid)} ريال · <strong>المتبقي من قيمة المشروع:</strong> {format_currency(contract_total-total_paid)} ريال</p>'
     works_structured_details = ""
     if normalize_access_value(company) == "works":
         project_type_label = project["project_type"] or "غير محدد"
@@ -10575,6 +10739,7 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
 
 <h3>قيمة العقد</h3>
 <p>{format_currency(contract_total)} ريال</p>
+{works_contract_html}
 
 <h3>إجمالي المصروفات</h3>
 <p>{format_currency(expenses_total)} ريال</p>
@@ -10676,6 +10841,9 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
         "SELECT * FROM projects WHERE id = ?",
         (project_id,)
     ).fetchone()
+    if not project or project["company"] != company:
+        conn.close()
+        return HTMLResponse("المشروع غير موجود", status_code=404)
     suppliers = conn.execute(
         "SELECT * FROM project_suppliers WHERE project_id = ? ORDER BY name COLLATE NOCASE ASC, id DESC",
         (project_id,)
@@ -10707,8 +10875,9 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
     rows = ""
     total = 0.0
     contract_total = calculate_project_contract_total(conn, project) if project else 0.0
+    payment_groups = works_payment_groups(conn, project) if project and is_works_company_page else []
     conn.close()
-    collected_amount = sum(safe_float(collection["amount"]) for collection in collections)
+    collected_amount = sum(safe_float(collection["amount"]) for collection in collections if (collection["collection_status"] or "") not in ("ملغي", "ملغاة"))
     remaining = contract_total - sum(safe_float(e["amount"]) for e in expenses)
     spend_ratio = (sum(safe_float(e["amount"]) for e in expenses) / contract_total * 100) if contract_total > 0 else 0.0
     feedback_html = render_page_feedback(
@@ -10896,33 +11065,28 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
 
     project_collection_form_html = ""
     if is_works_company_page and not is_read_only_works_partner:
+        payment_options = "".join(
+            f'<optgroup label="{escape(group["name"])}">' + "".join(
+                f'<option value="{payment["source"]}:{payment["id"]}">{escape(group["name"])} — {escape(payment["title"] or "دفعة")} ({payment["percentage"]:g}%، المبلغ {format_currency(payment["amount"])}، المحصل {format_currency(payment["paid"])}، المتبقي {format_currency(payment["remaining"])})</option>'
+                for payment in group["payments"] if payment["remaining"] > 0.005
+            ) + '</optgroup>' for group in payment_groups
+        )
         project_collection_form_html = f"""
     <div class="inventory-panel inventory-table-panel expense-form-panel">
         <div class="expense-panel-head">
             <div>
-                <h3>إضافة تحصيل</h3>
+                <h3>تحصيل دفعة</h3>
             </div>
         </div>
-        <form action="/save-project-collection" method="post" enctype="multipart/form-data" class="expense-form">
+        <form action="/collect-project-payment" method="post" class="expense-form">
             <input type="hidden" name="project_id" value="{project_id}">
             <input type="hidden" name="company" value="{company}">
 
             <div class="expense-form-grid">
-                <div>
-                    <label>بيان/اسم التحصيل</label>
-                    <input type="text" name="title" placeholder="مثال: دفعة أولى" required>
-                </div>
-                <div>
-                    <label>المبلغ</label>
-                    <input type="number" step="0.01" min="0" name="amount" required>
-                </div>
+                <div class="expense-form-wide"><label>الدفعة المطلوبة</label><select name="payment_key" required><option value="">اختر الدفعة</option>{payment_options}</select></div>
                 <div>
                     <label>التاريخ</label>
                     <input type="date" name="collection_date" value="{date.today().isoformat()}" required>
-                </div>
-                <div>
-                    <label>الجهة / العميل</label>
-                    <input type="text" name="party_name" placeholder="اسم الجهة أو المحول">
                 </div>
                 <div>
                     <label>طريقة الدفع</label>
@@ -10932,19 +11096,8 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
                     </select>
                 </div>
                 <div>
-                    <label>الحالة</label>
-                    <select name="collection_status">
-                        <option value="">اختر الحالة</option>
-                        {collection_status_options}
-                    </select>
-                </div>
-                <div>
                     <label>رقم المرجع</label>
                     <input type="text" name="invoice_reference" placeholder="مثال: RC-1042">
-                </div>
-                <div>
-                    <label>مرفق</label>
-                    <input type="file" name="attachment" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xls,.xlsx">
                 </div>
                 <div class="expense-form-wide">
                     <label>ملاحظات</label>
@@ -10953,7 +11106,7 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
             </div>
 
             <div class="expense-form-actions">
-                <button type="submit" class="glass-btn gold-text expense-primary-btn">حفظ التحصيل</button>
+                <button type="submit" class="glass-btn gold-text expense-primary-btn">تأكيد التحصيل</button>
             </div>
         </form>
     </div>
@@ -10997,6 +11150,9 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
         {f'''<div class="finance-card expense-summary-card expense-summary-card-collected">
             <span>المحصل</span>
             <strong>{format_currency(collected_amount)} ريال</strong>
+        </div><div class="finance-card expense-summary-card">
+            <span>المتبقي من قيمة المشروع</span>
+            <strong>{format_currency(contract_total-collected_amount)} ريال</strong>
         </div>''' if is_works_company_page else ""}
         <div class="finance-card expense-summary-card expense-summary-card-ratio">
             <span>نسبة الصرف</span>
@@ -11267,87 +11423,53 @@ def save_expense(
     )
 
 
-@app.post("/save-project-collection")
-def save_project_collection(
-    request: Request,
-    project_id: int = Form(...),
-    company: str = Form(...),
-    title: str = Form(...),
-    amount: float = Form(...),
-    collection_date: str = Form(""),
-    party_name: str = Form(""),
-    payment_method: str = Form(""),
-    collection_status: str = Form(""),
-    invoice_reference: str = Form(""),
-    notes: str = Form(""),
-    attachment: UploadFile = File(None),
-):
+@app.post("/collect-project-payment")
+def collect_project_payment(request: Request, project_id: int = Form(...), company: str = Form("works"), payment_key: str = Form(...), collection_date: str = Form(""), payment_method: str = Form(""), invoice_reference: str = Form(""), notes: str = Form("")):
     access_result = ensure_employee_section_access(request, company, "expenses")
-    if isinstance(access_result, RedirectResponse) or isinstance(access_result, HTMLResponse):
+    if not isinstance(access_result, sqlite3.Row):
         return access_result
     partner_guard = ensure_not_works_partner_write(access_result, company)
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
     if normalize_access_value(company) != "works":
-        return RedirectResponse(url=f"/project-expenses?project_id={project_id}&company={company}", status_code=303)
-    cleaned_title = title.strip()
-    if not cleaned_title:
-        return RedirectResponse(
-            url=build_redirect_url(
-                f"/project-expenses?project_id={project_id}&company={company}",
-                error="بيان/اسم التحصيل مطلوب",
-            ),
-            status_code=303,
-        )
-    if payment_method.strip() and payment_method.strip() not in PROJECT_COLLECTION_PAYMENT_METHODS:
-        return RedirectResponse(
-            url=build_redirect_url(
-                f"/project-expenses?project_id={project_id}&company={company}",
-                error="طريقة الدفع المحددة غير صحيحة",
-            ),
-            status_code=303,
-        )
-    if collection_status.strip() and collection_status.strip() not in PROJECT_COLLECTION_STATUSES:
-        return RedirectResponse(
-            url=build_redirect_url(
-                f"/project-expenses?project_id={project_id}&company={company}",
-                error="حالة التحصيل المحددة غير صحيحة",
-            ),
-            status_code=303,
-        )
-
+        return HTMLResponse("غير مصرح", status_code=403)
+    try:
+        source, raw_id = payment_key.split(":", 1)
+        payment_id = int(raw_id)
+        if source not in {"contract", "appendix"}:
+            raise ValueError()
+    except ValueError:
+        return HTMLResponse("الدفعة المحددة غير صحيحة", status_code=400)
     conn = get_db()
-    attachment_path = save_project_collection_attachment(attachment)
-    conn.execute(
-        """
-        INSERT INTO project_collections (
-            project_id, title, amount, date, party_name, payment_method,
-            collection_status, invoice_reference, attachment_path, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            project_id,
-            cleaned_title,
-            amount,
-            collection_date or date.today().isoformat(),
-            party_name.strip(),
-            payment_method.strip(),
-            collection_status.strip(),
-            invoice_reference.strip(),
-            attachment_path,
-            notes.strip(),
-        ),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        project = conn.execute("SELECT * FROM projects WHERE id=? AND company='works'", (project_id,)).fetchone()
+        if not project:
+            return HTMLResponse("المشروع غير موجود", status_code=404)
+        payment = next((p for group in works_payment_groups(conn, project) for p in group["payments"] if p["source"] == source and p["id"] == payment_id), None)
+        if not payment:
+            return HTMLResponse("الدفعة لا تتبع هذا المشروع", status_code=400)
+        if payment["remaining"] <= 0.005:
+            return HTMLResponse("هذه الدفعة مسددة بالكامل", status_code=409)
+        amount = payment["remaining"]
+        parent_contract_id = project["contract_id"]
+        if source == "appendix":
+            parent_contract_id = conn.execute("SELECT parent_contract_id FROM contract_appendices WHERE id=? AND project_id=?", (payment["appendix_id"], project_id)).fetchone()[0]
+        conn.execute("""INSERT INTO project_collections(project_id,title,amount,date,party_name,payment_method,collection_status,invoice_reference,notes,payment_source,payment_id,appendix_id,contract_id)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", (project_id,payment["title"],amount,collection_date or date.today().isoformat(),project["client"] or "",payment_method.strip(),"محصل",invoice_reference.strip(),notes.strip(),source,payment_id,payment["appendix_id"],parent_contract_id))
+        conn.commit()
+        return RedirectResponse(build_redirect_url(f"/project-expenses?project_id={project_id}&company=works", message="تم تحصيل الدفعة بنجاح"), status_code=303)
+    except Exception:
+        conn.rollback()
+        logger.exception("Failed to collect project payment")
+        return HTMLResponse("تعذر تحصيل الدفعة", status_code=500)
+    finally:
+        conn.close()
 
-    return RedirectResponse(
-        url=build_redirect_url(
-            f"/project-expenses?project_id={project_id}&company={company}",
-            message="تم حفظ التحصيل بنجاح",
-        ),
-        status_code=303,
-    )
+
+@app.post("/save-project-collection")
+def save_project_collection_legacy(request: Request):
+    return HTMLResponse("يرجى اختيار دفعة من شاشة تحصيل الدفعات", status_code=400)
 
 
 @app.get("/project-expenses-report")
@@ -21765,3 +21887,4 @@ from client_portal import register_client_portal
 register_client_portal(app)
 register_featured_projects(app, templates)
 register_assets_custody(app)
+

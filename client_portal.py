@@ -524,8 +524,10 @@ def _project_context(conn, project_id, client_user_id=None):
                 images.append(image_item)
         receipt_data.append((receipt, items, images))
     collections = conn.execute("SELECT COALESCE(SUM(amount),0) total FROM project_collections WHERE project_id=? AND COALESCE(collection_status,'') NOT IN ('ملغي','ملغاة')", (project_id,)).fetchone()["total"] or 0
-    from main import calculate_project_contract_total
+    from main import calculate_project_contract_total, works_payment_groups
     contract_value = calculate_project_contract_total(conn, project)
+    payment_groups = works_payment_groups(conn, project) if project["company"] == "works" else []
+    base_contract_value = payment_groups[0]["total"] if payment_groups else contract_value
     contract = conn.execute("SELECT * FROM contracts WHERE id=?", (project["contract_id"],)).fetchone() if project["contract_id"] else None
     quote = conn.execute("SELECT * FROM quotes WHERE id=?", (contract["quote_id"],)).fetchone() if contract and contract["quote_id"] else None
     approved_contract_statuses = {"ساري", "معتمد", "نشط", "active", "approved"}
@@ -539,12 +541,15 @@ def _project_context(conn, project_id, client_user_id=None):
             if _is_visible(controls, "contract_attachment", attachment["id"], True):
                 documents.append({"id": attachment["id"], "title": attachment["file_name"] or "مرفق العقد", "document_type": attachment["source_type"] or "contract", "file_path": f"/client-portal/attachment/{attachment['id']}", "created_at": attachment["uploaded_at"] or ""})
     appendices = conn.execute("SELECT * FROM contract_appendices WHERE project_id=? OR parent_contract_id=? ORDER BY id DESC", (project_id, project["contract_id"] or 0)).fetchall()
-    approved_appendix_statuses = {"معتمد", "مدفوع", "approved", "paid"}
+    approved_appendix_statuses = {"ساري", "معتمد", "مدفوع", "approved", "paid"}
+    visible_appendix_ids = set()
     for appendix in appendices:
         appendix_approved = (appendix["status"] or "").strip().lower() in {s.lower() for s in approved_appendix_statuses}
         if _is_visible(controls, "appendix", appendix["id"], appendix_approved):
+            visible_appendix_ids.add(appendix["id"])
             title = appendix["short_description"] or f"ملحق عقد رقم {appendix['id']}"
             documents.append({"id": appendix["id"], "title": title, "document_type": "appendix", "file_path": f"/client-portal/appendix/{appendix['id']}", "created_at": f"{appendix['status'] or ''} · {float(appendix['total'] or 0):,.0f} ر.س"})
+    payment_groups = [group for group in payment_groups if not group["appendix_id"] or group["appendix_id"] in visible_appendix_ids]
     flexibility_rate = settings["timeline_flexibility_rate"] if "timeline_flexibility_rate" in settings.keys() else 30
     progress_details = _progress_details(
         project, contract, quote, appendices, phases,
@@ -557,14 +562,14 @@ def _project_context(conn, project_id, client_user_id=None):
         due_progress_threshold = 0.0
         for payment in quote_payments:
             percentage = float(payment["percentage"] or 0)
-            amount = contract_value * percentage / 100
+            amount = base_contract_value * percentage / 100
             title = payment["title"] or "دفعة تعاقدية"
             if _is_visible(controls, "payment", payment["id"], True):
                 payments.append({
                     "id": payment["id"], "title": title, "percentage": percentage,
                     "amount": amount, "due_reason": title,
                     "status": _payment_status(
-                        amount, paid_cursor, float(collections),
+                        amount, paid_cursor, payment_groups[0]["paid"] if payment_groups else float(collections),
                         progress_details["timeline_progress"], due_progress_threshold,
                     ),
                 })
@@ -579,6 +584,7 @@ def _project_context(conn, project_id, client_user_id=None):
             documents.append(dict(manual_doc))
     next_payment = next((p for p in payments if p["status"] not in {"paid"}), None)
     return dict(project=project, settings=settings, phases=phases, daily=daily, payments=payments,
+                payment_groups=payment_groups,
                 documents=documents, requests=requests, request_attachments=request_attachments, receipts=receipt_data, **progress_details,
                 contract_value=contract_value, paid=float(collections), remaining=max(0, contract_value-float(collections)),
                 next_payment=next_payment)
