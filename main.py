@@ -7868,6 +7868,63 @@ def company_page(request: Request, company: str):
 # المشاريع
 # ======================
 
+def works_running_payment_cards(conn):
+    """Summarize running works projects using the shared accountant/client schedule."""
+    cards = []
+    projects = conn.execute(
+        "SELECT * FROM projects WHERE company='works' AND TRIM(status)='جاري' ORDER BY id DESC"
+    ).fetchall()
+    for project in projects:
+        groups = works_payment_groups(conn, project)
+        payments = [(group, payment) for group in groups for payment in group["payments"]]
+        next_payment = next(((group, payment) for group, payment in payments if payment["status"] != "paid"), None)
+        paid = sum(group["paid"] for group in groups)
+        cards.append({
+            "project": project,
+            "total": calculate_project_contract_total(conn, project),
+            "paid": paid,
+            "payments": payments,
+            "next_payment": next_payment,
+            "remaining_count": sum(payment["status"] != "paid" for _, payment in payments),
+        })
+    cards.sort(key=lambda card: card["next_payment"] is None)
+    return cards
+
+
+def render_works_running_payment_cards(cards):
+    def payment_line(group, payment, next_payment):
+        is_paid = payment["status"] == "paid"
+        is_next = next_payment is not None and next_payment[1] is payment
+        if not (is_paid or is_next):
+            return ""
+        source = "العقد الأساسي" if group["source"] == "contract" else f"ملحق: {group['subtitle'] or group['name']}"
+        detail = ""
+        if payment["status"] == "partial":
+            detail = f'<small>المحصل {format_currency(payment["paid"])} ريال · المتبقي {format_currency(payment["remaining"])} ريال</small>'
+        label = "مُحصلة" if is_paid else "الدفعة القادمة"
+        tone = "paid" if is_paid else "next"
+        return (f'<li class="running-payment {tone}"><span class="payment-mark" aria-hidden="true">●</span>'
+                f'<span class="payment-copy"><strong>{escape(payment["title"] or "دفعة")}</strong>'
+                f'<small>{escape(source)}</small>{detail}</span>'
+                f'<span class="payment-amount">{format_currency(payment["amount"])} ريال<small>{label}</small></span></li>')
+
+    articles = []
+    for card in cards:
+        project = card["project"]
+        lines = "".join(payment_line(group, payment, card["next_payment"]) for group, payment in card["payments"])
+        articles.append(f'''<article class="running-card">
+            <h3>{escape(project["name"] or "مشروع")}</h3>
+            <div class="running-totals"><div>إجمالي قيمة المشروع<strong>{format_currency(card["total"])} ريال</strong></div>
+            <div>إجمالي المبلغ المحصل<strong class="paid-text">{format_currency(card["paid"])} ريال</strong></div>
+            <div>المبلغ المتبقي<strong class="remaining-text">{format_currency(card["total"]-card["paid"])} ريال</strong></div></div>
+            <div class="running-count">عدد الدفعات المتبقية: <strong>{card["remaining_count"]}</strong></div>
+            <ul class="running-payments">{lines}</ul>
+        </article>''')
+    return f'''<section class="running-section" aria-labelledby="running-payments-title">
+        <h2 id="running-payments-title">دفعات المشاريع الجارية</h2>
+        <div class="running-grid">{"".join(articles) if articles else '<p>لا توجد مشاريع جارية.</p>'}</div>
+    </section>'''
+
 @app.get("/projects", response_class=HTMLResponse)
 def projects_page(request: Request, company: str = ""):
     user = getattr(request.state, "current_user", None) or get_current_user(request)
@@ -7885,6 +7942,15 @@ def projects_page(request: Request, company: str = ""):
         "SELECT * FROM projects WHERE company = ?",
         (company,)
     ).fetchall()
+    can_view_works_payments = company == "works" and (
+        is_admin(access_result)
+        or access_result["role"] == "accountant"
+        or (access_result["role"] in ("employee", "partner")
+            and user_has_company_access(access_result["id"], "works", "expenses"))
+    )
+    running_payment_cards_html = render_works_running_payment_cards(
+        works_running_payment_cards(conn)
+    ) if can_view_works_payments else ""
     conn.close()
 
     rows = ""
@@ -7920,11 +7986,32 @@ def projects_page(request: Request, company: str = ""):
     return f"""
 <meta charset="UTF-8">
 <link rel="stylesheet" href="/static/style.css">
+<style>
+.running-section{{margin:20px auto 28px;max-width:1100px;text-align:right;color:#edf2f7}}
+.running-section h2{{font-size:1.35rem;margin:0 0 14px}}
+.running-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr));gap:14px}}
+.running-card{{background:#172433;border:1px solid #354557;border-radius:14px;padding:18px;min-width:0}}
+.running-card h3{{margin:0 0 14px;font-size:1.12rem;color:#fff}}
+.running-totals{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}}
+.running-totals div{{font-size:.78rem;color:#b9c7d4;line-height:1.5}}
+.running-totals strong{{display:block;color:#fff;font-size:.95rem;overflow-wrap:anywhere}}
+.running-totals .paid-text,.running-payment.paid .payment-mark{{color:#55d79a}}
+.running-totals .remaining-text{{color:#ffb7a8}}
+.running-count{{font-size:.85rem;margin:14px 0 8px;color:#c8d5df}}
+.running-payments{{list-style:none;margin:0;padding:0;display:grid;gap:7px}}
+.running-payment{{display:flex;align-items:flex-start;gap:9px;background:#203040;border-radius:9px;padding:9px;font-size:.86rem}}
+.running-payment.next .payment-mark,.running-payment.next .payment-amount small{{color:#e8bf62}}
+.payment-copy{{flex:1;min-width:0}}.payment-copy small,.payment-amount small{{display:block;color:#aebfcc;font-size:.76rem}}
+.payment-amount{{text-align:left;white-space:nowrap}}.payment-mark{{line-height:1.2}}
+@media(max-width:650px){{.running-totals{{grid-template-columns:1fr 1fr}}.running-card{{padding:14px}}}}
+</style>
 <body class="system-dark">
 {HOME_BUTTON}
 <div class="dashboard">
 
 <h1>المشاريع</h1>
+
+{running_payment_cards_html}
 
 {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
 
