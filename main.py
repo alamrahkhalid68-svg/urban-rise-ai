@@ -7875,13 +7875,15 @@ def works_running_payment_cards(conn):
         "SELECT * FROM projects WHERE company='works' AND TRIM(status)='جاري' ORDER BY id DESC"
     ).fetchall()
     for project in projects:
-        groups = works_payment_groups(conn, project)
+        groups = [group for group in works_payment_groups(conn, project)
+                  if group["source"] == "contract"
+                  or (group["appendix"]["status"] or "").strip() in ("", "ساري")]
         payments = [(group, payment) for group in groups for payment in group["payments"]]
         next_payment = next(((group, payment) for group, payment in payments if payment["status"] != "paid"), None)
         paid = sum(group["paid"] for group in groups)
         cards.append({
             "project": project,
-            "total": calculate_project_contract_total(conn, project),
+            "total": sum(group["total"] for group in groups),
             "paid": paid,
             "payments": payments,
             "next_payment": next_payment,
@@ -7892,18 +7894,17 @@ def works_running_payment_cards(conn):
 
 
 def render_works_running_payment_cards(cards):
-    def payment_line(group, payment, next_payment):
+    def payment_line(group, payment):
         is_paid = payment["status"] == "paid"
-        is_next = next_payment is not None and next_payment[1] is payment
-        if not (is_paid or is_next):
-            return ""
-        source = "العقد الأساسي" if group["source"] == "contract" else f"ملحق: {group['subtitle'] or group['name']}"
+        is_partial = payment["status"] == "partial"
+        source = "العقد الأساسي" if group["source"] == "contract" else f"ملحق: {group['appendix']['short_description'] or group['name']}"
         detail = ""
-        if payment["status"] == "partial":
+        if is_partial:
             detail = f'<small>المحصل {format_currency(payment["paid"])} ريال · المتبقي {format_currency(payment["remaining"])} ريال</small>'
-        label = "مُحصلة" if is_paid else "الدفعة القادمة"
-        tone = "paid" if is_paid else "next"
-        return (f'<li class="running-payment {tone}"><span class="payment-mark" aria-hidden="true">●</span>'
+        label = "مُحصلة" if is_paid else "مُحصلة جزئيًا" if is_partial else "الدفعة القادمة"
+        tone = "paid" if is_paid else "partial" if is_partial else "next"
+        mark = "✓" if is_paid else "◔" if is_partial else "◷"
+        return (f'<li class="running-payment {tone}"><span class="payment-mark" aria-hidden="true">{mark}</span>'
                 f'<span class="payment-copy"><strong>{escape(payment["title"] or "دفعة")}</strong>'
                 f'<small>{escape(source)}</small>{detail}</span>'
                 f'<span class="payment-amount">{format_currency(payment["amount"])} ريال<small>{label}</small></span></li>')
@@ -7911,7 +7912,7 @@ def render_works_running_payment_cards(cards):
     articles = []
     for card in cards:
         project = card["project"]
-        lines = "".join(payment_line(group, payment, card["next_payment"]) for group, payment in card["payments"])
+        lines = "".join(payment_line(group, payment) for group, payment in card["payments"])
         articles.append(f'''<article class="running-card">
             <h3>{escape(project["name"] or "مشروع")}</h3>
             <div class="running-totals"><div>إجمالي قيمة المشروع<strong>{format_currency(card["total"])} ريال</strong></div>
@@ -7995,13 +7996,20 @@ def projects_page(request: Request, company: str = ""):
 .running-totals{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}}
 .running-totals div{{font-size:.78rem;color:#b9c7d4;line-height:1.5}}
 .running-totals strong{{display:block;color:#fff;font-size:.95rem;overflow-wrap:anywhere}}
-.running-totals .paid-text,.running-payment.paid .payment-mark{{color:#55d79a}}
+.running-totals .paid-text{{color:#55d79a}}
 .running-totals .remaining-text{{color:#ffb7a8}}
 .running-count{{font-size:.85rem;margin:14px 0 8px;color:#c8d5df}}
 .running-payments{{list-style:none;margin:0;padding:0;display:grid;gap:7px}}
-.running-payment{{display:flex;align-items:flex-start;gap:9px;background:#203040;border-radius:9px;padding:9px;font-size:.86rem}}
-.running-payment.next .payment-mark,.running-payment.next .payment-amount small{{color:#e8bf62}}
+.running-payment{{display:flex;align-items:flex-start;gap:9px;border:1px solid transparent;border-radius:9px;padding:10px;font-size:.86rem;color:#fff}}
+.running-payment.paid{{background:#173d32;border-color:#419f72}}
+.running-payment.next{{background:#493b1d;border-color:#c49d45}}
+.running-payment.partial{{background:#50331f;border-color:#d38b4c}}
+.running-payment.paid .payment-mark{{color:#75e6a5}}
+.running-payment.next .payment-mark{{color:#f6d275}}
+.running-payment.partial .payment-mark{{color:#ffb77c}}
+.running-payment .payment-mark{{font-weight:800;font-size:1.1rem;min-width:1.2rem}}
 .payment-copy{{flex:1;min-width:0}}.payment-copy small,.payment-amount small{{display:block;color:#aebfcc;font-size:.76rem}}
+.running-payment .payment-copy small,.running-payment .payment-amount small{{color:#e1e7e8}}
 .payment-amount{{text-align:left;white-space:nowrap}}.payment-mark{{line-height:1.2}}
 @media(max-width:650px){{.running-totals{{grid-template-columns:1fr 1fr}}.running-card{{padding:14px}}}}
 </style>
