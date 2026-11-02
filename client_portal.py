@@ -567,10 +567,12 @@ def _project_context(conn, project_id, client_user_id=None):
         if _is_visible(controls, "portal_document", manual_doc["id"], True):
             documents.append(dict(manual_doc))
     next_payment = next((p for p in payments if p["status"] not in {"paid"}), None)
+    from decimal import Decimal
+    paid_value = Decimal(str(collections)) if isinstance(contract_value, Decimal) else float(collections)
     return dict(project=project, settings=settings, phases=phases, daily=daily, payments=payments,
                 payment_groups=payment_groups,
                 documents=documents, requests=requests, request_attachments=request_attachments, receipts=receipt_data, **progress_details,
-                contract_value=contract_value, paid=float(collections), remaining=max(0, contract_value-float(collections)),
+                contract_value=contract_value, paid=paid_value, remaining=max(0, contract_value-paid_value),
                 next_payment=next_payment)
 
 
@@ -680,7 +682,8 @@ def register_client_portal(app):
         conn=get_db(); contract=conn.execute("SELECT * FROM contracts WHERE id=?",(contract_id,)).fetchone()
         project=conn.execute("SELECT * FROM projects WHERE contract_id=? OR id=? LIMIT 1",(contract_id,contract["manual_project_id"] if contract else 0)).fetchone() if contract else None
         if not contract or not project or not can_view_project_document(request,conn,project["id"]): conn.close(); return HTMLResponse("غير مصرح",403)
-        quote=conn.execute("SELECT * FROM quotes WHERE id=?",(contract["quote_id"],)).fetchone(); items=conn.execute("SELECT * FROM quote_items WHERE quote_id=?",(contract["quote_id"],)).fetchall(); payments=conn.execute("SELECT * FROM quote_payments WHERE quote_id=?",(contract["quote_id"],)).fetchall(); conn.close()
+        from main import contract_source_rows
+        quote=conn.execute("SELECT * FROM quotes WHERE id=?",(contract["quote_id"],)).fetchone(); items,payments=contract_source_rows(conn,contract); conn.close()
         from main import build_contract_report_pdf
         path,name=build_contract_report_pdf(contract,quote,items,payments,contract["company"] or "",project)
         return FileResponse(path,filename=name,media_type="application/pdf")
@@ -705,7 +708,9 @@ def register_client_portal(app):
         source_contract = conn.execute("SELECT * FROM contracts WHERE id=?", (context["project"]["contract_id"],)).fetchone() if context["project"]["contract_id"] else None
         source_appendices = conn.execute("SELECT * FROM contract_appendices WHERE project_id=? OR parent_contract_id=? ORDER BY id DESC", (project_id, context["project"]["contract_id"] or 0)).fetchall()
         source_receipts = conn.execute("SELECT * FROM client_material_receipts WHERE project_id=? ORDER BY id DESC", (project_id,)).fetchall()
-        source_payments = conn.execute("SELECT * FROM quote_payments WHERE quote_id=? ORDER BY id", (source_contract["quote_id"],)).fetchall() if source_contract and source_contract["quote_id"] else []
+        from main import contract_source_rows
+        source_payments = contract_source_rows(conn, source_contract)[1] if source_contract and source_contract["quote_id"] else []
+        source_payments = [dict(p, id=p["source_payment_id"] if "source_payment_id" in p.keys() else p["id"]) for p in source_payments]
         controls = _controls(conn, project_id)
         clients = conn.execute("""SELECT u.*,a.portal_enabled,a.portal_published FROM users u JOIN client_project_access a ON a.user_id=u.id WHERE a.project_id=? ORDER BY u.id""", (project_id,)).fetchall()
         created_credentials = getattr(request.state, "client_created_credentials", None)
