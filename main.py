@@ -652,6 +652,44 @@ CREATE TABLE IF NOT EXISTS project_expenses (
 )
 """)
 
+# اتفاقات مقاولي الباطن: المبالغ بالهللة، والدفعات سجل مستقل.
+conn.execute("""CREATE TABLE IF NOT EXISTS subcontractor_agreements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    contractor_name TEXT NOT NULL,
+    specialty TEXT NOT NULL,
+    work_description TEXT NOT NULL,
+    amount_halalas INTEGER NOT NULL CHECK (amount_halalas > 0),
+    notes TEXT NOT NULL DEFAULT '',
+    created_by_user_id INTEGER,
+    created_at TEXT NOT NULL
+)""")
+conn.execute("""CREATE TABLE IF NOT EXISTS subcontractor_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agreement_id INTEGER NOT NULL REFERENCES subcontractor_agreements(id),
+    amount_halalas INTEGER NOT NULL CHECK (amount_halalas > 0),
+    payment_date TEXT NOT NULL,
+    payment_method TEXT NOT NULL,
+    reference_note TEXT NOT NULL DEFAULT '',
+    created_by_user_id INTEGER,
+    created_at TEXT NOT NULL
+)""")
+conn.execute("CREATE INDEX IF NOT EXISTS idx_subcontractor_agreements_project ON subcontractor_agreements(project_id)")
+conn.execute("CREATE INDEX IF NOT EXISTS idx_subcontractor_payments_agreement ON subcontractor_payments(agreement_id)")
+conn.execute("""CREATE TRIGGER IF NOT EXISTS subcontractor_no_paid_delete
+    BEFORE DELETE ON subcontractor_agreements
+    WHEN EXISTS (SELECT 1 FROM subcontractor_payments WHERE agreement_id=OLD.id)
+    BEGIN SELECT RAISE(ABORT, 'agreement has payments'); END""")
+conn.execute("""CREATE TRIGGER IF NOT EXISTS subcontractor_no_underpaid_update
+    BEFORE UPDATE OF amount_halalas ON subcontractor_agreements
+    WHEN NEW.amount_halalas < (SELECT COALESCE(SUM(amount_halalas),0) FROM subcontractor_payments WHERE agreement_id=OLD.id)
+    BEGIN SELECT RAISE(ABORT, 'agreement below paid amount'); END""")
+conn.execute("""CREATE TRIGGER IF NOT EXISTS subcontractor_no_overpayment
+    BEFORE INSERT ON subcontractor_payments
+    WHEN NEW.amount_halalas > (SELECT amount_halalas FROM subcontractor_agreements WHERE id=NEW.agreement_id)
+        - (SELECT COALESCE(SUM(amount_halalas),0) FROM subcontractor_payments WHERE agreement_id=NEW.agreement_id)
+    BEGIN SELECT RAISE(ABORT, 'payment exceeds remaining'); END""")
+
 conn.execute("""
 CREATE TABLE IF NOT EXISTS project_collections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2146,6 +2184,24 @@ def to_halalas(value) -> int:
 
 def from_halalas(value) -> Decimal:
     return Decimal(int(value or 0)) / Decimal("100")
+
+
+def subcontractor_totals(conn, project_id):
+    row = conn.execute("""SELECT COALESCE(SUM(a.amount_halalas), 0) AS committed,
+        COALESCE(SUM(p.paid), 0) AS paid
+        FROM subcontractor_agreements a
+        LEFT JOIN (SELECT agreement_id, SUM(amount_halalas) AS paid
+                   FROM subcontractor_payments GROUP BY agreement_id) p ON p.agreement_id = a.id
+        WHERE a.project_id = ?""", (project_id,)).fetchone()
+    return int(row["committed"]), int(row["paid"])
+
+
+def subcontractor_agreement_rows(conn, project_id):
+    return conn.execute("""SELECT a.*, COALESCE(p.paid, 0) AS paid_halalas
+        FROM subcontractor_agreements a
+        LEFT JOIN (SELECT agreement_id, SUM(amount_halalas) AS paid
+                   FROM subcontractor_payments GROUP BY agreement_id) p ON p.agreement_id = a.id
+        WHERE a.project_id = ? ORDER BY a.id DESC""", (project_id,)).fetchall()
 
 
 def quote_v3_item_rows(conn, quote_id):
@@ -3850,7 +3906,12 @@ def build_project_financial_snapshot(conn, project_row):
     contract_value = calculate_project_contract_total(conn, project_row)
     precise_contract = isinstance(contract_value, Decimal)
     total_expenses = sum((decimal_from_value(expense["amount"]) if precise_contract else safe_float(expense["amount"]) for expense in expenses), Decimal("0") if precise_contract else 0.0)
-    profit = contract_value - total_expenses
+    committed_halalas, contractor_paid_halalas = subcontractor_totals(conn, project_row["id"]) if project_row["company"] == "works" else (0, 0)
+    # دفعات المقاول لا تُضاف إلى المصروفات؛ قيمة الاتفاق تُحتسب مرة واحدة.
+    committed_cost = decimal_from_value(total_expenses) + from_halalas(committed_halalas)
+    calculated_profit = decimal_from_value(contract_value) - committed_cost
+    total_expenses = committed_cost if precise_contract else float(committed_cost)
+    profit = calculated_profit if precise_contract else float(calculated_profit)
     profit_percentage = (profit / contract_value * 100) if contract_value > 0 else 0.0
     duration_days = parse_project_duration_days(project_row, quote)
     area = safe_float(project_row["area"]) if project_row["area"] not in (None, "") else 0.0
@@ -3869,6 +3930,8 @@ def build_project_financial_snapshot(conn, project_row):
         "area": area,
         "contract_value": contract_value,
         "total_expenses": total_expenses,
+        "subcontractor_committed": from_halalas(committed_halalas),
+        "subcontractor_paid": from_halalas(contractor_paid_halalas),
         "profit": profit,
         "profit_percentage": profit_percentage,
         "price_per_m2": price_per_m2,
@@ -11366,6 +11429,143 @@ def project_dashboard(request: Request, project_id: int, company: str = ""):
 </script>
 '''
 
+SUBCONTRACTOR_SPECIALTIES = ("كهرباء", "سباكة", "دهان", "جبس", "بلاط", "ديكور", "ألمنيوم", "حدادة", "تكييف", "غيره")
+
+
+def render_subcontractor_section(agreements, payments_by_agreement, project_id, can_write):
+    options = "".join(f'<option value="{escape(s)}">{escape(s)}</option>' for s in SUBCONTRACTOR_SPECIALTIES)
+    cards = []
+    for a in agreements:
+        paid = int(a["paid_halalas"])
+        remaining = a["amount_halalas"] - paid
+        status = "مدفوع بالكامل" if remaining == 0 else ("مدفوع جزئيًا" if paid else "غير مدفوع")
+        color = "#22c55e" if remaining == 0 else ("#f59e0b" if paid else "#ef4444")
+        history = "".join(f'<li>{escape(p["payment_date"])} — {format_currency(from_halalas(p["amount_halalas"]))} ريال — {escape(p["payment_method"])} {escape(p["reference_note"] or "")}</li>' for p in payments_by_agreement[a["id"]])
+        controls = ""
+        if can_write:
+            controls = f'''<details><summary>تسجيل دفعة</summary><form method="post" action="/subcontractor-payment" class="expense-form">
+                <input type="hidden" name="project_id" value="{project_id}"><input type="hidden" name="agreement_id" value="{a['id']}">
+                <label>مبلغ الدفعة <input name="amount" type="number" min="0.01" max="{from_halalas(remaining)}" step="0.01" required></label>
+                <label>تاريخ الدفعة <input name="payment_date" type="date" value="{date.today().isoformat()}" required></label>
+                <label>طريقة الدفع <select name="payment_method" required><option value="تحويل بنكي">تحويل بنكي</option><option value="نقدًا">نقدًا</option><option value="بطاقة">بطاقة</option><option value="شيك">شيك</option><option value="غيره">غيره</option></select></label>
+                <label>رقم المرجع أو ملاحظة <input name="reference_note"></label><button class="glass-btn" type="submit">حفظ الدفعة</button></form></details>''' if remaining else ""
+            controls += f'''<details><summary>تعديل الاتفاق</summary><form method="post" action="/subcontractor-agreement/{a['id']}/edit" class="expense-form">
+                <input type="hidden" name="project_id" value="{project_id}"><label>اسم المقاول <input name="contractor_name" value="{escape(a['contractor_name'])}" required></label>
+                <label>التخصص <select name="specialty">{''.join(f'<option value="{escape(s)}" {"selected" if s == a["specialty"] else ""}>{escape(s)}</option>' for s in SUBCONTRACTOR_SPECIALTIES)}</select></label>
+                <label>بيان العمل <input name="work_description" value="{escape(a['work_description'])}" required></label>
+                <label>قيمة الاتفاق <input name="amount" type="number" min="0.01" step="0.01" value="{from_halalas(a['amount_halalas'])}" required></label>
+                <label>ملاحظات <textarea name="notes">{escape(a['notes'])}</textarea></label><button class="glass-btn" type="submit">حفظ التعديل</button></form></details>
+                <form method="post" action="/subcontractor-agreement/{a['id']}/delete" onsubmit="return confirm('حذف الاتفاق؟')"><input type="hidden" name="project_id" value="{project_id}"><button type="submit" class="glass-btn">حذف الاتفاق</button></form>'''
+        cards.append(f'''<div class="inventory-panel inventory-table-panel" style="padding:18px;margin:12px 0">
+            <strong>{escape(a['contractor_name'])}</strong> — {escape(a['specialty'])}<br>{escape(a['work_description'])}<br>
+            قيمة الاتفاق: {format_currency(from_halalas(a['amount_halalas']))} ريال | المدفوع: {format_currency(from_halalas(paid))} ريال | المتبقي: {format_currency(from_halalas(remaining))} ريال
+            <strong style="color:{color}">{status}</strong><br>{escape(a['notes'] or '')}<ul>{history}</ul>{controls}</div>''')
+    add_form = f'''<details><summary class="glass-btn">إضافة اتفاق مقاول</summary><form method="post" action="/subcontractor-agreement" class="expense-form">
+        <input type="hidden" name="project_id" value="{project_id}"><label>اسم المقاول <input name="contractor_name" required></label>
+        <label>التخصص <select name="specialty">{options}</select></label><label>بيان العمل <input name="work_description" required></label>
+        <label>قيمة الاتفاق <input name="amount" type="number" min="0.01" step="0.01" required></label>
+        <label>ملاحظات <textarea name="notes"></textarea></label><button class="glass-btn" type="submit">حفظ الاتفاق</button></form></details>''' if can_write else ""
+    return f'<section class="inventory-table-panel expense-table-panel" style="padding:18px"><h2>اتفاقات المقاولين بالباطن</h2>{add_form}{"".join(cards) or "<p>لا توجد اتفاقات مسجلة.</p>"}</section>'
+
+
+def subcontractor_guard(request, project_id):
+    user = ensure_employee_section_access(request, "works", "expenses")
+    if not isinstance(user, sqlite3.Row):
+        return user, None
+    if not (is_admin(user) or is_employee(user)):
+        return access_denied_response("ليس لديك صلاحية إدارة اتفاقات المقاولين"), None
+    write_guard = ensure_not_works_partner_write(user, "works")
+    if not isinstance(write_guard, sqlite3.Row):
+        return write_guard, None
+    conn = get_db()
+    project = conn.execute("SELECT id FROM projects WHERE id=? AND company='works'", (project_id,)).fetchone()
+    if not project:
+        conn.close()
+        return HTMLResponse("المشروع غير موجود", status_code=404), None
+    return user, conn
+
+
+def subcontractor_error(message, status=400):
+    return HTMLResponse(escape(message), status_code=status)
+
+
+def subcontractor_money(value):
+    amount = decimal_from_value(value)
+    if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2:
+        raise ValueError("المبلغ يجب أن يكون موجبًا وبحد أقصى منزلتين عشريتين")
+    return to_halalas(amount)
+
+
+@app.post("/subcontractor-agreement")
+def add_subcontractor_agreement(request: Request, project_id: int = Form(...), contractor_name: str = Form(...), specialty: str = Form(...), work_description: str = Form(...), amount: str = Form(...), notes: str = Form("")):
+    actor, conn = subcontractor_guard(request, project_id)
+    if conn is None: return actor
+    try:
+        if not contractor_name.strip() or not work_description.strip() or specialty not in SUBCONTRACTOR_SPECIALTIES: raise ValueError("بيانات الاتفاق غير صحيحة")
+        cents = subcontractor_money(amount)
+        conn.execute("INSERT INTO subcontractor_agreements(project_id,contractor_name,specialty,work_description,amount_halalas,notes,created_by_user_id,created_at) VALUES(?,?,?,?,?,?,?,?)", (project_id, contractor_name.strip(), specialty, work_description.strip(), cents, notes.strip(), actor["id"], datetime.now().isoformat()))
+        conn.commit()
+        return RedirectResponse(f"/project-expenses?project_id={project_id}&company=works", status_code=303)
+    except (ValueError, sqlite3.IntegrityError) as exc: return subcontractor_error(str(exc))
+    finally: conn.close()
+
+
+@app.post("/subcontractor-payment")
+def add_subcontractor_payment(request: Request, project_id: int = Form(...), agreement_id: int = Form(...), amount: str = Form(...), payment_date: str = Form(...), payment_method: str = Form(...), reference_note: str = Form("")):
+    actor, conn = subcontractor_guard(request, project_id)
+    if conn is None: return actor
+    try:
+        cents = subcontractor_money(amount)
+        date.fromisoformat(payment_date)
+        if payment_method not in ("تحويل بنكي", "نقدًا", "بطاقة", "شيك", "غيره"): raise ValueError("طريقة الدفع غير صحيحة")
+        conn.execute("BEGIN IMMEDIATE")
+        a = conn.execute("SELECT amount_halalas FROM subcontractor_agreements WHERE id=? AND project_id=?", (agreement_id, project_id)).fetchone()
+        if not a: return subcontractor_error("الاتفاق غير موجود", 404)
+        paid = conn.execute("SELECT COALESCE(SUM(amount_halalas),0) FROM subcontractor_payments WHERE agreement_id=?", (agreement_id,)).fetchone()[0]
+        if cents > a["amount_halalas"] - paid: return subcontractor_error("الدفعة أكبر من المتبقي", 409)
+        existing_expense = conn.execute("""SELECT 1 FROM project_expenses e
+            JOIN subcontractor_agreements a ON a.project_id=e.project_id AND a.contractor_name=e.vendor
+            WHERE a.id=? AND e.date=? AND e.payment_status='مدفوع' AND ROUND(e.amount*100)=? LIMIT 1""", (agreement_id, payment_date, cents)).fetchone()
+        if existing_expense: return subcontractor_error("هذه الدفعة مسجلة في المصروفات؛ لا يمكن تسجيلها مرة أخرى", 409)
+        conn.execute("INSERT INTO subcontractor_payments(agreement_id,amount_halalas,payment_date,payment_method,reference_note,created_by_user_id,created_at) VALUES(?,?,?,?,?,?,?)", (agreement_id, cents, payment_date, payment_method, reference_note.strip(), actor["id"], datetime.now().isoformat()))
+        conn.commit()
+        return RedirectResponse(f"/project-expenses?project_id={project_id}&company=works", status_code=303)
+    except (ValueError, sqlite3.IntegrityError) as exc: return subcontractor_error(str(exc))
+    finally: conn.close()
+
+
+@app.post("/subcontractor-agreement/{agreement_id}/edit")
+def edit_subcontractor_agreement(request: Request, agreement_id: int, project_id: int = Form(...), contractor_name: str = Form(...), specialty: str = Form(...), work_description: str = Form(...), amount: str = Form(...), notes: str = Form("")):
+    actor, conn = subcontractor_guard(request, project_id)
+    if conn is None: return actor
+    try:
+        if not contractor_name.strip() or not work_description.strip() or specialty not in SUBCONTRACTOR_SPECIALTIES: raise ValueError("بيانات الاتفاق غير صحيحة")
+        cents = subcontractor_money(amount)
+        conn.execute("BEGIN IMMEDIATE")
+        a = conn.execute("SELECT id FROM subcontractor_agreements WHERE id=? AND project_id=?", (agreement_id, project_id)).fetchone()
+        if not a: return subcontractor_error("الاتفاق غير موجود", 404)
+        paid = conn.execute("SELECT COALESCE(SUM(amount_halalas),0) FROM subcontractor_payments WHERE agreement_id=?", (agreement_id,)).fetchone()[0]
+        if cents < paid: return subcontractor_error("قيمة الاتفاق أقل من المدفوع", 409)
+        conn.execute("UPDATE subcontractor_agreements SET contractor_name=?,specialty=?,work_description=?,amount_halalas=?,notes=? WHERE id=?", (contractor_name.strip(), specialty, work_description.strip(), cents, notes.strip(), agreement_id))
+        conn.commit()
+        return RedirectResponse(f"/project-expenses?project_id={project_id}&company=works", status_code=303)
+    except (ValueError, sqlite3.IntegrityError) as exc: return subcontractor_error(str(exc))
+    finally: conn.close()
+
+
+@app.post("/subcontractor-agreement/{agreement_id}/delete")
+def delete_subcontractor_agreement(request: Request, agreement_id: int, project_id: int = Form(...)):
+    actor, conn = subcontractor_guard(request, project_id)
+    if conn is None: return actor
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM subcontractor_payments WHERE agreement_id=? LIMIT 1", (agreement_id,)).fetchone(): return subcontractor_error("لا يمكن حذف اتفاق عليه دفعات", 409)
+        conn.execute("DELETE FROM subcontractor_agreements WHERE id=? AND project_id=?", (agreement_id, project_id))
+        conn.commit()
+        return RedirectResponse(f"/project-expenses?project_id={project_id}&company=works", status_code=303)
+    finally: conn.close()
+
+
 @app.get("/project-expenses", response_class=HTMLResponse)
 def project_expenses(request: Request, project_id: int, company: str = ""):
     access_result = ensure_employee_section_access(request, company, "expenses")
@@ -11410,6 +11610,11 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
         (project_id,)
     ).fetchall()
     is_works_company_page = normalize_access_value(company) == "works"
+    agreement_rows = subcontractor_agreement_rows(conn, project_id) if is_works_company_page else []
+    agreement_payments = {row["id"]: conn.execute(
+        "SELECT * FROM subcontractor_payments WHERE agreement_id = ? ORDER BY payment_date DESC, id DESC", (row["id"],)
+    ).fetchall() for row in agreement_rows}
+    committed_halalas, contractor_paid_halalas = subcontractor_totals(conn, project_id) if is_works_company_page else (0, 0)
     collections = []
     if is_works_company_page:
         collections = conn.execute(
@@ -11425,8 +11630,9 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
     precise_project = isinstance(contract_total, Decimal)
     collected_amount = sum((decimal_from_value(collection["amount"]) if precise_project else safe_float(collection["amount"]) for collection in collections if (collection["collection_status"] or "") not in ("ملغي", "ملغاة")), Decimal("0") if precise_project else 0.0)
     expenses_sum = sum((decimal_from_value(e["amount"]) if precise_project else safe_float(e["amount"]) for e in expenses), Decimal("0") if precise_project else 0.0)
-    remaining = contract_total - expenses_sum
-    spend_ratio = (expenses_sum / contract_total * 100) if contract_total > 0 else 0.0
+    committed_cost = decimal_from_value(expenses_sum) + from_halalas(committed_halalas)
+    remaining = decimal_from_value(contract_total) - committed_cost
+    spend_ratio = (committed_cost / decimal_from_value(contract_total) * 100) if contract_total > 0 else Decimal("0")
     feedback_html = render_page_feedback(
         request.query_params.get("message", ""),
         request.query_params.get("error", ""),
@@ -11450,6 +11656,7 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
     project_name = escape(project["name"] or f"مشروع رقم {project_id}") if project else f"مشروع رقم {project_id}"
     summary_remaining_class = "finance-card-positive" if remaining >= 0 else "finance-card-negative"
     show_actions = not is_read_only_works_partner
+    contractor_section = render_subcontractor_section(agreement_rows, agreement_payments, project_id, show_actions and (is_admin(access_result) or is_employee(access_result))) if is_works_company_page else ""
     collection_payment_method_options = "".join(
         f'<option value="{escape(item)}">{escape(item)}</option>'
         for item in PROJECT_COLLECTION_PAYMENT_METHODS
@@ -11688,8 +11895,8 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
             <strong>{format_currency(contract_total)} ريال</strong>
         </div>
         <div class="finance-card finance-card-expense expense-summary-card expense-summary-card-expense">
-            <span>إجمالي المصروفات</span>
-            <strong>{format_currency(total)} ريال</strong>
+            <span>التكلفة الملتزم بها (المصروفات + الاتفاقات)</span>
+            <strong>{format_currency(committed_cost)} ريال</strong>
         </div>
         <div class="finance-card {summary_remaining_class} expense-summary-card expense-summary-card-remaining">
             <span>المتبقي</span>
@@ -11707,6 +11914,14 @@ def project_expenses(request: Request, project_id: int, company: str = ""):
             <strong>{spend_ratio:.1f}%</strong>
         </div>
     </div>
+
+    {f'''<div class="finance-summary-grid expense-summary-grid">
+        <div class="finance-card expense-summary-card"><span>إجمالي اتفاقات المقاولين</span><strong>{format_currency(from_halalas(committed_halalas))} ريال</strong></div>
+        <div class="finance-card expense-summary-card"><span>إجمالي المدفوع للمقاولين</span><strong>{format_currency(from_halalas(contractor_paid_halalas))} ريال</strong></div>
+        <div class="finance-card expense-summary-card"><span>إجمالي المستحق للمقاولين</span><strong>{format_currency(from_halalas(committed_halalas-contractor_paid_halalas))} ريال</strong></div>
+    </div>''' if is_works_company_page else ''}
+
+    {contractor_section}
 
     {project_expense_form_html}
     {project_collection_form_html}
@@ -11929,6 +12144,18 @@ def save_expense(
             ),
             status_code=303
         )
+    if company == "works" and payment_status.strip() == "مدفوع" and vendor.strip():
+        # دفعة مسجلة في سجل المقاول لا تُسجّل ثانية كمصروف مستقل.
+        check_conn = get_db()
+        try:
+            duplicate = check_conn.execute("""SELECT 1 FROM subcontractor_payments p
+                JOIN subcontractor_agreements a ON a.id=p.agreement_id
+                WHERE a.project_id=? AND a.contractor_name=? AND p.payment_date=?
+                  AND p.amount_halalas=? LIMIT 1""", (project_id, vendor.strip(), expense_date or date.today().isoformat(), to_halalas(amount))).fetchone()
+        finally:
+            check_conn.close()
+        if duplicate:
+            return subcontractor_error("هذه الدفعة مسجلة ضمن اتفاق المقاول ولا تُضاف إلى المصروفات مرة أخرى", 409)
     conn = get_db()
     attachment_path = save_project_expense_attachment(attachment)
     now_value = datetime.now().strftime("%Y-%m-%d %H:%M")
