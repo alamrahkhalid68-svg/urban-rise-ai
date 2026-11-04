@@ -6217,18 +6217,28 @@ def get_company_page_access(request: Request, company: str):
     if is_active_projects_project_manager(user):
         return RedirectResponse(url=get_role_landing_url(user), status_code=303)
     if is_employee(user) and company == "works":
-        access_result = ensure_employee_any_section_access(request, company, {"daily_log", "expenses"})
+        access_result = ensure_employee_any_section_access(request, company, {"daily_log", "expenses", "maintenance_cleaning", "maintenance_cleaning_accounts"})
     else:
         access_result = ensure_company_access(request, company)
     if not isinstance(access_result, sqlite3.Row):
         return access_result
     if is_owner(access_result) and company == "realestate":
         return RedirectResponse(url=get_role_landing_url(access_result), status_code=303)
+    if is_maintenance_cleaning_supervisor(access_result) or is_maintenance_cleaning_accountant(access_result):
+        return access_result
     if is_works_expenses_only_user(access_result, company):
         return RedirectResponse(url=get_works_expenses_landing_url(), status_code=303)
     if is_works_daily_log_only_employee(access_result, company):
         return RedirectResponse(url="/projects?company=works", status_code=303)
     return access_result
+
+
+def is_maintenance_cleaning_supervisor(user) -> bool:
+    return bool(user and is_employee(user) and "maintenance_cleaning" in get_employee_allowed_sections(user["id"], "works"))
+
+
+def is_maintenance_cleaning_accountant(user) -> bool:
+    return bool(user and is_employee(user) and "maintenance_cleaning_accounts" in get_employee_allowed_sections(user["id"], "works"))
 
 
 def render_works_sections_page(is_works_partner_read_only: bool = False) -> str:
@@ -6637,7 +6647,46 @@ def works_maintenance_cleaning_page(request: Request):
     access_result = get_company_page_access(request, "works")
     if not isinstance(access_result, sqlite3.Row):
         return access_result
-    return render_maintenance_cleaning_page(is_works_partner_user(access_result, "works"))
+    from maintenance_work_orders import migrate, STATUSES
+    conn = get_db()
+    try:
+        migrate(conn)
+        rows = conn.execute("""SELECT w.*, p.client_name FROM maintenance_cleaning_work_orders w
+            JOIN maintenance_cleaning_projects p ON p.id=w.project_id ORDER BY w.id DESC""").fetchall()
+    finally:
+        conn.close()
+    selected_date = request.query_params.get("date", "")
+    selected_type = request.query_params.get("service_type", "")
+    selected_status = request.query_params.get("status", "")
+    today = date.today().isoformat()
+    groups = {name: [] for name in ("أعمال جديدة", "تحتاج جدولة", "أعمال اليوم", "أعمال قادمة", "متأخرة", "جاري التنفيذ", "مكتملة بانتظار المراجعة", "مغلقة", "ملغاة")}
+    colors = {"جديد":"#3686d9", "يحتاج جدولة":"#d98727", "مجدول":"#4278d6", "الفريق في الطريق":"#9370db", "جاري التنفيذ":"#e6a23c", "مكتمل بانتظار المراجعة":"#43a88b", "مغلق":"#70927b", "ملغي":"#888"}
+    types = sorted({r["service_type"] for r in rows if r["service_type"]})
+    for row in rows:
+        if selected_date and (row["scheduled_at"] or "")[:10] != selected_date: continue
+        if selected_type and row["service_type"] != selected_type: continue
+        if selected_status and row["status"] != selected_status: continue
+        status, planned = row["status"], (row["scheduled_at"] or "")[:10]
+        if status == "جديد": group = "أعمال جديدة"
+        elif status == "يحتاج جدولة": group = "تحتاج جدولة"
+        elif status in ("مجدول", "الفريق في الطريق"):
+            group = "متأخرة" if planned and planned < today else ("أعمال اليوم" if planned == today else "أعمال قادمة")
+        elif status == "جاري التنفيذ": group = "جاري التنفيذ"
+        elif status == "مكتمل بانتظار المراجعة": group = "مكتملة بانتظار المراجعة"
+        elif status == "ملغي": group = "ملغاة"
+        else: group = "مغلقة"
+        badge = escape(status)
+        try:
+            appointment = datetime.fromisoformat(row['scheduled_at']).strftime('%d/%m/%Y، %H:%M') if row['scheduled_at'] else 'غير محدد'
+        except ValueError:
+            appointment = row['scheduled_at'] or 'غير محدد'
+        groups[group].append(f'''<a href="/maintenance-cleaning/work-order/{row['id']}" class="mc-card"><strong>{escape(row['client_name'] or '-')}</strong><span>{escape(row['service_type'] or '-')}</span><span>{escape(row['location'] or '-')}</span><span>الموعد: <bdi dir="ltr">{escape(appointment)}</bdi></span><span>الفريق: {escape(row['team'] or 'غير محدد')}</span><b style="background:{colors.get(status,'#777')}">{badge}</b></a>''')
+    sections = "".join(f'<section id="{ "mc-today" if name == "أعمال اليوم" else "mc-overdue" if name == "متأخرة" else "" }" class="mc-section {"mc-empty" if not cards else ""}"><h2>{name} <span>({len(cards)})</span></h2><div class="mc-grid">{"".join(cards) or "<p>لا توجد أعمال</p>"}</div></section>' for name, cards in groups.items())
+    indicators = f'<div class="mc-priority"><a href="#mc-today"><strong>{len(groups["أعمال اليوم"])}</strong><span>أعمال اليوم</span></a><a href="#mc-overdue"><strong>{len(groups["متأخرة"])}</strong><span>الأعمال المتأخرة</span></a></div>'
+    options = "".join(f'<option value="{escape(v)}" {"selected" if v==selected_type else ""}>{escape(v)}</option>' for v in types)
+    status_options = "".join(f'<option value="{escape(v)}" {"selected" if v==selected_status else ""}>{escape(v)}</option>' for v in STATUSES)
+    finance_link = '<a href="/maintenance-cleaning/finance">لوحة الحسابات</a>' if is_admin(access_result) else ''
+    return HTMLResponse(f'''<html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/maintenance-cleaning.css"><body class="system-dark mc-page mc-board"><main class="dashboard"><nav class="mc-top-nav" aria-label="تنقل الصيانة والنظافة"><a href="/company/works" aria-label="رجوع إلى أقسام شركة المقاولات"><span aria-hidden="true">←</span> رجوع</a><a href="/dashboard" aria-label="العودة إلى الرئيسية"><span aria-hidden="true">🏠</span> الرئيسية</a></nav><h1>تشغيل الصيانة والنظافة</h1>{indicators}<form method="get" class="mc-filters"><label>التاريخ<input type="date" name="date" value="{escape(selected_date)}"></label><label>نوع الخدمة<select name="service_type"><option value="">الكل</option>{options}</select></label><label>الحالة<select name="status"><option value="">الكل</option>{status_options}</select></label><button>تصفية</button><a href="/company/works/maintenance-cleaning">مسح</a></form>{sections}<nav class="mc-links"><a href="/maintenance-cleaning/quotes">عروض الأسعار</a><a href="/maintenance-cleaning/contracts">العقود</a><a href="/maintenance-cleaning/projects">أوامر العمل والمشاريع السابقة</a>{finance_link}</nav></main></body></html>''')
 
 
 @app.get("/maintenance-cleaning/quotes", response_class=HTMLResponse)
@@ -6675,10 +6724,12 @@ def maintenance_cleaning_quotes_page(request: Request):
 
     return f"""
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/maintenance-cleaning.css">
 <body class="system-dark">
 {HOME_BUTTON}
-<div class="dashboard">
+<div class="dashboard"><nav class="mc-top-nav" aria-label="تنقل الصيانة والنظافة"><a href="/company/works" aria-label="رجوع إلى أقسام شركة المقاولات"><span aria-hidden="true">←</span> رجوع</a><a href="/dashboard" aria-label="العودة إلى الرئيسية"><span aria-hidden="true">🏠</span> الرئيسية</a></nav>
     <h1>عروض أسعار الصيانة والنظافة</h1>
 
     {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
@@ -6714,10 +6765,12 @@ def maintenance_cleaning_new_quote_form(request: Request):
 
     return f"""
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/maintenance-cleaning.css">
 <body class="system-dark">
 {HOME_BUTTON}
-<div class="dashboard">
+<div class="dashboard"><nav class="mc-top-nav" aria-label="تنقل الصيانة والنظافة"><a href="/company/works" aria-label="رجوع إلى أقسام شركة المقاولات"><span aria-hidden="true">←</span> رجوع</a><a href="/dashboard" aria-label="العودة إلى الرئيسية"><span aria-hidden="true">🏠</span> الرئيسية</a></nav>
     <h2>إنشاء عرض سعر - الصيانة والنظافة</h2>
 
     <form action="/maintenance-cleaning/save-quote" method="post">
@@ -6910,10 +6963,12 @@ def maintenance_cleaning_quote_detail(request: Request, quote_id: int):
 
     return f"""
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/maintenance-cleaning.css">
 <body class="system-dark">
 {HOME_BUTTON}
-<div class="dashboard">
+<div class="dashboard"><nav class="mc-top-nav" aria-label="تنقل الصيانة والنظافة"><a href="/company/works" aria-label="رجوع إلى أقسام شركة المقاولات"><span aria-hidden="true">←</span> رجوع</a><a href="/dashboard" aria-label="العودة إلى الرئيسية"><span aria-hidden="true">🏠</span> الرئيسية</a></nav>
     <h1>عرض سعر الصيانة والنظافة</h1>
     <p>العميل: {escape(quote_row['client'] or '-')}</p>
     <p>نوع الخدمة: {escape(quote_row['service_type'] or '-')}</p>
@@ -7040,8 +7095,10 @@ def maintenance_cleaning_convert_to_contract(request: Request, quote_id: int):
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
 
+    from maintenance_work_orders import migrate, create_from_quote
     conn = get_db()
     try:
+        migrate(conn)
         quote_row = conn.execute(
             "SELECT * FROM maintenance_cleaning_quotes WHERE id = ?",
             (quote_id,),
@@ -7069,7 +7126,7 @@ def maintenance_cleaning_convert_to_contract(request: Request, quote_id: int):
             )
 
         items = conn.execute(
-            "SELECT qty, unit_price FROM maintenance_cleaning_quote_items WHERE quote_id = ?",
+            "SELECT description, qty, unit_price FROM maintenance_cleaning_quote_items WHERE quote_id = ?",
             (quote_id,),
         ).fetchall()
         contract_value = sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
@@ -7147,6 +7204,7 @@ def maintenance_cleaning_convert_to_contract(request: Request, quote_id: int):
             )
             project_id = project_cur.lastrowid
 
+        create_from_quote(conn, project_id, quote_row, items)
         conn.execute(
             "UPDATE maintenance_cleaning_quotes SET status = ? WHERE id = ?",
             ("تم التحويل لعقد", quote_id),
@@ -7195,10 +7253,12 @@ def maintenance_cleaning_contracts_page(request: Request):
 
     return f"""
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/maintenance-cleaning.css">
 <body class="system-dark">
 {HOME_BUTTON}
-<div class="dashboard">
+<div class="dashboard"><nav class="mc-top-nav" aria-label="تنقل الصيانة والنظافة"><a href="/company/works" aria-label="رجوع إلى أقسام شركة المقاولات"><span aria-hidden="true">←</span> رجوع</a><a href="/dashboard" aria-label="العودة إلى الرئيسية"><span aria-hidden="true">🏠</span> الرئيسية</a></nav>
     <h1>عقود الصيانة والنظافة</h1>
 
     {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
@@ -7280,10 +7340,12 @@ def maintenance_cleaning_contract_detail(request: Request, contract_id: int):
 
     return f"""
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/maintenance-cleaning.css">
 <body class="system-dark">
 {HOME_BUTTON}
-<div class="dashboard">
+<div class="dashboard"><nav class="mc-top-nav" aria-label="تنقل الصيانة والنظافة"><a href="/company/works" aria-label="رجوع إلى أقسام شركة المقاولات"><span aria-hidden="true">←</span> رجوع</a><a href="/dashboard" aria-label="العودة إلى الرئيسية"><span aria-hidden="true">🏠</span> الرئيسية</a></nav>
     <h1>عقد الصيانة والنظافة</h1>
 
     {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
@@ -7353,27 +7415,29 @@ def maintenance_cleaning_projects_page(request: Request):
     for project in projects:
         rows += f"""
         <tr>
-            <td><a href="/maintenance-cleaning/project/{project['id']}">{project['id']}</a></td>
-            <td>{escape(project['project_name'] or '-')}</td>
-            <td>{escape(project['client_name'] or '-')}</td>
-            <td>{escape(project['service_type'] or '-')}</td>
-            <td>{escape(project['contract_type'] or '-')}</td>
-            <td>{format_currency(safe_float(project['contract_value']))} ريال</td>
-            <td>{escape(project['status'] or '-')}</td>
+            <td data-label="رقم المشروع"><a href="/maintenance-cleaning/project/{project['id']}">{project['id']}</a></td>
+            <td data-label="اسم المشروع">{escape(project['project_name'] or '-')}</td>
+            <td data-label="العميل">{escape(project['client_name'] or '-')}</td>
+            <td data-label="نوع الخدمة">{escape(project['service_type'] or '-')}</td>
+            <td data-label="نوع العقد">{escape(project['contract_type'] or '-')}</td>
+            <td data-label="قيمة العقد">{format_currency(safe_float(project['contract_value']))} ريال</td>
+            <td data-label="الحالة">{escape(project['status'] or '-')}</td>
         </tr>
         """
 
     return f"""
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/style.css">
-<body class="system-dark">
+<link rel="stylesheet" href="/static/maintenance-cleaning.css">
+<body class="system-dark mc-page mc-projects">
 {HOME_BUTTON}
-<div class="dashboard">
-    <h1>مشاريع الصيانة والنظافة</h1>
+<div class="dashboard"><nav class="mc-top-nav" aria-label="تنقل الصيانة والنظافة"><a href="/company/works" aria-label="رجوع إلى أقسام شركة المقاولات"><span aria-hidden="true">←</span> رجوع</a><a href="/dashboard" aria-label="العودة إلى الرئيسية"><span aria-hidden="true">🏠</span> الرئيسية</a></nav>
+    <h1>أوامر العمل والمشاريع السابقة - الصيانة والنظافة</h1>
 
     {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
 
-    <table border="1" style="background:white;margin:auto;width:90%;">
+    <table class="mc-data-table">
         <tr>
             <th>رقم المشروع</th>
             <th>اسم المشروع</th>
@@ -7409,10 +7473,20 @@ def maintenance_cleaning_project_detail(request: Request, project_id: int):
         conn.close()
         return HTMLResponse("<h2>المشروع غير موجود</h2>", status_code=404)
 
-    expenses_total_row = conn.execute(
-        "SELECT COALESCE(SUM(amount), 0) AS total FROM maintenance_cleaning_project_expenses WHERE project_id = ?",
+    work_order = conn.execute("SELECT id FROM maintenance_cleaning_work_orders WHERE project_id = ?", (project_id,)).fetchone() if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='maintenance_cleaning_work_orders'").fetchone() else None
+    if work_order:
+        conn.close()
+        return RedirectResponse(url=f"/maintenance-cleaning/work-order/{work_order['id']}", status_code=303)
+    if not (is_admin(access_result) or is_maintenance_cleaning_accountant(access_result)):
+        conn.close()
+        return HTMLResponse("<h2>ملخص ربحية المشروع يتطلب صلاحية الحسابات</h2>", status_code=403)
+
+    from maintenance_finance import migrate as migrate_maintenance_finance, riyals as mc_riyals, _legacy_halalas
+    migrate_maintenance_finance(conn)
+    expense_rows = conn.execute(
+        "SELECT amount, amount_halalas FROM maintenance_cleaning_project_expenses WHERE project_id = ?",
         (project_id,),
-    ).fetchone()
+    ).fetchall()
     daily_count = conn.execute(
         "SELECT COUNT(*) AS count FROM maintenance_cleaning_project_daily WHERE project_id = ?",
         (project_id,),
@@ -7443,8 +7517,8 @@ def maintenance_cleaning_project_detail(request: Request, project_id: int):
     ).fetchone()
     conn.close()
 
-    contract_value = safe_float(project["contract_value"])
-    expenses_total = safe_float(expenses_total_row["total"] if expenses_total_row else 0)
+    contract_value = int((Decimal(str(project["contract_value"] or 0)) * 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+    expenses_total = sum(row['amount_halalas'] if row['amount_halalas'] is not None else _legacy_halalas(row['amount']) for row in expense_rows)
     profit = contract_value - expenses_total
     contract_card = (
         f'<a href="/maintenance-cleaning/contract/{contract["id"]}" class="company-card works"><h2>العقد المرتبط</h2></a>'
@@ -7459,10 +7533,12 @@ def maintenance_cleaning_project_detail(request: Request, project_id: int):
 
     return f"""
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/maintenance-cleaning.css">
 <body class="system-dark">
 {HOME_BUTTON}
-<div class="dashboard">
+<div class="dashboard"><nav class="mc-top-nav" aria-label="تنقل الصيانة والنظافة"><a href="/company/works" aria-label="رجوع إلى أقسام شركة المقاولات"><span aria-hidden="true">←</span> رجوع</a><a href="/dashboard" aria-label="العودة إلى الرئيسية"><span aria-hidden="true">🏠</span> الرئيسية</a></nav>
     <h1>{escape(project['project_name'] or f"مشروع رقم {project['id']}")}</h1>
 
     {"<div class='inventory-note' style='margin-bottom:16px;'>صلاحية شريك المقاولات للعرض فقط.</div>" if is_read_only_works_partner else ""}
@@ -7479,17 +7555,18 @@ def maintenance_cleaning_project_detail(request: Request, project_id: int):
     </div>
 
     <h3>قيمة العقد</h3>
-    <p>{format_currency(contract_value)} ريال</p>
+    <p>{mc_riyals(contract_value)} ريال</p>
 
     <h3>إجمالي المصروفات</h3>
-    <p>{format_currency(expenses_total)} ريال</p>
+    <p>{mc_riyals(expenses_total)} ريال</p>
 
     <h3>الربح الحالي</h3>
-    <p>{format_currency(profit)} ريال</p>
+    <p>{mc_riyals(profit)} ريال</p>
 
     <br><br>
 
     <div class="companies">
+        {f'<a href="/maintenance-cleaning/work-order/{work_order["id"]}" class="company-card works"><h2>فتح أمر العمل</h2></a>' if work_order else ''}
         <a href="/maintenance-cleaning/project-daily?project_id={project_id}" class="company-card works">
             <h2>السجل اليومي</h2>
             <p>{daily_count} سجل</p>
@@ -7497,7 +7574,7 @@ def maintenance_cleaning_project_detail(request: Request, project_id: int):
 
         <a href="/maintenance-cleaning/project-expenses?project_id={project_id}" class="company-card works">
             <h2>المصروفات</h2>
-            <p>{format_currency(expenses_total)} ريال</p>
+            <p>{mc_riyals(expenses_total)} ريال</p>
         </a>
 
         <a href="/maintenance-cleaning/project/{project_id}/visits" class="company-card works">
@@ -7645,10 +7722,12 @@ def maintenance_cleaning_project_daily(request: Request, project_id: int):
     """
     return f"""
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/maintenance-cleaning.css">
 <body class="system-dark">
 {HOME_BUTTON}
-<div class="dashboard">
+<div class="dashboard"><nav class="mc-top-nav" aria-label="تنقل الصيانة والنظافة"><a href="/company/works" aria-label="رجوع إلى أقسام شركة المقاولات"><span aria-hidden="true">←</span> رجوع</a><a href="/dashboard" aria-label="العودة إلى الرئيسية"><span aria-hidden="true">🏠</span> الرئيسية</a></nav>
     <h1>السجل اليومي - {escape(project['project_name'] or '-')}</h1>
     {form_html}
     <table border="1" style="background:white;margin:auto;width:90%;text-align:center;">
@@ -7685,9 +7764,13 @@ def maintenance_cleaning_project_expenses(request: Request, project_id: int):
     access_result = get_company_page_access(request, "works")
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    if not (is_admin(access_result) or is_maintenance_cleaning_accountant(access_result)):
+        return HTMLResponse("<h2>لا تملك صلاحية حسابات الصيانة والنظافة</h2>", status_code=403)
     is_read_only_works_partner = is_works_partner_user(access_result, "works")
 
     conn = get_db()
+    from maintenance_finance import migrate as migrate_maintenance_finance, riyals as mc_riyals, _legacy_halalas
+    migrate_maintenance_finance(conn)
     project = get_maintenance_cleaning_project_or_404(conn, project_id)
     if not project:
         conn.close()
@@ -7698,7 +7781,7 @@ def maintenance_cleaning_project_expenses(request: Request, project_id: int):
     ).fetchall()
     conn.close()
 
-    total = sum(safe_float(row["amount"]) for row in rows_data)
+    total = sum(row["amount_halalas"] if row["amount_halalas"] is not None else _legacy_halalas(row["amount"]) for row in rows_data)
     rows = ""
     for row in rows_data:
         rows += f"""
@@ -7707,7 +7790,7 @@ def maintenance_cleaning_project_expenses(request: Request, project_id: int):
             <td>{escape(row['title'] or '-')}</td>
             <td>{escape(row['category'] or '-')}</td>
             <td>{escape(row['supplier'] or '-')}</td>
-            <td>{format_currency(safe_float(row['amount']))} ريال</td>
+            <td>{mc_riyals(row['amount_halalas'] if row['amount_halalas'] is not None else _legacy_halalas(row['amount']))} ريال</td>
             <td>{escape(row['notes'] or '-')}</td>
         </tr>
         """
@@ -7728,13 +7811,15 @@ def maintenance_cleaning_project_expenses(request: Request, project_id: int):
     """
     return f"""
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/maintenance-cleaning.css">
 <body class="system-dark">
 {HOME_BUTTON}
-<div class="dashboard">
+<div class="dashboard"><nav class="mc-top-nav" aria-label="تنقل الصيانة والنظافة"><a href="/company/works" aria-label="رجوع إلى أقسام شركة المقاولات"><span aria-hidden="true">←</span> رجوع</a><a href="/dashboard" aria-label="العودة إلى الرئيسية"><span aria-hidden="true">🏠</span> الرئيسية</a></nav>
     <h1>مصروفات - {escape(project['project_name'] or '-')}</h1>
     <h3>إجمالي المصروفات</h3>
-    <p>{format_currency(total)} ريال</p>
+    <p>{mc_riyals(total)} ريال</p>
     {form_html}
     <table border="1" style="background:white;margin:auto;width:90%;text-align:center;">
         <tr><th>التاريخ</th><th>البيان</th><th>التصنيف</th><th>المورد</th><th>المبلغ</th><th>ملاحظات</th></tr>
@@ -7747,18 +7832,31 @@ def maintenance_cleaning_project_expenses(request: Request, project_id: int):
 
 
 @app.post("/maintenance-cleaning/project-expenses")
-def maintenance_cleaning_save_project_expense(request: Request, project_id: int = Form(...), date: str = Form(...), title: str = Form(...), category: str = Form(""), supplier: str = Form(""), amount: float = Form(...), notes: str = Form("")):
+def maintenance_cleaning_save_project_expense(request: Request, project_id: int = Form(...), date: str = Form(...), title: str = Form(...), category: str = Form(""), supplier: str = Form(""), amount: str = Form(...), notes: str = Form("")):
     access_result = get_company_page_access(request, "works")
     if not isinstance(access_result, sqlite3.Row):
         return access_result
+    if not (is_admin(access_result) or is_maintenance_cleaning_accountant(access_result)):
+        return HTMLResponse("<h2>لا تملك صلاحية حسابات الصيانة والنظافة</h2>", status_code=403)
     partner_guard = ensure_not_works_partner_write(access_result, "works")
     if not isinstance(partner_guard, sqlite3.Row):
         return partner_guard
     conn = get_db()
+    from maintenance_finance import migrate as migrate_maintenance_finance, money as mc_money
+    migrate_maintenance_finance(conn)
+    linked_order = conn.execute("SELECT id FROM maintenance_cleaning_work_orders WHERE project_id=?", (project_id,)).fetchone()
+    if linked_order:
+        conn.close()
+        return RedirectResponse(url=f"/maintenance-cleaning/work-order/{linked_order['id']}/finance", status_code=303)
+    try:
+        halalas = mc_money(amount)
+    except ValueError as exc:
+        conn.close()
+        return HTMLResponse(f"<h2>{escape(str(exc))}</h2>", status_code=400)
     if get_maintenance_cleaning_project_or_404(conn, project_id):
         conn.execute(
-            "INSERT INTO maintenance_cleaning_project_expenses (project_id, title, category, supplier, amount, date, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (project_id, title.strip(), category.strip(), supplier.strip(), amount, date.strip(), notes.strip(), datetime.now().strftime("%Y-%m-%d %H:%M")),
+            "INSERT INTO maintenance_cleaning_project_expenses (project_id, title, category, supplier, amount_halalas, date, notes, created_at, recorded_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, title.strip(), category.strip(), supplier.strip(), halalas, date.strip(), notes.strip(), datetime.now().strftime("%Y-%m-%d %H:%M"), access_result['id']),
         )
         conn.commit()
     conn.close()
@@ -7840,10 +7938,12 @@ def maintenance_cleaning_project_visits(request: Request, project_id: int):
     """
     return f"""
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/maintenance-cleaning.css">
 <body class="system-dark">
 {HOME_BUTTON}
-<div class="dashboard">
+<div class="dashboard"><nav class="mc-top-nav" aria-label="تنقل الصيانة والنظافة"><a href="/company/works" aria-label="رجوع إلى أقسام شركة المقاولات"><span aria-hidden="true">←</span> رجوع</a><a href="/dashboard" aria-label="العودة إلى الرئيسية"><span aria-hidden="true">🏠</span> الرئيسية</a></nav>
     <h1>الزيارات - {escape(project['project_name'] or '-')}</h1>
     {form_html}
     <table border="1" style="background:white;margin:auto;width:96%;text-align:center;">
@@ -7965,10 +8065,12 @@ def maintenance_cleaning_project_equipment(request: Request, project_id: int):
     """
     return f"""
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/maintenance-cleaning.css">
 <body class="system-dark">
 {HOME_BUTTON}
-<div class="dashboard">
+<div class="dashboard"><nav class="mc-top-nav" aria-label="تنقل الصيانة والنظافة"><a href="/company/works" aria-label="رجوع إلى أقسام شركة المقاولات"><span aria-hidden="true">←</span> رجوع</a><a href="/dashboard" aria-label="العودة إلى الرئيسية"><span aria-hidden="true">🏠</span> الرئيسية</a></nav>
     <h1>المعدات - {escape(project['project_name'] or '-')}</h1>
     {form_html}
     <table border="1" style="background:white;margin:auto;width:90%;text-align:center;">
@@ -22336,6 +22438,10 @@ def delete_logistics_equipment(equipment_id: int, company: str = ""):
 
 # Client portal routes and additive schema are isolated in their own module.
 from client_portal import register_client_portal
+from maintenance_work_orders import router as maintenance_work_orders_router
+from maintenance_finance import router as maintenance_finance_router
+app.include_router(maintenance_work_orders_router)
+app.include_router(maintenance_finance_router)
 register_client_portal(app)
 register_featured_projects(app, templates)
 register_assets_custody(app)
