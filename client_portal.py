@@ -685,7 +685,10 @@ def register_client_portal(app):
         from main import contract_source_rows
         quote=conn.execute("SELECT * FROM quotes WHERE id=?",(contract["quote_id"],)).fetchone(); items,payments=contract_source_rows(conn,contract); conn.close()
         from main import build_contract_report_pdf
-        path,name=build_contract_report_pdf(contract,quote,items,payments,contract["company"] or "",project)
+        try:
+            path,name=build_contract_report_pdf(contract,quote,items,payments,contract["company"] or "",project)
+        except ValueError as exc:
+            return HTMLResponse(str(exc),status_code=422)
         return FileResponse(path,filename=name,media_type="application/pdf")
 
     @app.get("/client-portal/appendix/{appendix_id}")

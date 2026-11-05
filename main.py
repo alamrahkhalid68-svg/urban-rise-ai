@@ -2186,6 +2186,39 @@ def from_halalas(value) -> Decimal:
     return Decimal(int(value or 0)) / Decimal("100")
 
 
+def customer_sale_items(items, subtotal_before_vat):
+    """Allocate the locked selling subtotal across priced rows without changing costs."""
+    rows = [dict(item) for item in items]
+    target = to_halalas(subtotal_before_vat)
+    weights = [to_halalas(row["line_total"]) for row in rows]
+    priced = [index for index, weight in enumerate(weights) if weight > 0]
+    if target < 0 or any(weight < 0 for weight in weights):
+        raise ValueError("لا يمكن إنشاء المستند: قيمة بند أو قيمة الأعمال سالبة.")
+    if target and not priced:
+        raise ValueError("لا يمكن إنشاء المستند: قيمة الأعمال موجبة ولا توجد بنود مسعّرة.")
+    allocated = [0] * len(rows)
+    weight_total = sum(weights)
+    assigned = 0
+    for index in priced[:-1]:
+        allocated[index] = int((Decimal(target) * weights[index] / weight_total).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        assigned += allocated[index]
+    if priced:
+        allocated[priced[-1]] = target - assigned
+    if sum(allocated) != target or any(value < 0 for value in allocated):
+        raise ValueError("لا يمكن إنشاء المستند: تعذر مطابقة مجموع البنود مع قيمة الأعمال.")
+    for index, row in enumerate(rows):
+        qty = decimal_from_value(row["qty"])
+        if allocated[index] and qty <= 0:
+            raise ValueError("لا يمكن إنشاء المستند: يوجد بند مسعّر بكمية صفر.")
+        line = from_halalas(allocated[index])
+        unit = line / qty if qty else Decimal("0")
+        precision = Decimal("0.0001") if qty != qty.to_integral_value() else Decimal("0.01")
+        row["line_total"] = line
+        row["unit_price"] = unit.quantize(precision, rounding=ROUND_HALF_UP)
+        row["unit_price_display"] = f"{row['unit_price']:,.4f}".rstrip("0").rstrip(".") if precision == Decimal("0.0001") else f"{row['unit_price']:,.2f}".rstrip("0").rstrip(".")
+    return rows
+
+
 def subcontractor_totals(conn, project_id):
     row = conn.execute("""SELECT COALESCE(SUM(a.amount_halalas), 0) AS committed,
         COALESCE(SUM(p.paid), 0) AS paid
@@ -2853,8 +2886,9 @@ def build_client_material_receipt_pdf(receipt, items, images) -> tuple[str, str]
 
 
 def build_quote_report_pdf(quote, items, payments, company: str = "", financials=None) -> tuple[str, str]:
+    from uuid import uuid4
     os.makedirs("pdfs", exist_ok=True)
-    file_name = f"quote_report_{quote['id']}.pdf"
+    file_name = f"quote_report_{quote['id']}_{uuid4().hex}.pdf"
     file_path = os.path.join("pdfs", file_name)
     font_name = get_quote_contract_font_name()
     bold_font_name = get_quote_contract_font_name(True)
@@ -2872,6 +2906,8 @@ def build_quote_report_pdf(quote, items, payments, company: str = "", financials
     items_total = financials.get("items_total", total) if is_v3_pdf else safe_float(financials.get("items_total", total))
     subtotal_before_vat = financials["subtotal_before_vat"] if is_v3_pdf else safe_float(financials["subtotal_before_vat"])
     display_factor = 1.0 if is_v3_pdf else (subtotal_before_vat / items_total if items_total else 1.0)
+    if is_v3_pdf:
+        items = customer_sale_items(items, subtotal_before_vat)
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("QuoteReportTitle", parent=styles["Heading1"], fontName=bold_font_name, fontSize=18, leading=24, alignment=TA_RIGHT, textColor=colors.HexColor("#D8B35E"))
@@ -2941,7 +2977,7 @@ def build_quote_report_pdf(quote, items, payments, company: str = "", financials
         description_parts = [" ".join(words[start:start + 90]) for start in range(0, len(words), 90)] or ["-"]
         items_rows.append([
             Paragraph(format_arabic_pdf_text(f"{format_currency(line_total)} ريال"), body_style),
-            Paragraph(format_arabic_pdf_text(f"{format_currency(displayed_unit_price)} ريال"), body_style),
+            Paragraph(format_arabic_pdf_text(f"{item.get('unit_price_display', format_currency(displayed_unit_price))} ريال"), body_style),
             Paragraph(format_arabic_pdf_text(format_currency(safe_float(item["qty"]))), body_style),
             Paragraph(
                 build_quote_description_paragraph_text(description_parts[0] + (" (يتبع)" if len(description_parts) > 1 else ""), font_name, description_style.fontSize, description_col_width - 8),
@@ -3027,18 +3063,13 @@ def build_quote_report_pdf(quote, items, payments, company: str = "", financials
         Paragraph(format_arabic_pdf_text("النسبة"), table_header_style),
         Paragraph(format_arabic_pdf_text("اسم الدفعة"), table_header_style),
     ]]
-    payment_amounts = quote_payment_amounts(financials["grand_total_with_vat"], payments) if int(quote["pricing_version"] or 1) >= 3 else [calculate_percentage_amount(financials["grand_total_with_vat"], p["percentage"]) for p in payments]
+    valid_payments = payment_percentages_valid(payments)
+    payment_amounts = quote_payment_amounts(financials["grand_total_with_vat"], payments) if valid_payments else []
     for payment, amount in zip(payments, payment_amounts):
         payment_rows.append([
             Paragraph(format_arabic_pdf_text(f"{format_currency(amount)} ريال"), body_style),
             Paragraph(format_arabic_pdf_text(format_percentage_display(payment["percentage"])), body_style),
             Paragraph(format_arabic_pdf_text(payment["title"] or "-"), body_style),
-        ])
-    if len(payment_rows) == 1:
-        payment_rows.append([
-            Paragraph(format_arabic_pdf_text("-"), body_style),
-            Paragraph(format_arabic_pdf_text("-"), body_style),
-            Paragraph(format_arabic_pdf_text("لا توجد دفعات"), body_style),
         ])
     payments_table = Table(payment_rows, colWidths=[55 * mm, 45 * mm, 110 * mm], repeatRows=1, hAlign="RIGHT")
     payments_table.setStyle(TableStyle([
@@ -3050,11 +3081,13 @@ def build_quote_report_pdf(quote, items, payments, company: str = "", financials
         ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
-    story.extend([
-        KeepTogether([Paragraph(format_arabic_pdf_text("جدول الدفعات"), section_style), payments_table]),
-        Spacer(1, 10),
-        Paragraph(format_arabic_pdf_text(footer_text), body_style),
-    ])
+    story.append(Paragraph(format_arabic_pdf_text("جدول الدفعات"), section_style))
+    if valid_payments:
+        story.append(payments_table)
+    else:
+        message = "لا توجد دفعات مسجلة" if not payments else "تنبيه: مجموع نسب الدفعات لا يساوي 100%؛ لا توجد خطة دفعات نهائية."
+        story.append(Paragraph(format_arabic_pdf_text(message), body_style))
+    story.extend([Spacer(1, 10), Paragraph(format_arabic_pdf_text(footer_text), body_style)])
 
     doc = SimpleDocTemplate(file_path, pagesize=landscape(A4), rightMargin=16 * mm, leftMargin=16 * mm, topMargin=16 * mm, bottomMargin=26 * mm)
     doc.quote_contract_pdf = True
@@ -3063,8 +3096,9 @@ def build_quote_report_pdf(quote, items, payments, company: str = "", financials
 
 
 def build_contract_report_pdf(contract, quote, items, payments, company: str = "", project=None, financials=None) -> tuple[str, str]:
+    from uuid import uuid4
     os.makedirs("pdfs", exist_ok=True)
-    file_name = f"contract_report_{contract['id']}.pdf"
+    file_name = f"contract_report_{contract['id']}_{uuid4().hex}.pdf"
     file_path = os.path.join("pdfs", file_name)
     font_name = get_quote_contract_font_name()
     bold_font_name = get_quote_contract_font_name(True)
@@ -3080,6 +3114,8 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     }
     subtotal_before_vat = financials["subtotal_before_vat"] if v3_contract_pdf else safe_float(financials["subtotal_before_vat"])
     display_factor = 1.0 if v3_contract_pdf else (subtotal_before_vat / items_total if items_total else 1.0)
+    if v3_contract_pdf:
+        items = customer_sale_items(items, subtotal_before_vat)
     total = financials["grand_total_with_vat"] if v3_contract_pdf else safe_float(financials["grand_total_with_vat"])
     contract_number = contract["contract_number"] if "contract_number" in contract.keys() and contract["contract_number"] else f"25/{int(contract['id']):04d}"
     issue_date = contract["issued_at"] if "issued_at" in contract.keys() and contract["issued_at"] else datetime.now().strftime("%d-%m-%Y")
@@ -3118,7 +3154,7 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
             description = (item["description"] or "").strip() or ""
             line_total = item["line_total"] if v3_contract_pdf else safe_float(item["qty"]) * safe_float(item["unit_price"]) * display_factor
             scope_story.append(contract_paragraph(f"{index}. {description}", body_style))
-            scope_story.append(contract_paragraph(f"الكمية: {item['qty']} | سعر الوحدة: {format_currency(item['unit_price'])} ريال | إجمالي البند: {format_currency(line_total)} ريال", body_style))
+            scope_story.append(contract_paragraph(f"الكمية: {item['qty']} | سعر الوحدة: {item.get('unit_price_display', format_currency(item['unit_price']))} ريال | إجمالي البند: {format_currency(line_total)} ريال", body_style))
     else:
         scope_story.append(contract_paragraph("1. ", body_style))
         scope_story.append(contract_paragraph("بمبلغ: ", body_style))
@@ -3134,7 +3170,7 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
                 payment_text = f"- دفعة بنسبة ({format_percentage_display(payment['percentage'])}) بمبلغ {format_currency(amount)} ريال"
             payment_story.append(contract_paragraph(payment_text, body_style))
     else:
-        payment_story.append(contract_paragraph("- ", body_style))
+        payment_story.append(contract_paragraph("لا توجد دفعات مسجلة", body_style))
 
     header_band = Table([[
         contract_paragraph(company_profile["name"], title_style, 53 * mm),
@@ -9094,22 +9130,28 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
     conn.close()
 
     financials = calculate_quote_financials(quote_id)
+    edit_items = {item["id"]: item for item in items}
+    if int(quote["pricing_version"] or 1) >= 3:
+        try:
+            items = customer_sale_items(items, financials["subtotal_before_vat"])
+        except ValueError as exc:
+            return HTMLResponse(str(exc), status_code=422)
     rows = ""
     total = 0
     for i in items:
-        line = (decimal_from_value(i["qty"]) * decimal_from_value(i["unit_price"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if int(quote["pricing_version"] or 1) >= 3 else i["qty"] * i["unit_price"]
+        line = i["line_total"] if int(quote["pricing_version"] or 1) >= 3 else i["qty"] * i["unit_price"]
         total += line
         rows += f"""
         <tr>
-            <td>{escape(i['description'] or '')}{quote_row_controls(quote_id, company, 'items', i) if not is_read_only_works_partner else ''}</td>
+            <td>{escape(i['description'] or '')}{quote_row_controls(quote_id, company, 'items', edit_items[i['id']]) if not is_read_only_works_partner else ''}</td>
             <td>{i['qty']}</td>
-            <td>{format_currency(safe_float(i['unit_price']))}</td>
+            <td>{i.get('unit_price_display', format_currency(i['unit_price'])) if isinstance(i, dict) else format_currency(i['unit_price'])}</td>
             <td>{format_currency(safe_float(line))}</td>
         </tr>
         """
 
     payment_rows = ""
-    payment_amounts = quote_payment_amounts(financials["grand_total_with_vat"], payments) if int(quote["pricing_version"] or 1) >= 3 else [calculate_percentage_amount(financials["grand_total_with_vat"], p["percentage"]) for p in payments]
+    payment_amounts = quote_payment_amounts(financials["grand_total_with_vat"], payments) if payment_percentages_valid(payments) else []
     for p, amount in zip(payments, payment_amounts):
         payment_rows += f"""
         <tr>
@@ -9121,7 +9163,11 @@ def quote_detail(request: Request, quote_id: int, company: str = ""):
 
     payment_percentage_total = sum((decimal_from_value(p["percentage"]) for p in payments), Decimal("0"))
     payment_notice = f"مجموع نسب الدفعات الحالي {payment_percentage_total.normalize():f}%"
-    if payment_percentage_total > 100:
+    if payments and payment_percentage_total != 100:
+        payment_notice += " — لا توجد خطة دفعات نهائية حتى يصبح مجموع النسب 100%"
+    if not payments:
+        payment_notice = "لا توجد دفعات مسجلة"
+    elif payment_percentage_total > 100:
         payment_notice += " — تنبيه: مجموع نسب الدفعات يتجاوز 100%"
     elif int(quote["pricing_version"] or 1) >= 3 and payment_percentage_total != 100:
         payment_notice += " — يجب أن يساوي 100% قبل اعتماد العرض أو تحويله إلى عقد"
@@ -9355,7 +9401,7 @@ URBAN RISE<br>WORKS
 <th>المبلغ</th>
 </tr>
 
-{payment_rows if payment_rows else "<tr><td colspan='3'>لا توجد دفعات</td></tr>"}
+{payment_rows if payment_rows else "<tr><td colspan='3'>لا توجد دفعات مسجلة</td></tr>" if not payments else "<tr><td colspan='3'>لا توجد خطة دفعات نهائية؛ يجب أن يساوي مجموع النسب 100%</td></tr>"}
 
 </table>
 
@@ -9392,9 +9438,12 @@ def quote_report(request: Request, quote_id: int, company: str = ""):
     conn.close()
 
     financials = calculate_quote_financials(quote_id)
-    file_path, file_name = build_quote_report_pdf(
-        quote, items, payments, company=company, financials=financials
-    )
+    try:
+        file_path, file_name = build_quote_report_pdf(
+            quote, items, payments, company=company, financials=financials
+        )
+    except ValueError as exc:
+        return HTMLResponse(str(exc), status_code=422)
     return FileResponse(path=file_path, filename=file_name, media_type="application/pdf")
 
 def quote_row_controls(quote_id, company, kind, row):
@@ -10363,6 +10412,11 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
     subtotal_before_vat = financials["subtotal_before_vat"] if v3_contract_screen else (safe_float(financials["subtotal_before_vat"]) if financials else items_total)
     total = financials["grand_total_with_vat"] if v3_contract_screen else (safe_float(financials["grand_total_with_vat"]) if financials else items_total)
     display_factor = 1.0 if v3_contract_screen else (subtotal_before_vat / items_total if items_total else 1.0)
+    if v3_contract_screen:
+        try:
+            items = customer_sale_items(items, subtotal_before_vat)
+        except ValueError as exc:
+            return HTMLResponse(str(exc), status_code=422)
     items_rows = ""
     for i in items:
         displayed_unit_price = i["unit_price"] if v3_contract_screen else safe_float(i["unit_price"]) * display_factor
@@ -10371,7 +10425,7 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
         <tr>
             <td>{i['description']}</td>
             <td>{i['qty']}</td>
-            <td>{format_currency(displayed_unit_price)}</td>
+            <td>{i.get('unit_price_display', format_currency(displayed_unit_price)) if isinstance(i, dict) else format_currency(displayed_unit_price)}</td>
             <td>{format_currency(line)}</td>
         </tr>
         """
@@ -10482,10 +10536,6 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
 <th>الإجمالي</th>
 </tr>
 {items_rows}
-{f'''<tr><td colspan="3">مجموع البنود</td><td>{format_currency(items_total)} ريال</td></tr>
-<tr><td colspan="3">المصاريف الإدارية</td><td>{format_currency(financials.get("overhead_amount", 0))} ريال</td></tr>
-<tr><td colspan="3">الربح</td><td>{format_currency(financials.get("profit_amount", 0))} ريال</td></tr>
-{f"<tr><td colspan='3'>تسوية التسعير</td><td>{format_currency(financials.get('pricing_adjustment', 0))} ريال</td></tr>" if safe_float(financials.get('pricing_adjustment', 0)) > 0 else ""}''' if contract['contract_number'] else ''}
 <tr>
 <td colspan="3"><strong>قيمة الأعمال قبل الضريبة</strong></td>
 <td><strong>{format_currency(subtotal_before_vat)} ريال سعودي</strong></td>
@@ -10510,7 +10560,7 @@ def contract_detail(request: Request, contract_id: int, company: str = ""):
 <th>النسبة</th>
 <th>المبلغ</th>
 </tr>
-{payments_rows}
+{payments_rows if payments_rows else "<tr><td colspan='3'>لا توجد دفعات مسجلة</td></tr>"}
 </table>
 
 <br>
@@ -10592,7 +10642,10 @@ def contract_report(request: Request, contract_id: int, company: str = ""):
     items, payments = contract_source_rows(conn, contract)
     conn.close()
 
-    file_path, file_name = build_contract_report_pdf(contract, quote, items, payments, company=company, project=project)
+    try:
+        file_path, file_name = build_contract_report_pdf(contract, quote, items, payments, company=company, project=project)
+    except ValueError as exc:
+        return HTMLResponse(str(exc), status_code=422)
     return FileResponse(path=file_path, filename=file_name, media_type="application/pdf")
 
 
