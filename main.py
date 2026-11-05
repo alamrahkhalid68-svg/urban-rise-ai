@@ -2237,6 +2237,12 @@ def subcontractor_agreement_rows(conn, project_id):
         WHERE a.project_id = ? ORDER BY a.id DESC""", (project_id,)).fetchall()
 
 
+def subcontractor_payment_rows(conn, project_id):
+    return conn.execute("""SELECT p.*, a.contractor_name FROM subcontractor_payments p
+        JOIN subcontractor_agreements a ON a.id = p.agreement_id
+        WHERE a.project_id = ? ORDER BY p.payment_date DESC, p.id DESC""", (project_id,)).fetchall()
+
+
 def quote_v3_item_rows(conn, quote_id):
     rows = conn.execute("""SELECT i.id, i.quote_id, i.description, v.qty_decimal, v.unit_price_halalas, v.line_total_halalas
         FROM quote_items i JOIN quote_v3_items v ON v.quote_item_id=i.id WHERE i.quote_id=? ORDER BY i.id""", (quote_id,)).fetchall()
@@ -2484,272 +2490,75 @@ def draw_works_contract_pdf_frame(canvas, doc):
     canvas.restoreState()
 
 
-def build_project_expenses_report_pdf(project, expenses, contract_total: float, collections=None, company: str = "") -> tuple[str, str]:
+def build_project_expenses_report_pdf(project, expenses, contract_total, collections=None, company="", agreements=None, contractor_payments=None, financial_snapshot=None):
+    """Render the project ledger using the same committed cost as the accounts screen."""
+    from xml.sax.saxutils import escape as xml_escape
+    collections, agreements, contractor_payments = collections or [], agreements or [], contractor_payments or []
+    regular, bold = get_quote_contract_font_name(), get_quote_contract_font_name(True)
+    money = lambda value: from_halalas(to_halalas(value))
+    shown = lambda value: f"{money(value):,.2f} ريال"
+    expense_total = sum((money(e["amount"]) for e in expenses), Decimal("0"))
+    expense_paid = sum((money(e["amount"]) for e in expenses if (e["payment_status"] or "").strip() == "مدفوع"), Decimal("0"))
+    committed = sum((from_halalas(a["amount_halalas"]) for a in agreements), Decimal("0"))
+    paid = sum((from_halalas(p["amount_halalas"]) for p in contractor_payments), Decimal("0"))
+    collected = sum((money(c["amount"]) for c in collections if (c["collection_status"] or "") not in ("ملغي", "ملغاة")), Decimal("0"))
+    contract_value = money(contract_total)
+    expected = money(financial_snapshot["total_expenses"]) if financial_snapshot else expense_total + committed
+    profit = money(financial_snapshot["profit"]) if financial_snapshot else contract_value - expected
     os.makedirs("pdfs", exist_ok=True)
     file_name = f"project_expenses_report_{project['id']}.pdf"
     file_path = os.path.join("pdfs", file_name)
-    font_name = get_pdf_report_font_name()
-    collections = collections or []
-    include_collections = normalize_access_value(company) == "works"
-
-    precise_report = isinstance(contract_total, Decimal)
-    money = decimal_from_value if precise_report else safe_float
-    start = Decimal("0") if precise_report else 0.0
-    total_expenses = sum((money(expense["amount"]) for expense in expenses), start)
-    total_collections = sum((money(collection["amount"]) for collection in collections if (collection["collection_status"] or "") not in ("ملغي", "ملغاة")), start) if include_collections else start
-    remaining = contract_total - total_expenses
-    spend_ratio = (total_expenses / contract_total * 100) if contract_total > 0 else 0.0
-    total_paid = sum((money(expense["amount"]) for expense in expenses
-                      if (expense["payment_status"] or "").strip() == "مدفوع"), start)
-    total_unpaid = sum((money(expense["amount"]) for expense in expenses
-                        if (expense["payment_status"] or "").strip() == "غير مدفوع"), start)
-    notes_list = [
-        (expense["notes"] or "").strip()
-        for expense in expenses
-        if "notes" in expense.keys() and (expense["notes"] or "").strip()
-    ]
-    general_notes = " | ".join(notes_list[:4])
-    report_company_name = "أوربان رايز ووركس" if normalize_access_value(company) == "works" else "مجموعة أوربان رايز"
-
-    doc = SimpleDocTemplate(
-        file_path,
-        pagesize=landscape(A4),
-        rightMargin=16 * mm,
-        leftMargin=16 * mm,
-        topMargin=16 * mm,
-        bottomMargin=14 * mm,
-    )
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        "ExpenseReportTitle",
-        parent=styles["Heading1"],
-        fontName=font_name,
-        fontSize=18,
-        leading=24,
-        alignment=TA_RIGHT,
-        textColor=colors.HexColor("#D8B35E"),
-        spaceAfter=6,
-    )
-    subtitle_style = ParagraphStyle(
-        "ExpenseReportSubtitle",
-        parent=styles["Normal"],
-        fontName=font_name,
-        fontSize=10,
-        leading=14,
-        alignment=TA_RIGHT,
-        textColor=colors.HexColor("#2F3A2D"),
-    )
-    section_style = ParagraphStyle(
-        "ExpenseReportSection",
-        parent=styles["Heading2"],
-        fontName=font_name,
-        fontSize=13,
-        leading=18,
-        alignment=TA_RIGHT,
-        textColor=colors.HexColor("#D8B35E"),
-        spaceAfter=8,
-        spaceBefore=8,
-    )
-    body_style = ParagraphStyle(
-        "ExpenseReportBody",
-        parent=styles["Normal"],
-        fontName=font_name,
-        fontSize=10,
-        leading=14,
-        alignment=TA_RIGHT,
-        textColor=colors.HexColor("#1F2A22"),
-    )
-    table_header_style = ParagraphStyle("ExpenseReportTableHeader", parent=body_style, textColor=colors.HexColor("#F2D892"))
-
-    story = [
-        Paragraph(format_arabic_pdf_text(report_company_name), title_style),
-        Paragraph(
-            format_arabic_pdf_text(
-                f"تقرير مصروفات المشروع | اسم المشروع: {project['name'] or ('مشروع رقم ' + str(project['id']))} | تاريخ الإصدار: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            ),
-            subtitle_style,
-        ),
-        Spacer(1, 8),
-        Paragraph(format_arabic_pdf_text("الملخص المالي"), section_style),
-    ]
-
-    if include_collections:
-        summary_data = [
-            [
-                Paragraph(format_arabic_pdf_text("المحصل"), body_style),
-                Paragraph(format_arabic_pdf_text("نسبة الصرف"), body_style),
-                Paragraph(format_arabic_pdf_text("المتبقي من المشروع"), body_style),
-                Paragraph(format_arabic_pdf_text("إجمالي المصروفات"), body_style),
-                Paragraph(format_arabic_pdf_text("قيمة العقد"), body_style),
-            ],
-            [
-                Paragraph(format_arabic_pdf_text(f"{format_currency(total_collections)} ريال"), body_style),
-                Paragraph(format_arabic_pdf_text(f"{spend_ratio:.1f}%"), body_style),
-                Paragraph(format_arabic_pdf_text(f"{format_currency(contract_total-total_collections)} ريال"), body_style),
-                Paragraph(format_arabic_pdf_text(f"{format_currency(total_expenses)} ريال"), body_style),
-                Paragraph(format_arabic_pdf_text(f"{format_currency(contract_total)} ريال"), body_style),
-            ],
-        ]
-        summary_widths = [48 * mm, 46 * mm, 50 * mm, 55 * mm, 50 * mm]
-    else:
-        summary_data = [
-            [
-                Paragraph(format_arabic_pdf_text("نسبة الصرف"), body_style),
-                Paragraph(format_arabic_pdf_text("المتبقي"), body_style),
-                Paragraph(format_arabic_pdf_text("إجمالي المصروفات"), body_style),
-                Paragraph(format_arabic_pdf_text("قيمة العقد"), body_style),
-            ],
-            [
-                Paragraph(format_arabic_pdf_text(f"{spend_ratio:.1f}%"), body_style),
-                Paragraph(format_arabic_pdf_text(f"{format_currency(remaining)} ريال"), body_style),
-                Paragraph(format_arabic_pdf_text(f"{format_currency(total_expenses)} ريال"), body_style),
-                Paragraph(format_arabic_pdf_text(f"{format_currency(contract_total)} ريال"), body_style),
-            ],
-        ]
-        summary_widths = [55 * mm, 60 * mm, 65 * mm, 60 * mm]
-    summary_table = Table(summary_data, colWidths=summary_widths, hAlign="RIGHT")
-    summary_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEE4CF")),
-        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#F6F1E7")),
-        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D8C294")),
-        ("TOPPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-    ]))
-    story.extend([summary_table, Spacer(1, 10), Paragraph(format_arabic_pdf_text("تفاصيل المصروفات"), section_style)])
-
-    table_rows = [[
-        Paragraph(format_arabic_pdf_text("التاريخ"), table_header_style),
-        Paragraph(format_arabic_pdf_text("البيان"), table_header_style),
-        Paragraph(format_arabic_pdf_text("التصنيف"), table_header_style),
-        Paragraph(format_arabic_pdf_text("المورد"), table_header_style),
-        Paragraph(format_arabic_pdf_text("طريقة الدفع"), table_header_style),
-        Paragraph(format_arabic_pdf_text("حالة السداد"), table_header_style),
-        Paragraph(format_arabic_pdf_text("المبلغ"), table_header_style),
-    ]]
-
-    for expense in expenses:
-        table_rows.append([
-            Paragraph(format_arabic_pdf_text(expense["date"] or "-"), body_style),
-            Paragraph(format_arabic_pdf_text(expense["title"] or "-"), body_style),
-            Paragraph(format_arabic_pdf_text(project_expense_category_label(expense)), body_style),
-            Paragraph(format_arabic_pdf_text(expense["vendor"] or "-"), body_style),
-            Paragraph(format_arabic_pdf_text(expense["payment_method"] or "-"), body_style),
-            Paragraph(format_arabic_pdf_text(expense["payment_status"] or "-"), body_style),
-            Paragraph(format_arabic_pdf_text(f"{format_currency(safe_float(expense['amount']))} ريال"), body_style),
-        ])
-
-    if len(table_rows) == 1:
-        table_rows.append([
-            Paragraph(format_arabic_pdf_text("-"), body_style),
-            Paragraph(format_arabic_pdf_text("لا توجد مصروفات مسجلة"), body_style),
-            Paragraph(format_arabic_pdf_text("-"), body_style),
-            Paragraph(format_arabic_pdf_text("-"), body_style),
-            Paragraph(format_arabic_pdf_text("-"), body_style),
-            Paragraph(format_arabic_pdf_text("-"), body_style),
-            Paragraph(format_arabic_pdf_text("0 ريال"), body_style),
-        ])
-
-    expenses_table = Table(
-        table_rows,
-        colWidths=[30 * mm, 58 * mm, 42 * mm, 42 * mm, 35 * mm, 32 * mm, 33 * mm],
-        repeatRows=1,
-        hAlign="RIGHT",
-    )
-    expenses_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2A22")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#F2D892")),
-        ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F6F1E7")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#F6F1E7"), colors.HexColor("#EEE4CF")]),
-        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8C294")),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-    ]))
-    story.extend([expenses_table])
-
-    if include_collections:
-        story.extend([Spacer(1, 10), Paragraph(format_arabic_pdf_text("تفاصيل التحصيلات"), section_style)])
-
-        collections_rows = [[
-            Paragraph(format_arabic_pdf_text("التاريخ"), table_header_style),
-            Paragraph(format_arabic_pdf_text("البيان"), table_header_style),
-            Paragraph(format_arabic_pdf_text("الجهة"), table_header_style),
-            Paragraph(format_arabic_pdf_text("طريقة الدفع"), table_header_style),
-            Paragraph(format_arabic_pdf_text("الحالة"), table_header_style),
-            Paragraph(format_arabic_pdf_text("المرجع"), table_header_style),
-            Paragraph(format_arabic_pdf_text("المبلغ"), table_header_style),
-        ]]
-
-        for collection in collections:
-            collections_rows.append([
-                Paragraph(format_arabic_pdf_text(collection["date"] or "-"), body_style),
-                Paragraph(format_arabic_pdf_text(collection["title"] or "-"), body_style),
-                Paragraph(format_arabic_pdf_text(collection["party_name"] or "-"), body_style),
-                Paragraph(format_arabic_pdf_text(collection["payment_method"] or "-"), body_style),
-                Paragraph(format_arabic_pdf_text(collection["collection_status"] or "-"), body_style),
-                Paragraph(format_arabic_pdf_text(collection["invoice_reference"] or "-"), body_style),
-                Paragraph(format_arabic_pdf_text(f"{format_currency(safe_float(collection['amount']))} ريال"), body_style),
-            ])
-
-        if len(collections_rows) == 1:
-            collections_rows.append([
-                Paragraph(format_arabic_pdf_text("-"), body_style),
-                Paragraph(format_arabic_pdf_text("لا توجد تحصيلات مسجلة"), body_style),
-                Paragraph(format_arabic_pdf_text("-"), body_style),
-                Paragraph(format_arabic_pdf_text("-"), body_style),
-                Paragraph(format_arabic_pdf_text("-"), body_style),
-                Paragraph(format_arabic_pdf_text("-"), body_style),
-                Paragraph(format_arabic_pdf_text("0 ريال"), body_style),
-            ])
-
-        collections_table = Table(
-            collections_rows,
-            colWidths=[30 * mm, 58 * mm, 42 * mm, 35 * mm, 32 * mm, 32 * mm, 33 * mm],
-            repeatRows=1,
-            hAlign="RIGHT",
-        )
-        collections_table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2A22")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#F2D892")),
-            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F6F1E7")),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#F6F1E7"), colors.HexColor("#EEE4CF")]),
-            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#BFA06A")),
-            ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D8C294")),
-            ("TOPPADDING", (0, 0), (-1, -1), 8),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-            ("LEFTPADDING", (0, 0), (-1, -1), 6),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ]))
-        story.extend([collections_table])
-
-    story.extend([Spacer(1, 10), Paragraph(format_arabic_pdf_text("مؤشرات إضافية"), section_style)])
-
-    extra_notes_lines = [
-        f"عدد القيود: {len(expenses)}",
-        f"إجمالي المدفوع: {format_currency(total_paid)} ريال",
-        f"إجمالي غير المدفوع: {format_currency(total_unpaid)} ريال",
-    ]
-    if include_collections:
-        extra_notes_lines.insert(1, f"عدد التحصيلات: {len(collections)}")
-        extra_notes_lines.insert(2, f"إجمالي المحصل: {format_currency(total_collections)} ريال")
-    if general_notes:
-        extra_notes_lines.append(f"ملاحظات عامة: {general_notes}")
-    else:
-        extra_notes_lines.append("ملاحظات عامة: لا توجد ملاحظات إضافية")
-
-    for line in extra_notes_lines:
-        story.append(Paragraph(format_arabic_pdf_text(line), body_style))
-        story.append(Spacer(1, 3))
-
-    doc.build(story, onFirstPage=draw_pdf_luxury_page_background, onLaterPages=draw_pdf_luxury_page_background)
+    doc = SimpleDocTemplate(file_path, pagesize=A4, rightMargin=15*mm, leftMargin=15*mm, topMargin=16*mm, bottomMargin=24*mm)
+    doc.quote_contract_pdf = True
+    base = getSampleStyleSheet()["Normal"]
+    body = ParagraphStyle("LedgerBody", parent=base, fontName=regular, fontSize=8, leading=12, alignment=TA_RIGHT, wordWrap="CJK")
+    heading = ParagraphStyle("LedgerHeading", parent=body, fontName=bold, fontSize=15, leading=21, textColor=colors.HexColor("#2F3A2D"))
+    section = ParagraphStyle("LedgerSection", parent=body, fontName=bold, fontSize=11, leading=16, textColor=colors.HexColor("#B38B45"), spaceBefore=9, spaceAfter=5, keepWithNext=True)
+    th = ParagraphStyle("LedgerHeader", parent=body, fontName=bold, textColor=colors.HexColor("#F2D892"))
+    strong = ParagraphStyle("LedgerStrong", parent=body, fontName=bold)
+    def p(value, style=body):
+        return Paragraph(format_arabic_pdf_text(xml_escape(str(value if value not in (None, "") else "—"))), style)
+    def grid(headers, rows, widths):
+        data = [[p(h, th) for h in headers]] + [[p(value) for value in row] for row in rows]
+        result = Table(data, colWidths=widths, repeatRows=1, hAlign="RIGHT")
+        result.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,0), colors.HexColor("#2F3A2D")),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#F6F1E7"), colors.HexColor("#EEE4CF")]),
+            ("LINEBELOW", (0,-1), (-1,-1), .5, colors.HexColor("#BFA06A")),
+            ("TOPPADDING", (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+            ("LEFTPADDING", (0,0), (-1,-1), 4), ("RIGHTPADDING", (0,0), (-1,-1), 4),
+            ("VALIGN", (0,0), (-1,-1), "TOP")]))
+        return result
+    company_name = "أوربان رايز ووركس" if normalize_access_value(company) == "works" else "مجموعة أوربان رايز"
+    story = [p(company_name, heading), p("تقرير مصروفات المشروع", heading),
+             p(f"{project['name'] or ('مشروع رقم ' + str(project['id']))} | {datetime.now().strftime('%Y-%m-%d')}"), p("الملخص المالي", section)]
+    summary = [("قيمة العقد", contract_value), ("المصروفات المسجلة", expense_total),
+        ("المصروفات المدفوعة", expense_paid), ("اتفاقات المقاولين بالباطن", committed),
+        ("المدفوع للمقاولين", paid), ("المتبقي للمقاولين", committed-paid),
+        ("إجمالي التكلفة المتوقعة", expected), ("إجمالي التكلفة المدفوعة فعليًا", expense_paid+paid),
+        ("المحصل من العميل", collected), ("المتبقي تحصيله من العميل", contract_value-collected),
+        ("الربح المتوقع", profit), ("الربح النقدي الحالي", collected-expense_paid-paid)]
+    summary_table = Table([[p(summary[i][0],strong), p(shown(summary[i][1])),
+                            p(summary[i+1][0],strong), p(shown(summary[i+1][1]))]
+                           for i in range(0, len(summary), 2)], colWidths=[47*mm,43*mm,47*mm,43*mm], hAlign="RIGHT")
+    summary_table.setStyle(TableStyle([("ROWBACKGROUNDS",(0,0),(-1,-1),[colors.HexColor("#EEE4CF"),colors.HexColor("#F6F1E7")]),
+        ("LINEBELOW",(0,-1),(-1,-1),.7,colors.HexColor("#BFA06A")), ("TOPPADDING",(0,0),(-1,-1),4), ("BOTTOMPADDING",(0,0),(-1,-1),4)]))
+    story.append(summary_table)
+    def add(title, headers, rows, widths, empty):
+        story.append(p(title, section))
+        story.append(grid(headers, rows, widths) if rows else p(empty))
+    add("تفاصيل المصروفات", ["التاريخ","التصنيف","البيان","المورد","المبلغ","حالة السداد","طريقة الدفع"],
+        [[e["date"],project_expense_category_label(e),e["title"],e["vendor"],shown(e["amount"]),e["payment_status"],e["payment_method"]] for e in expenses],
+        [22*mm,25*mm,37*mm,24*mm,26*mm,23*mm,23*mm], "لا توجد مصروفات مسجلة")
+    add("اتفاقات المقاولين بالباطن", ["المقاول","التخصص","بيان الأعمال","قيمة الاتفاق","المدفوع","المتبقي","الحالة"],
+        [[a["contractor_name"],a["specialty"],a["work_description"],shown(from_halalas(a["amount_halalas"])),shown(from_halalas(a["paid_halalas"])),shown(from_halalas(a["amount_halalas"]-a["paid_halalas"])),"مكتمل" if a["paid_halalas"]>=a["amount_halalas"] else "جزئي" if a["paid_halalas"] else "غير مدفوع"] for a in agreements],
+        [26*mm,24*mm,45*mm,24*mm,23*mm,23*mm,15*mm], "لا توجد اتفاقات مقاولين مسجلة")
+    add("دفعات المقاولين", ["المقاول","تاريخ الدفعة","المبلغ","طريقة الدفع","المرجع أو الملاحظة"],
+        [[x["contractor_name"],x["payment_date"],shown(from_halalas(x["amount_halalas"])),x["payment_method"],x["reference_note"]] for x in contractor_payments],
+        [34*mm,28*mm,29*mm,30*mm,59*mm], "لا توجد دفعات مقاولين مسجلة")
+    add("تحصيلات العميل", ["التاريخ","المبلغ","الحالة","طريقة الدفع","المرجع","البيان"],
+        [[c["date"],shown(c["amount"]),c["collection_status"],c["payment_method"],c["invoice_reference"],c["title"]] for c in collections],
+        [24*mm,29*mm,23*mm,29*mm,30*mm,45*mm], "لا توجد تحصيلات مسجلة")
+    doc.build(story, onFirstPage=draw_works_contract_pdf_frame, onLaterPages=draw_works_contract_pdf_frame)
     return file_path, file_name
 
 
@@ -12342,14 +12151,19 @@ def project_expenses_report(request: Request, project_id: int, company: str = ""
         (project_id,)
     ).fetchall()
     contract_total = calculate_project_contract_total(conn, project)
+    agreements = subcontractor_agreement_rows(conn, project_id) if normalize_access_value(company) == "works" else []
+    contractor_payments = subcontractor_payment_rows(conn, project_id) if agreements else []
+    snapshot = build_project_financial_snapshot(conn, project)
     conn.close()
-
     file_path, file_name = build_project_expenses_report_pdf(
         project,
         expenses,
         contract_total,
         collections=collections,
         company=company,
+        agreements=agreements,
+        contractor_payments=contractor_payments,
+        financial_snapshot=snapshot,
     )
     return FileResponse(
         path=file_path,
