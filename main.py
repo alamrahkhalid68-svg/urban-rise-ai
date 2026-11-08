@@ -5049,7 +5049,21 @@ REAL_ESTATE_PATHS = ("/real-estate",) + tuple(f"/real-estate/{slug}" for slug in
 
 @app.get("/robots.txt", response_class=PlainTextResponse)
 def robots_txt():
-    return "User-agent: *\nDisallow: /\nAllow: /$\nAllow: /works$\nAllow: /works/build$\nAllow: /works/care$\nAllow: /works/projects/\nAllow: /real-estate$\nAllow: /real-estate/\nSitemap: https://urbanrise.sa/sitemap.xml\n"
+    return (
+        "User-agent: *\n"
+        "Disallow: /admin/\n"
+        "Disallow: /portal\n"
+        "Disallow: /login\n"
+        "Disallow: /logout\n"
+        "Allow: /real-estate\n"
+        "Allow: /real-estate/\n"
+        "Allow: /real-estate/projects\n"
+        "Allow: /real-estate/development\n"
+        "Allow: /real-estate/investment-partnerships\n"
+        "Allow: /real-estate/property-management\n"
+        "Allow: /real-estate/marketing\n"
+        "Sitemap: https://urbanrise.sa/sitemap.xml\n"
+    )
 
 
 @app.get("/sitemap.xml")
