@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  {% set path = '/real-estate/projects/' ~ project.slug if project is defined and project else '/real-estate' ~ ('/' ~ slug if slug else '') %}
+  {% set title = 'التطوير العقاري في الرياض لمالكي الأراضي | أوربان رايز' if slug == 'development' else 'الاستثمار والشراكات العقارية في الرياض | أوربان رايز' if slug == 'investment-partnerships' else 'إدارة الأملاك في الرياض | أوربان رايز' if slug == 'property-management' else 'التسويق العقاري في الرياض | بيع وتأجير العقارات داخل المملكة وخارجها | أوربان رايز' if slug == 'marketing' else (project.name ~ ' | ' if project is defined and project else page[0] ~ ' | ' if page else '') ~ 'أوربان رايز للتطوير والاستثمار العقاري' %}
+  {% set description = project.summary if project is defined and project else page[1] if page else 'أوربان رايز للتطوير والاستثمار العقاري في الرياض. التطوير العقاري، إدارة الأملاك، التسويق العقاري، والاستثمار والشراكات.' %}
+  <title>{{ title }}</title><meta name="description" content="{{ description }}">
+  <link rel="canonical" href="https://urbanrise.sa{{ path }}">
+  <meta property="og:type" content="{{ 'article' if project is defined and project else 'website' }}"><meta property="og:locale" content="ar_SA">
+  <meta property="og:site_name" content="أوربان رايز"><meta property="og:title" content="{{ title }}">
+  <meta property="og:description" content="{{ description }}"><meta property="og:url" content="https://urbanrise.sa{{ path }}">
+  <meta property="og:image" content="https://urbanrise.sa{{ project.cover_url if project is defined and project else '/static/images/real-estate-hero.png' }}">
+  <link rel="stylesheet" href="/static/real-estate.css">
+</head>
+<body>
+<header class="site-header"><div class="header-inner">
+  <a class="brand" href="/real-estate"><img src="/static/images/real-estate-logo.png" alt="شعار أوربان رايز للتطوير والاستثمار العقاري"><span>أوربان رايز للتطوير والاستثمار العقاري</span></a>
+  <details class="mobile-menu"><summary>القائمة</summary><nav aria-label="القائمة الرئيسية">
+    <a href="/real-estate" {% if slug == '' %}class="active" aria-current="page"{% endif %}>الرئيسية</a><a href="/real-estate/projects" {% if slug == 'projects' %}class="active" aria-current="page"{% endif %}>مشاريعنا</a>
+    <a href="/real-estate/development" {% if slug == 'development' %}class="active" aria-current="page"{% endif %}>التطوير العقاري</a><a href="/real-estate/investment-partnerships" {% if slug == 'investment-partnerships' %}class="active" aria-current="page"{% endif %}>الاستثمار والشراكات</a>
+    <a href="/real-estate/property-management" {% if slug == 'property-management' %}class="active" aria-current="page"{% endif %}>إدارة الأملاك</a><a href="/real-estate/marketing" {% if slug == 'marketing' %}class="active" aria-current="page"{% endif %}>التسويق العقاري</a>
+  </nav></details>
+  <nav class="desktop-nav" aria-label="القائمة الرئيسية"><a href="/real-estate" {% if slug == '' %}class="active" aria-current="page"{% endif %}>الرئيسية</a><a href="/real-estate/projects" {% if slug == 'projects' %}class="active" aria-current="page"{% endif %}>مشاريعنا</a><a href="/real-estate/development" {% if slug == 'development' %}class="active" aria-current="page"{% endif %}>التطوير العقاري</a><a href="/real-estate/investment-partnerships" {% if slug == 'investment-partnerships' %}class="active" aria-current="page"{% endif %}>الاستثمار والشراكات</a><a href="/real-estate/property-management" {% if slug == 'property-management' %}class="active" aria-current="page"{% endif %}>إدارة الأملاك</a><a href="/real-estate/marketing" {% if slug == 'marketing' %}class="active" aria-current="page"{% endif %}>التسويق العقاري</a></nav>
+</div></header>
+<main>
+{% if project is defined and project %}
+<article class="wrap estate-detail"><p class="eyebrow">{{ project.stage }} · {{ project.location }}</p><h1>{{ project.name }}</h1><p class="detail-lead">{{ project.summary }}</p><img class="detail-cover" src="{{ project.cover_url }}" alt="{{ project.cover_alt }}" width="1600" height="1200" fetchpriority="high"><section><h2>عن المشروع</h2><p>{{ project.description or project.summary }}</p></section>{% if images|length > 1 %}<section><h2>صور المشروع</h2><div class="estate-gallery">{% for image in images if not image.is_cover %}<figure><img src="{{ image.image_url }}" alt="{{ image.alt }}" loading="lazy" decoding="async" width="1200" height="900"><figcaption>{{ image.alt }}</figcaption></figure>{% endfor %}</div></section>{% endif %}<div class="inner-actions"><a class="button primary" href="{{ whatsapp }}" target="_blank" rel="noopener noreferrer">استفسر عن المشروع</a><a href="/real-estate/projects">جميع المشاريع</a><a href="/real-estate">العودة لصفحة الشركة</a></div></article>
+{% elif not page %}
+<section class="hero"><div class="hero-copy"><p class="eyebrow">أوربان رايز للتطوير والاستثمار العقاري</p><h1>نطوّر الفرص العقارية إلى<br>أصول ذات قيمة مستدامة</h1><span class="gold-line"></span><div class="actions"><a class="button primary" href="/real-estate/projects">استعرض مشاريعنا <span aria-hidden="true">‹</span></a><a class="button outline" href="#opportunity">اطرح عقارك أو فرصتك</a></div></div></section>
+<section class="service-grid wrap" aria-label="خدماتنا">
+  <a href="/real-estate/development"><span aria-hidden="true">▥</span>التطوير العقاري</a><a href="/real-estate/property-management"><span aria-hidden="true">⌂</span>إدارة الأملاك</a><a href="/real-estate/marketing"><span aria-hidden="true">◁</span>التسويق العقاري</a><a href="/real-estate/investment-partnerships"><span aria-hidden="true">◇</span>الاستثمار والشراكات</a>
+</section>
+<section class="wrap projects"><div class="section-title"><h2>مشاريعنا</h2></div>{% if featured_projects %}<div class="project-grid">{% for item in featured_projects %}
+  <a class="project-card" href="/real-estate/projects/{{ item.slug }}"><img class="project-image" src="{{ item.cover_thumb }}" alt="{{ item.cover_alt }}" loading="lazy" decoding="async"><div><small>{{ item.stage }} · {{ item.location }}</small><h3>{{ item.name }}</h3><p>{{ item.summary }}</p><span class="mini-button">عرض التفاصيل ‹</span></div></a>
+{% endfor %}</div>{% else %}<p>ستُعرض المشاريع العقارية المختارة هنا بعد اعتمادها ونشرها.</p>{% endif %}</section>
+<section class="wrap opportunity" id="opportunity"><div><h2>لديك أرض أو فرصة عقارية؟</h2><p>شاركنا تفاصيل عقارك أو فرصتك لنبدأ دراسة إمكانية التعاون في التطوير والاستثمار والشراكات.</p><a class="button sand" href="https://wa.me/966545687944?text=%D8%A3%D8%B1%D8%BA%D8%A8%20%D9%81%D9%8A%20%D8%B7%D8%B1%D8%AD%20%D8%B9%D9%82%D8%A7%D8%B1%20%D8%A3%D9%88%20%D9%81%D8%B1%D8%B5%D8%A9" target="_blank" rel="noopener noreferrer">اطرح عقارك أو فرصتك ‹</a></div></section>
+<section class="wrap journey"><div class="section-title"><h2>رحلة التطوير مع أوربان رايز</h2></div><div class="steps"><article><b>١</b><h3>دراسة الفرصة</h3><p>تحليل شامل للأرض أو الفرصة وتقييم إمكاناتها.</p></article><article><b>٢</b><h3>التخطيط والتصميم</h3><p>إعداد التصور التطويري والتصاميم المناسبة.</p></article><article><b>٣</b><h3>التطوير والتنفيذ</h3><p>إدارة مراحل التطوير ومتابعة جودة التنفيذ.</p></article><article><b>٤</b><h3>التسليم وتحقيق القيمة</h3><p>تسليم المشروع ومتابعة تشغيله لتحقيق قيمة مستدامة.</p></article></div></section>
+{% else %}
+<section class="inner-hero{% if slug in ('development', 'investment-partnerships') %} estate-long-hero{% endif %}"><div class="wrap"><p class="eyebrow">أوربان رايز للتطوير والاستثمار العقاري</p><h1>{{ page[0] }}</h1>{% if slug not in ('development', 'investment-partnerships') %}<p>{{ page[2] }}</p>{% endif %}</div></section>
+{% if slug == 'projects' %}<section class="wrap inner-content"><div class="section-title"><h2>المشاريع المنشورة</h2></div>{% if published_projects %}<div class="project-grid">{% for item in published_projects %}<a class="project-card" href="/real-estate/projects/{{ item.slug }}"><img class="project-image" src="{{ item.cover_thumb }}" alt="{{ item.cover_alt }}" loading="lazy" decoding="async"><div><small>{{ item.stage }} · {{ item.location }}</small><h3>{{ item.name }}</h3><p>{{ item.summary }}</p><span class="mini-button">عرض التفاصيل ‹</span></div></a>{% endfor %}</div>{% else %}<p>لا توجد مشاريع عقارية منشورة حاليًا. ستظهر هنا بعد اعتماد بياناتها وصورها.</p>{% endif %}</section>{% else %}
+{% if slug == 'development' %}
+<div class="wrap estate-editorial estate-development">
+  <p class="estate-intro">{{ page[2] }}</p>
+  <section aria-labelledby="development-types"><div class="section-title"><h2 id="development-types">ماذا نطوّر؟</h2></div><ul class="estate-info-grid">
+    <li>الأراضي السكنية والتجارية.</li><li>الفلل والمجمعات السكنية.</li><li>المباني التجارية والمكتبية.</li><li>العقارات القائمة القابلة لإعادة التطوير.</li><li>المشاريع متعددة الاستخدام.</li>
+  </ul></section>
+  <section aria-labelledby="development-method"><div class="section-title"><h2 id="development-method">كيف نطوّر أرضك؟</h2></div><ol class="estate-process-grid">
+    <li>دراسة الأرض والموقع والسوق.</li><li>تحديد أفضل استخدام للعقار.</li><li>إعداد التصور ودراسة الجدوى.</li><li>التخطيط والتصميم والتراخيص.</li><li>إدارة التطوير والتنفيذ.</li><li>التسويق والبيع أو التأجير.</li><li>توزيع النتائج وفق اتفاقية المشروع.</li>
+  </ol></section>
+  <section class="estate-explanation" aria-labelledby="landowner-partnership"><h2 id="landowner-partnership">نموذج الشراكة مع مالك الأرض</h2><p>يقدم مالك الأرض الأصل العقاري، وتتولى أوربان رايز دراسة المشروع وتطويره وإدارته. وتُحدد التزامات كل طرف والعوائد وآلية توزيع النتائج في اتفاقية واضحة خاصة بكل مشروع.</p></section>
+  <section aria-labelledby="development-journey"><div class="section-title"><h2 id="development-journey">رحلة تطوير المشروع</h2></div><ol class="estate-journey"><li>استقبال الأرض</li><li>الدراسة الأولية</li><li>تصور المشروع</li><li>الاتفاق</li><li>التطوير والتنفيذ</li><li>التسويق والتخارج</li></ol></section>
+  <section class="estate-cta" aria-labelledby="development-contact"><h2 id="development-contact">هل أرضك مناسبة للتطوير؟</h2><p>أرسل لنا موقع الأرض ومعلوماتها الأساسية لإجراء مراجعة أولية.</p><a class="button sand" href="https://wa.me/966545687944?text={{ 'السلام عليكم، لدي أرض في الرياض وأرغب في دراسة فرصة تطويرها مع أوربان رايز.'|urlencode }}" target="_blank" rel="noopener noreferrer">اعرض أرضك علينا</a></section>
+</div>
+{% elif slug == 'investment-partnerships' %}
+<div class="wrap estate-editorial estate-investment">
+  <p class="estate-intro">{{ page[2] }}</p>
+  <section aria-labelledby="investment-selection"><div class="section-title"><h2 id="investment-selection">كيف نختار الفرصة؟</h2></div><ul class="estate-info-grid">
+    <li>موقع المشروع.</li><li>الطلب في السوق.</li><li>التكلفة والمدة المتوقعة.</li><li>خطة التطوير والتنفيذ.</li><li>المخاطر وآلية إدارتها.</li><li>استراتيجية البيع أو التخارج.</li>
+  </ul></section>
+  <section aria-labelledby="partnership-parties"><div class="section-title"><h2 id="partnership-parties">أطراف الشراكة</h2></div><ul class="estate-partners"><li>مستثمر مالي.</li><li>مالك أرض.</li><li>شريك استراتيجي.</li><li>جهة تمويل أو شركة مرخصة عند الحاجة.</li></ul></section>
+  <section aria-labelledby="partnership-journey"><div class="section-title"><h2 id="partnership-journey">رحلة الشراكة</h2></div><ol class="estate-journey"><li>تسجيل الاهتمام</li><li>التعارف والتأهيل</li><li>عرض الفرصة المناسبة بصورة خاصة</li><li>الدراسة والاتفاقيات</li><li>التنفيذ والمتابعة</li><li>البيع أو التخارج</li><li>توزيع النتائج حسب الاتفاق</li></ol></section>
+  <section class="estate-explanation" aria-labelledby="investment-opportunities"><h2 id="investment-opportunities">الفرص الاستثمارية</h2><p>تُعرض الفرص الاستثمارية بعد اكتمال دراستها وتجهيز إطارها النظامي.</p></section>
+  <section class="estate-cta" aria-labelledby="investment-contact"><h2 id="investment-contact">مهتم بشراكة عقارية؟</h2><a class="button sand" href="https://wa.me/966545687944?text={{ 'السلام عليكم، أرغب في بحث فرصة شراكة عقارية مع أوربان رايز في الرياض.'|urlencode }}" target="_blank" rel="noopener noreferrer">تواصل لبحث شراكة</a></section>
+</div>
+{% elif slug == 'property-management' %}
+<div class="wrap property-management-content">
+  <section class="property-dashboard-feature" aria-labelledby="property-dashboard-title"><div class="property-dashboard-copy"><h2 id="property-dashboard-title">أملاكك أمامك بوضوح</h2><p>تابع عقاراتك ووحداتك المؤجرة والشاغرة، والإيجارات والتحصيل وطلبات الصيانة والتقارير اليومية من صفحة واحدة واضحة.</p><ul><li>الوحدات المؤجرة والشاغرة.</li><li>الإيجارات والتحصيلات.</li><li>طلبات الصيانة وحالتها.</li><li>تقارير يومية للمالك.</li></ul></div><figure class="property-dashboard-image"><img src="/static/images/property-management-dashboard.png" alt="لوحة توضيحية لمتابعة العقارات والوحدات والإيجارات والصيانة" width="1672" height="941" loading="lazy" decoding="async"></figure></section>
+  <section aria-labelledby="property-visibility"><div class="section-title"><h2 id="property-visibility">أملاكك أمامك بوضوح</h2></div><p class="property-section-lead">يحصل المالك على صفحة إلكترونية خاصة تمكّنه من متابعة أملاكه في الرياض من مكان واحد:</p><ul class="estate-info-grid"><li>العقارات والوحدات.</li><li>الوحدات المؤجرة والشاغرة.</li><li>عقود الإيجار ومواعيدها.</li><li>الإيجارات المستحقة والمحصلة.</li><li>طلبات الصيانة وحالتها.</li><li>التقارير اليومية والمالية.</li></ul></section>
+  <section aria-labelledby="property-maintenance"><div class="section-title"><h2 id="property-maintenance">الصيانة بموافقة وشفافية</h2></div><ol class="property-maintenance-timeline"><li>طلب المستأجر</li><li>إشعار الإدارة والمالك</li><li>معاينة الطلب</li><li>إرسال تفاصيل العمل للمالك</li><li>اعتماد التنفيذ</li><li>تنفيذ الصيانة</li><li>إغلاق الطلب وإرفاق التقرير</li></ol><p class="property-maintenance-note">لا تُنفّذ الأعمال غير الطارئة إلا بعد اطلاع المالك واعتمادها. ويمكنه متابعة حالة الطلب وتفاصيله من صفحته الخاصة.</p></section>
+  <section aria-labelledby="property-leasing"><div class="section-title"><h2 id="property-leasing">إدارة التأجير والتحصيل</h2></div><ul class="estate-info-grid"><li>تسويق الوحدات الشاغرة.</li><li>استقبال وفرز المستأجرين.</li><li>متابعة العقود والتجديد.</li><li>متابعة التحصيل والاستحقاقات.</li><li>العمل على تقليل مدة شغور الوحدة.</li><li>متابعة القيمة الإيجارية وفق سوق الرياض.</li></ul></section>
+  <section aria-labelledby="property-value"><div class="section-title"><h2 id="property-value">نحافظ على قيمة العقار</h2></div><ul class="estate-info-grid"><li>المتابعة الدورية للعقار.</li><li>تنسيق الصيانة الوقائية والطارئة.</li><li>توثيق الأعمال المنفذة.</li><li>متابعة المرافق والموردين.</li><li>تقارير حالة العقار والوحدات.</li></ul></section>
+  <section class="estate-explanation" aria-labelledby="property-reports"><h2 id="property-reports">تقارير يومية للمالك</h2><p>يستطيع المالك الدخول إلى صفحته في أي وقت لمشاهدة تحديثات الوحدات والإيجارات والتحصيل والصيانة والتقارير اليومية والمالية، دون الحاجة إلى الاتصالات المتكررة.</p></section>
+  <section class="estate-cta" aria-labelledby="property-contact"><h2 id="property-contact">دعنا ندير أملاكك باحتراف</h2><a class="button sand" href="https://wa.me/966545687944?text={{ 'السلام عليكم، لدي عقار في الرياض وأرغب في معرفة خدمات إدارة الأملاك لدى أوربان رايز.'|urlencode }}" target="_blank" rel="noopener noreferrer">اطلب إدارة أملاكك</a></section>
+</div>
+{% elif slug == 'marketing' %}
+<div class="wrap estate-marketing-content">
+  <section class="marketing-feature" aria-labelledby="marketing-feature-title"><div class="marketing-feature-copy"><h2 id="marketing-feature-title">تسويق متكامل لعقارك</h2><ul class="marketing-services"><li>تصوير العقار وإعداده للإعلان.</li><li>كتابة إعلان احترافي.</li><li>نشر العقار في المنصات العقارية.</li><li>التسويق الرقمي والحملات الإعلانية.</li><li>التسويق من خلال قاعدة العملاء وشبكة علاقات الشركة.</li><li>الوصول للعملاء داخل المملكة وخارجها.</li><li>استقبال العملاء وفرز الجادين.</li><li>تنسيق المعاينات والتفاوض.</li><li>إتمام البيع أو التأجير وتوثيق العقود.</li></ul></div><figure class="marketing-feature-image"><img src="/static/images/real-estate-marketing.png" alt="عرض توضيحي لتسويق عقار للبيع أو الإيجار عبر المنصات الرقمية" width="1536" height="1024" loading="lazy" decoding="async"></figure></section>
+  <section aria-labelledby="marketing-journey-title"><div class="section-title"><h2 id="marketing-journey-title">كيف نسوّق عقارك؟</h2></div><ol class="estate-process-grid"><li>استلام بيانات العقار.</li><li>تجهيز المحتوى والصور.</li><li>النشر والتسويق.</li><li>استقبال وفرز العملاء.</li><li>المعاينات والتفاوض.</li><li>إتمام البيع أو التأجير.</li></ol></section>
+  <section aria-labelledby="marketing-partners-title"><div class="section-title"><h2 id="marketing-partners-title">شركاؤنا في التسويق</h2></div><div class="marketing-partners-grid">
+    <div class="marketing-partner"><img src="/static/images/marketing-partners/aqar.svg" alt="شعار عقار" loading="lazy"><span>عقار</span></div>
+    <div class="marketing-partner"><img src="/static/images/marketing-partners/bayut.png" alt="شعار بيوت السعودية" loading="lazy"><span>بيوت السعودية</span></div>
+    <div class="marketing-partner"><img src="/static/images/marketing-partners/wasalt.svg" alt="شعار وصلت" loading="lazy"><span>وصلت</span></div>
+    <div class="marketing-partner"><img src="/static/images/marketing-partners/property-finder.svg" alt="شعار بروبرتي فايندر السعودية" loading="lazy"><span>بروبرتي فايندر السعودية</span></div>
+    <div class="marketing-partner"><img src="/static/images/marketing-partners/ejar.svg" alt="شعار إيجار" loading="lazy"><span>إيجار</span></div>
+  </div></section>
+  <section class="estate-cta" aria-labelledby="marketing-contact-title"><h2 id="marketing-contact-title">هل ترغب في بيع أو تأجير عقارك؟</h2><a class="button sand" href="https://wa.me/966545687944?text={{ 'السلام عليكم، لدي عقار للبيع أو التأجير وأرغب في معرفة خدمات التسويق العقاري لدى أوربان رايز.'|urlencode }}" target="_blank" rel="noopener noreferrer">سوّق عقارك معنا</a></section>
+</div>
+{% else %}
+<section class="wrap inner-content"><div class="section-title"><h2>خدماتنا الرئيسية</h2></div><div class="inner-grid">{% for item in page[3] %}<article><span class="card-number">0{{ loop.index }}</span><h3>{{ item }}</h3></article>{% endfor %}</div>
+<div class="section-title"><h2>{% if slug == 'projects' %}كيف ننشر المشاريع{% else %}طريقة العمل{% endif %}</h2></div><div class="work-steps">{% for item in page[4] %}<span><b>{{ loop.index }}</b>{{ item }}</span>{% endfor %}</div><div class="inner-actions"><a class="button primary" href="https://wa.me/966545687944?text=%D8%A3%D8%B1%D8%BA%D8%A8%20%D9%81%D9%8A%20%D8%A7%D9%84%D8%AA%D9%88%D8%A7%D8%B5%D9%84%20%D9%85%D8%B9%20%D8%A3%D9%88%D8%B1%D8%A8%D8%A7%D9%86%20%D8%B1%D8%A7%D9%8A%D8%B2" target="_blank" rel="noopener noreferrer">{% if slug == 'investment-partnerships' %}تسجيل الاهتمام{% else %}تواصل عبر واتساب{% endif %}</a><a href="/real-estate">العودة لصفحة الشركة</a><a href="/">العودة لصفحة المجموعة</a></div></section>
+{% endif %}
+{% endif %}
+{% endif %}
+</main>
+<footer id="contact" class="real-estate-footer"><div class="wrap footer-grid">
+  <div class="footer-identity"><div class="footer-brand"><img src="/static/images/real-estate-logo.png" alt="شعار أوربان رايز للتطوير والاستثمار العقاري"><strong>أوربان رايز للتطوير والاستثمار العقاري</strong></div><p>إحدى شركات <a href="/">مجموعة أوربان رايز</a></p></div>
+  <div class="footer-links"><h2>روابط سريعة</h2><a href="/real-estate">الرئيسية</a><a href="/real-estate/projects">مشاريعنا</a><a href="/real-estate/development">التطوير العقاري</a><a href="/real-estate/investment-partnerships">الاستثمار والشراكات</a><a href="/real-estate/property-management">إدارة الأملاك</a><a href="/real-estate/marketing">التسويق العقاري</a></div>
+  <div class="footer-contact"><h2>تواصل معنا</h2><p>الرياض - طريق أبو بكر الصديق - حي النرجس - مبنى أوربان رايز</p><a href="tel:+966545687944" dir="ltr">+966545687944</a><a href="mailto:urbanrisegroup1@gmail.com">urbanrisegroup1@gmail.com</a><a href="https://maps.app.goo.gl/s9M2JJL5qvt9uXrL8?g_st=iw" target="_blank" rel="noopener noreferrer">عرض الموقع على الخريطة</a></div>
+</div><div class="copyright wrap"><span>© 2026 مجموعة أوربان رايز — جميع الحقوق محفوظة</span><span>التجربة الرقمية من <bdi>Urban Rise AI</bdi></span></div></footer>
+<script>
+(() => {
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let navigating = false;
+
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest('a[href]');
+    if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.hasAttribute('download') || link.target === '_blank') return;
+    const destination = new URL(link.href, window.location.href);
+    if (destination.origin !== window.location.origin || !['http:', 'https:'].includes(destination.protocol) || reducedMotion.matches) return;
+    event.preventDefault();
+    if (navigating) return;
+    navigating = true;
+    link.classList.add('real-estate-link-flash');
+    document.body.classList.add('page-leaving');
+    window.setTimeout(() => window.location.assign(destination.href), 320);
+  });
+})();
+</script>
+</body></html>
