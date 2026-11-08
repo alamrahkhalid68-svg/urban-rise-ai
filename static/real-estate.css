@@ -1,0 +1,123 @@
+:root{--ink:#263323;--forest:#293528;--gold:#8b6237;--sand:#ead9c3;--cream:#f8f4ee;--line:#dfd0bf}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;overflow-x:hidden;background:var(--cream);color:var(--ink);font-family:Tahoma,Arial,sans-serif}a{color:inherit;text-decoration:none}button,a{transition:background .2s,transform .2s}a:hover{color:var(--gold)}.wrap{width:min(1440px,92%);margin:auto}.site-header{background:#f7f2edeb;position:relative;z-index:3;box-shadow:0 2px 12px #31251b12}.header-inner{width:min(1500px,96%);min-height:74px;margin:auto;display:flex;align-items:center;justify-content:space-between;gap:24px}.brand{display:flex;align-items:center;gap:10px;white-space:nowrap;font-size:24px;font-weight:800;line-height:1}.brand img{width:48px;height:48px;object-fit:contain}.brand small{display:block;font-size:10px;margin-top:5px}.desktop-nav{display:flex;align-items:center;gap:clamp(10px,2.3vw,42px);font-size:14px;font-weight:700}.desktop-nav a:not(.active):hover{color:var(--gold)}.mobile-menu{display:none}.hero{min-height:365px;display:flex;align-items:center}.hero-copy{width:min(1440px,92%);margin:auto}.eyebrow{color:var(--gold);font-size:14px;font-weight:700}.hero h1{font-size:clamp(30px,3.2vw,52px);line-height:1.32;margin:8px 0 14px;max-width:650px}.gold-line{display:block;width:55px;height:3px;background:var(--gold);margin:0 0 22px}.actions{display:flex;gap:14px;flex-wrap:wrap}.button{display:inline-flex;align-items:center;justify-content:center;gap:14px;border-radius:6px;padding:11px 24px;font-size:14px;font-weight:700}.primary{background:var(--forest);color:#fff}.primary:hover{background:#42513d;color:#fff}.outline{border:1px solid var(--gold);color:#362b21;background:#fff9}.outline:hover{background:#fff}.service-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;padding:18px 0 6px}.service-grid a{display:flex;align-items:center;justify-content:center;gap:24px;min-height:69px;border:1px solid var(--line);border-radius:8px;background:linear-gradient(#fff9,#eee5da);font-size:19px;font-weight:800}.service-grid span{font-size:35px;color:var(--gold);font-weight:400}.service-grid a:hover,.project-card:hover{transform:translateY(-3px);box-shadow:0 8px 20px #2c241b19}.projects{padding:5px 0 12px}.section-title{display:flex;align-items:center;gap:18px;margin:14px 0}.section-title:after{content:'';width:38px;height:2px;background:var(--gold)}h2{font-size:27px;margin:0}.project-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:15px}.project-card{min-height:145px;border:1px solid var(--line);border-radius:9px;background:#f4eee8;overflow:hidden;display:grid;grid-template-columns:55% 45%;transition:.2s}.project-card>div:last-child{padding:10px 13px}.project-card h3{margin:3px 0;font-size:18px}.project-card p{font-size:12px;line-height:1.5;margin:0 0 8px}.project-card small{color:var(--gold);font-weight:700}.project-image{background:url('/static/images/real-estate-hero.png') center/cover;min-height:145px}.image-two{background-position:65% 50%}.image-three{background-position:25% 50%}.mini-button{display:inline-block;border:1px solid var(--gold);color:#5c3b1e;padding:5px 12px;border-radius:5px;font-size:11px;font-weight:700}.opportunity{min-height:156px;border-radius:10px;background:linear-gradient(270deg,#273323 0%,#273323ec 44%,#2733233b 70%),url('/static/images/real-estate-hero.png') 45% 55%/cover;color:#fff;padding:20px 38px}.opportunity h2{font-size:25px}.opportunity p{max-width:690px;font-size:14px}.sand{background:#e7cfae;color:#282519;padding:8px 18px}.journey{padding:8px 0 24px}.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:22px}.steps article{border-left:1px solid var(--line);padding:4px 16px}.steps b,.card-number{display:inline-grid;place-items:center;border-radius:50%;background:#f0e1cf;color:var(--gold);width:36px;height:36px}.steps h3{font-size:16px;margin:5px 0}.steps p{font-size:12px;line-height:1.6;margin:0}.inner-hero{padding:90px 0;min-height:280px}.inner-hero h1{font-size:clamp(34px,4vw,58px);margin:10px 0}.inner-hero p:last-child{max-width:650px;line-height:1.8}.inner-content{padding:45px 0 75px}.inner-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-bottom:45px}.inner-grid article{min-height:135px;border:1px solid var(--line);border-radius:9px;background:#f4eee8;padding:22px}.inner-grid h3{margin:13px 0 6px}.inner-grid p{font-size:13px;line-height:1.6}.work-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:15px}.work-steps span{padding:18px;border-bottom:2px solid var(--gold);background:#eee5da}.work-steps b{color:var(--gold);margin-left:12px}.inner-actions{display:flex;align-items:center;flex-wrap:wrap;gap:25px;margin-top:34px}footer{background:#262725;color:#f6f0e8;padding:28px 0 0}.footer-grid{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:34px}.footer-grid>div+div{border-right:1px solid #a68c70;padding-right:32px}.footer-brand{display:flex;gap:10px;align-items:center;font-size:22px}.footer-brand img{width:43px;height:43px;object-fit:contain}.footer-grid h2{font-size:16px;color:#e6c69e;margin-bottom:10px}.footer-grid a{display:block;margin:5px 0;font-size:13px}.footer-grid p{font-size:13px;line-height:1.6}.copyright{border-top:1px solid #887660;padding:12px 0;font-size:12px;margin-top:20px}@media(max-width:1050px){.desktop-nav{gap:10px;font-size:12px}.brand{font-size:19px}.service-grid a{font-size:15px;gap:8px}.project-card{grid-template-columns:1fr}.project-image{min-height:115px}}@media(max-width:760px){.header-inner{min-height:66px}.brand{font-size:18px}.brand img{width:38px;height:38px}.desktop-nav{display:none}.mobile-menu{display:block;position:relative}.mobile-menu summary{cursor:pointer;color:var(--forest);font-weight:700;border:1px solid var(--line);border-radius:5px;padding:8px 12px}.mobile-menu nav{position:absolute;left:0;top:43px;width:min(85vw,290px);background:#f7f2ed;border:1px solid var(--line);box-shadow:0 12px 24px #0002;padding:10px;border-radius:7px}.mobile-menu nav a{display:block;padding:10px;border-bottom:1px solid var(--line)}.hero{min-height:500px;align-items:flex-end;background:linear-gradient(0deg,#f7e9db 0%,#f7e9dbf0 38%,#f7e9db26 76%),url('/static/images/real-estate-hero.png') 62% center/cover}.hero-copy{padding:0 0 36px}.hero h1{font-size:32px}.service-grid{grid-template-columns:repeat(2,1fr);gap:10px}.service-grid a{min-height:86px;flex-direction:column;gap:0;font-size:14px;text-align:center}.project-grid,.inner-grid,.work-steps{grid-template-columns:1fr}.project-card{grid-template-columns:45% 55%}.opportunity{padding:24px;background:linear-gradient(270deg,#273323e8,#273323c9),url('/static/images/real-estate-hero.png') center/cover}.steps{grid-template-columns:repeat(2,1fr);gap:16px}.footer-grid{grid-template-columns:1fr;gap:14px}.footer-grid>div+div{border:0;border-top:1px solid #887660;padding:15px 0 0}.inner-hero{padding:65px 0}.inner-content{padding:25px 0 50px}}@media(max-width:420px){.actions{display:grid}.steps{grid-template-columns:1fr}.project-card{grid-template-columns:1fr}.project-image{min-height:140px}.hero h1{font-size:28px}}
+@font-face{font-family:"IBM Plex Sans Arabic";src:url('/static/fonts/IBMPlexSansArabic-Regular.ttf') format('truetype');font-style:normal;font-weight:400;font-display:swap}
+@font-face{font-family:"IBM Plex Sans Arabic";src:url('/static/fonts/IBMPlexSansArabic-SemiBold.ttf') format('truetype');font-style:normal;font-weight:600;font-display:swap}
+body{font-family:"IBM Plex Sans Arabic",Arial,sans-serif;font-weight:400}
+h1,h2,h3,h4,strong,b,.brand,.desktop-nav,.mobile-menu summary,.button,.mini-button,.service-grid a,.project-card small,.eyebrow{font-weight:600}
+.brand{min-width:0;white-space:normal;line-height:1.22}
+.brand img{width:58px;height:58px;flex:none;object-fit:contain;border-radius:4px}
+.brand small{font-size:11px;line-height:1.35}
+.footer-brand img{width:58px;height:58px;object-fit:contain;border-radius:4px}
+.hero{background-position:center 54%}
+.hero h1{text-shadow:0 1px 12px rgba(255,247,235,.65)}
+/* The group's gentle drifting gold thread, scoped to real-estate controls. */
+.service-grid a,.project-card,.button,.mini-button{position:relative;isolation:isolate;overflow:hidden}
+.service-grid a::after,.project-card::after,.button::after,.mini-button::after{content:"";position:absolute;inset:-15%;z-index:-1;pointer-events:none;background:repeating-linear-gradient(137deg,transparent 0 108px,rgba(220,187,128,.16) 109px,transparent 110px 220px);opacity:.55;animation:real-estate-thread-drift 55s ease-in-out infinite alternate}
+.service-grid a::after,.project-card::after{z-index:0}
+.service-grid a>*,.project-card>*{position:relative;z-index:1}
+@keyframes real-estate-thread-drift{from{transform:translate3d(-12px,0,0)}to{transform:translate3d(14px,12px,0)}}
+@media(max-width:1100px){.desktop-nav{display:none}.mobile-menu{display:block;position:relative}.mobile-menu summary{cursor:pointer;color:var(--forest);font-weight:600;border:1px solid var(--line);border-radius:5px;padding:8px 12px}.mobile-menu nav{position:absolute;left:0;top:43px;width:min(85vw,290px);background:#f7f2ed;border:1px solid var(--line);box-shadow:0 12px 24px #0002;padding:10px;border-radius:7px}.mobile-menu nav a{display:block;padding:10px;border-bottom:1px solid var(--line)}}
+@media(max-width:760px){.brand img{width:46px;height:46px}.brand{font-size:17px}.brand small{font-size:10px}.hero{background-position:52% center}.hero h1{overflow-wrap:anywhere}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.service-grid a::after,.project-card::after,.button::after,.mini-button::after{animation:none}.service-grid a,.project-card,.button,.mini-button{transition:none}}
+/* One image, crop and text overlay for every real-estate page. */
+.hero,.inner-hero{height:370px;min-height:370px;background-image:linear-gradient(270deg,rgba(248,239,228,.68) 0%,rgba(248,239,228,.42) 28%,rgba(248,239,228,.08) 55%,transparent 72%),url('/static/images/real-estate-hero.png');background-position:center 54%;background-size:cover}
+.brand img,.footer-brand img{background:transparent;border-radius:0}
+.brand span{max-width:360px;font-size:clamp(16px,1.4vw,21px);line-height:1.35}
+.footer-brand{align-items:center;gap:16px}
+.footer-brand strong{max-width:280px;font-size:18px;line-height:1.5}
+.footer-identity>a,.footer-identity p a{display:inline;color:#e6c69e;text-decoration:underline;text-underline-offset:3px}
+.footer-grid{grid-template-columns:1.2fr 1fr 1.15fr;align-items:start}
+.copyright{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.inner-grid article,.work-steps span,.opportunity{position:relative;isolation:isolate;overflow:hidden}
+.inner-grid article::after,.work-steps span::after,.opportunity::after{content:"";position:absolute;inset:-15%;z-index:0;pointer-events:none;background:repeating-linear-gradient(137deg,transparent 0 108px,rgba(220,187,128,.16) 109px,transparent 110px 220px);opacity:.55;animation:real-estate-thread-drift 55s ease-in-out infinite alternate}
+.inner-grid article>*,.opportunity>*{position:relative;z-index:1}
+.button::after,.mini-button::after{z-index:0}
+@media(max-width:1250px){.desktop-nav{display:none}.mobile-menu{display:block;position:relative}.mobile-menu summary{cursor:pointer;color:var(--forest);font-weight:600;border:1px solid var(--line);border-radius:5px;padding:8px 12px}.mobile-menu nav{position:absolute;left:0;top:43px;width:min(85vw,290px);background:#f7f2ed;border:1px solid var(--line);box-shadow:0 12px 24px #0002;padding:10px;border-radius:7px}.mobile-menu nav a{display:block;padding:10px;border-bottom:1px solid var(--line)}}
+@media(max-width:760px){.brand span{font-size:15px;max-width:235px}.footer-grid{grid-template-columns:1fr}.footer-brand strong{font-size:17px}.copyright{display:grid;gap:5px}}
+@media(max-width:760px){.hero,.inner-hero{height:500px;min-height:500px;background-image:linear-gradient(0deg,rgba(248,239,228,.90) 0%,rgba(248,239,228,.62) 34%,rgba(248,239,228,.04) 72%),url('/static/images/real-estate-hero.png');background-position:52% center;background-size:cover}}
+@media(prefers-reduced-motion:reduce){.inner-grid article::after,.work-steps span::after,.opportunity::after{animation:none}}
+.desktop-nav a.active,.mobile-menu nav a.active{color:var(--gold);font-weight:600;border-bottom:2px solid var(--gold)}
+.desktop-nav a.active{padding-bottom:8px}
+.mobile-menu nav a.active{background:rgba(139,98,55,.08)}
+.mobile-menu nav a:not(.active):hover{color:var(--gold)}
+/* A short gold sweep acknowledges internal navigation before the next page opens. */
+main{animation:real-estate-page-enter .55s ease-out both}
+@keyframes real-estate-page-enter{from{opacity:.86;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+body.page-leaving main{animation:real-estate-page-leave .28s ease-in both}
+@keyframes real-estate-page-leave{from{opacity:1}to{opacity:.9}}
+a.real-estate-link-flash{position:relative;isolation:isolate;overflow:hidden}
+a.real-estate-link-flash::before{content:"";position:absolute;inset:0;z-index:2;pointer-events:none;background:linear-gradient(110deg,transparent 18%,rgba(220,187,128,.1) 40%,rgba(220,187,128,.4) 50%,rgba(220,187,128,.1) 60%,transparent 82%);transform:translateX(115%);animation:real-estate-gold-sweep .3s ease-out forwards}
+@keyframes real-estate-gold-sweep{to{transform:translateX(-115%)}}
+@media(prefers-reduced-motion:reduce){main,body.page-leaving main,a.real-estate-link-flash::before{animation:none}}
+.project-card img.project-image{display:block;width:100%;height:100%;object-fit:cover}
+.estate-detail{padding:42px 0 70px}.estate-detail h1{font-size:clamp(30px,3vw,48px);margin:8px 0}.estate-detail .detail-lead{max-width:800px;line-height:1.8}.estate-detail .detail-cover{display:block;width:100%;max-height:590px;object-fit:cover;border-radius:10px;margin:24px 0 34px}.estate-detail section{margin:30px 0}.estate-detail section p{line-height:1.9}.estate-gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}.estate-gallery figure{margin:0}.estate-gallery img{width:100%;height:230px;object-fit:cover;border-radius:8px}.estate-gallery figcaption{font-size:13px;color:var(--gold);margin-top:6px}
+.inner-hero.estate-long-hero{height:auto;min-height:370px;display:flex;align-items:center}
+.inner-hero.estate-long-hero .wrap{min-width:0}
+.inner-hero.estate-long-hero h1{max-width:1000px;line-height:1.35}
+.estate-editorial{padding:30px 0 70px}
+.estate-editorial>section{margin:28px 0 42px}
+.estate-editorial .section-title{margin-bottom:19px}
+.estate-info-grid,.estate-process-grid,.estate-partners,.estate-journey{list-style:none;padding:0;margin:0}
+.estate-info-grid,.estate-process-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}
+.estate-info-grid li,.estate-process-grid li,.estate-partners li{position:relative;isolation:isolate;overflow:hidden;min-width:0;padding:20px 24px;border:1px solid var(--line);border-radius:9px;background:#f4eee8;line-height:1.7;font-weight:600}
+.estate-process-grid{counter-reset:estate-step}
+.estate-process-grid li{counter-increment:estate-step;padding-top:50px}
+.estate-process-grid li::before{content:counter(estate-step,decimal-leading-zero);position:absolute;top:13px;right:24px;color:var(--gold);font-size:14px;font-weight:600}
+.estate-partners{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px}
+.estate-explanation{position:relative;isolation:isolate;overflow:hidden;border:1px solid var(--line);border-right:3px solid var(--gold);border-radius:9px;background:#efe5d9;padding:27px 32px}
+.estate-explanation h2{font-size:24px}
+.estate-explanation p{max-width:950px;line-height:1.9;margin-bottom:0}
+.estate-journey{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px}
+.estate-journey li{display:flex;align-items:center;gap:10px;line-height:1.6;font-weight:600;color:var(--ink)}
+.estate-journey li:not(:last-child)::after{content:"←";color:var(--gold);font-size:20px}
+.estate-cta{position:relative;isolation:isolate;overflow:hidden;border-radius:10px;background:var(--forest);color:#fff;padding:30px 36px}
+.estate-cta h2{font-size:25px}.estate-cta p{line-height:1.8}.estate-cta .button{margin-top:8px}
+.estate-info-grid li::after,.estate-process-grid li::after,.estate-partners li::after,.estate-explanation::after,.estate-cta::after{content:"";position:absolute;inset:-15%;z-index:0;pointer-events:none;background:repeating-linear-gradient(137deg,transparent 0 108px,rgba(220,187,128,.16) 109px,transparent 110px 220px);opacity:.55;animation:real-estate-thread-drift 55s ease-in-out infinite alternate}
+.estate-cta::after{opacity:.3}
+.estate-explanation>*,.estate-cta>*{position:relative;z-index:1}
+@media(max-width:900px){.estate-info-grid,.estate-process-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.estate-partners{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){.inner-hero.estate-long-hero{height:auto;min-height:500px}.inner-hero.estate-long-hero h1{font-size:clamp(28px,7vw,34px)}.estate-editorial{padding:16px 0 50px}.estate-editorial>section{margin:26px 0 36px}.estate-info-grid,.estate-process-grid,.estate-partners{grid-template-columns:1fr}.estate-info-grid li,.estate-process-grid li,.estate-partners li{padding:16px 20px}.estate-process-grid li{padding-top:46px}.estate-process-grid li::before{right:20px;top:11px}.estate-explanation,.estate-cta{padding:23px}.estate-journey{gap:9px 14px}}
+@media(prefers-reduced-motion:reduce){.estate-info-grid li::after,.estate-process-grid li::after,.estate-partners li::after,.estate-explanation::after,.estate-cta::after{animation:none}}
+/* Quiet gold curves sit behind the content on every real-estate page. */
+body{background-color:var(--cream);background-image:repeating-radial-gradient(ellipse 720px 260px at 4% 18%,transparent 0 96px,rgba(139,98,55,.11) 97px 98px,transparent 99px 194px),repeating-radial-gradient(ellipse 620px 220px at 96% 72%,transparent 0 128px,rgba(139,98,55,.085) 129px 130px,transparent 131px 256px);background-size:1100px 700px,1300px 820px;background-position:center top,right 180px top 260px}
+.estate-intro{max-width:850px;margin:8px 0 32px;line-height:1.9;font-size:1.05rem}
+@media(max-width:760px){body{background-size:760px 540px,850px 620px;background-position:center top,right 80px top 200px}.estate-intro{font-size:1rem;line-height:1.85;margin-bottom:25px}}
+.property-management-content{padding:30px 0 70px}
+.property-management-content>section{margin:36px 0 44px}
+.property-management-content>.property-dashboard-feature{display:grid;grid-template-columns:minmax(0,55fr) minmax(0,45fr);align-items:center;gap:clamp(24px,4vw,54px);width:min(1100px,100%);margin:0 auto 45px}
+.property-dashboard-copy{min-width:0}
+.property-dashboard-copy h2{font-size:clamp(23px,2.2vw,29px);margin:0 0 14px}
+.property-dashboard-copy p{line-height:1.9;margin:0 0 20px}
+.property-dashboard-copy ul{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px 18px;list-style:none;margin:0;padding:0}
+.property-dashboard-copy li{position:relative;min-width:0;padding-right:18px;line-height:1.7;font-weight:600}
+.property-dashboard-copy li::before{content:"";position:absolute;right:0;top:.72em;width:7px;height:7px;border-radius:50%;background:var(--gold)}
+.property-dashboard-image{min-width:0;margin:0}
+.property-dashboard-image img{display:block;width:100%;height:auto;object-fit:contain;border-radius:12px;box-shadow:0 12px 28px rgba(38,51,35,.12)}
+.property-section-lead,.property-maintenance-note{max-width:920px;line-height:1.9;margin:0 0 22px}
+.property-maintenance-note{margin:20px 0 0}
+.property-maintenance-timeline{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:12px;list-style:none;margin:0;padding:0;counter-reset:maintenance-step}
+.property-maintenance-timeline li{position:relative;counter-increment:maintenance-step;min-width:0;min-height:124px;padding:54px 14px 18px;border:1px solid var(--line);border-top:3px solid var(--gold);border-radius:9px;background:#f4eee8;line-height:1.6;font-weight:600}
+.property-maintenance-timeline li::before{content:counter(maintenance-step,decimal-leading-zero);position:absolute;top:13px;right:14px;display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#ead9c3;color:var(--gold);font-size:12px}
+.property-maintenance-timeline li:not(:last-child)::after{content:"←";position:absolute;left:-13px;top:50%;z-index:1;color:var(--gold);font-size:18px;line-height:1}
+@media(max-width:1100px){.property-maintenance-timeline{grid-template-columns:repeat(4,minmax(0,1fr))}.property-maintenance-timeline li:nth-child(4)::after{content:none}}
+@media(max-width:760px){.property-management-content{padding:20px 0 50px}.property-management-content>section{margin:30px 0 38px}.property-management-content>.property-dashboard-feature{grid-template-columns:1fr;gap:22px;margin:0 auto 34px}.property-dashboard-image img{border-radius:9px}.property-maintenance-timeline{grid-template-columns:1fr;gap:10px;border-right:2px solid var(--line);padding-right:15px}.property-maintenance-timeline li{min-height:0;padding:17px 56px 17px 16px;border-top:1px solid var(--line);border-right:3px solid var(--gold)}.property-maintenance-timeline li::before{top:50%;right:13px;transform:translateY(-50%)}.property-maintenance-timeline li:not(:last-child)::after{content:none}}
+@media(max-width:420px){.property-dashboard-copy ul{grid-template-columns:1fr}}
+
+.estate-marketing-content{padding:30px 0 70px}
+.estate-marketing-content>section{margin:36px 0 48px}
+.estate-marketing-content>.marketing-feature{display:grid;grid-template-columns:minmax(0,55fr) minmax(0,45fr);align-items:center;gap:clamp(24px,4vw,54px);width:min(1100px,100%);margin:0 auto 54px}
+.marketing-feature-copy,.marketing-feature-image{min-width:0}
+.marketing-feature-copy h2{font-size:clamp(23px,2.2vw,29px);margin:0 0 20px}
+.marketing-services{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px;list-style:none;margin:0;padding:0}
+.marketing-services li{position:relative;min-width:0;padding:10px 19px 10px 8px;border-bottom:1px solid var(--line);line-height:1.65;font-weight:600}
+.marketing-services li::before{content:"";position:absolute;right:0;top:1.32em;width:7px;height:7px;border-radius:50%;background:var(--gold)}
+.marketing-feature-image{margin:0}
+.marketing-feature-image img{display:block;width:100%;height:auto;object-fit:contain;border-radius:12px;box-shadow:0 12px 28px rgba(38,51,35,.12)}
+.marketing-partners-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:15px}
+.marketing-partner{position:relative;isolation:isolate;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:space-between;gap:16px;min-width:0;min-height:164px;padding:24px 12px 18px;border:1px solid var(--line);border-radius:9px;background:#f4eee8;text-align:center;font-weight:600}
+.marketing-partner img{position:relative;z-index:1;display:block;width:100%;height:82px;object-fit:contain}
+.marketing-partner span{position:relative;z-index:1;line-height:1.5}
+.marketing-partner::after{content:"";position:absolute;inset:-15%;z-index:0;pointer-events:none;background:repeating-linear-gradient(137deg,transparent 0 108px,rgba(220,187,128,.16) 109px,transparent 110px 220px);opacity:.55;animation:real-estate-thread-drift 55s ease-in-out infinite alternate}
+@media(max-width:900px){.marketing-partners-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:760px){.estate-marketing-content{padding:20px 0 50px}.estate-marketing-content>section{margin:30px 0 38px}.estate-marketing-content>.marketing-feature{grid-template-columns:1fr;gap:22px;margin:0 auto 40px}.marketing-feature-image img{border-radius:9px}.marketing-partners-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:480px){.marketing-services{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.marketing-partner::after{animation:none}}
