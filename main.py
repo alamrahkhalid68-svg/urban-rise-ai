@@ -12,6 +12,7 @@ from access_control import ensure_company_access, ensure_employee_any_section_ac
 from fastapi.staticfiles import StaticFiles
 from db import get_db
 from featured_projects import published_projects, register_featured_projects
+from real_estate_projects import published_projects as published_real_estate_projects, register_real_estate_projects
 from html import escape
 import json
 import logging
@@ -5031,27 +5032,40 @@ async def public_domain_middleware(request: Request, call_next):
         return RedirectResponse(target, status_code=301)
 
     response = await call_next(request)
-    if request.url.path not in {"/", "/works", "/works/build", "/works/care", "/robots.txt", "/sitemap.xml"} and not (request.url.path.startswith("/works/projects/") and response.status_code == 200):
+    if request.url.path not in {"/", "/works", "/works/build", "/works/care", "/robots.txt", "/sitemap.xml", "/real-estate", "/real-estate/projects", "/real-estate/development", "/real-estate/investment-partnerships", "/real-estate/property-management", "/real-estate/marketing"} and not ((request.url.path.startswith("/works/projects/") or request.url.path.startswith("/real-estate/projects/")) and response.status_code == 200):
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
     return response
 
 
+REAL_ESTATE_PAGES = {
+    "projects": ("مشاريعنا", "تعرف على مشاريع أوربان رايز العقارية المنشورة في الرياض وحالاتها.", "اطّلع على مشاريعنا العقارية المنشورة وتفاصيل كل مشروع وصوره وحالته.", ["المشاريع المكتملة", "المشاريع قيد التطوير", "الفرص المستقبلية"], ["مراجعة البيانات", "اعتماد النشر", "عرض التفاصيل"]),
+    "development": ("نطوّر أرضك في الرياض", "التطوير العقاري في الرياض لمالك الأرض أو العقار: دراسة الموقع والسوق، وتحديد الاستخدام الأنسب، وإدارة التخطيط والتطوير والتنفيذ والتسويق ضمن شراكة واضحة.", "ندرس الأرض والسوق، ونحدد الاستخدام العقاري الأنسب، ثم ندير مراحل التخطيط والتطوير والتنفيذ والتسويق ضمن شراكة واضحة تحقق قيمة أفضل للأصل العقاري.", [], []),
+    "investment-partnerships": ("فرص عقارية مدروسة في الرياض", "الاستثمار والشراكات العقارية في الرياض عبر مشاريع مدروسة واتفاقيات واضحة وإجراءات تراعي المتطلبات النظامية. سجّل اهتمامك لبحث شراكة مناسبة.", "نبني شراكات مع المستثمرين والجهات المهتمة بالفرص العقارية المدروسة، من خلال مشاريع محددة واتفاقيات واضحة وإجراءات تتوافق مع المتطلبات النظامية.", [], []),
+    "property-management": ("إدارة أملاك بوضوح وشفافية", "إدارة الأملاك في الرياض مع متابعة الوحدات والإيجارات والتحصيل والصيانة وتقارير المالك عبر صفحة إلكترونية خاصة من أوربان رايز.", "نتولى إدارة أملاكك في الرياض، وتبقى مطلعًا على الوحدات والإيجارات والتحصيل والصيانة من مكان واحد.", [], []),
+    "marketing": ("نسوّق عقارك باحتراف", "التسويق العقاري في الرياض لبيع وتأجير العقارات، وتسويق العقارات داخل المملكة وخارجها عبر المنصات العقارية والتسويق الرقمي وشبكة علاقات أوربان رايز.", "نسوّق عقارات البيع والإيجار داخل المملكة وخارجها، عبر المنصات العقارية والتسويق الرقمي وشبكة علاقات أوربان رايز.", [], []),
+}
+REAL_ESTATE_PATHS = ("/real-estate",) + tuple(f"/real-estate/{slug}" for slug in REAL_ESTATE_PAGES)
+
+
 @app.get("/robots.txt", response_class=PlainTextResponse)
 def robots_txt():
-    return "User-agent: *\nDisallow: /\nAllow: /$\nAllow: /works$\nAllow: /works/build$\nAllow: /works/care$\nAllow: /works/projects/\nSitemap: https://urbanrise.sa/sitemap.xml\n"
+    return "User-agent: *\nDisallow: /\nAllow: /$\nAllow: /works$\nAllow: /works/build$\nAllow: /works/care$\nAllow: /works/projects/\nAllow: /real-estate$\nAllow: /real-estate/\nSitemap: https://urbanrise.sa/sitemap.xml\n"
 
 
 @app.get("/sitemap.xml")
 def sitemap_xml():
     from xml.sax.saxutils import escape as xml_escape
     project_urls = ''.join(f'<url><loc>https://urbanrise.sa/works/projects/{xml_escape(p["slug"])}</loc></url>' for p in published_projects())
+    real_estate_project_urls = ''.join(f'<url><loc>https://urbanrise.sa/real-estate/projects/{xml_escape(p["slug"])}</loc></url>' for p in published_real_estate_projects())
     return Response(
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
         '<url><loc>https://urbanrise.sa/</loc></url>'
         '<url><loc>https://urbanrise.sa/works</loc></url>'
         '<url><loc>https://urbanrise.sa/works/build</loc></url>'
-        '<url><loc>https://urbanrise.sa/works/care</loc></url>' + project_urls + '</urlset>',
+        '<url><loc>https://urbanrise.sa/works/care</loc></url>'
+        + ''.join(f'<url><loc>https://urbanrise.sa{path}</loc></url>' for path in REAL_ESTATE_PATHS)
+        + project_urls + real_estate_project_urls + '</urlset>',
         media_type="application/xml",
     )
 
@@ -5068,8 +5082,10 @@ def render_internal_portal(user) -> HTMLResponse:
     admin_users_button = ""
     daily_report_button = ""
     featured_projects_button = ""
+    real_estate_projects_button = ""
     if is_admin(user):
-        featured_projects_button = '<a href="/admin/featured-projects" class="portal-admin-btn">المشاريع المختارة للموقع</a>'
+        featured_projects_button = '<a href="/admin/featured-projects" class="portal-admin-btn">مشاريع مختارة للمقاولات</a>'
+        real_estate_projects_button = '<a href="/admin/real-estate-projects" class="portal-admin-btn">مشاريع مختارة للتطوير العقاري</a>'
         admin_users_button = '<a href="/admin/users" class="portal-admin-btn">تسجيل مستخدم جديد</a>'
         conn = get_db()
         unread_requests = conn.execute("""SELECT COUNT(*) total FROM client_change_requests
@@ -5294,7 +5310,7 @@ def render_internal_portal(user) -> HTMLResponse:
     <section class="portal-hero">
         <h1 class="portal-title">Urban Rise AI</h1>
         <p class="portal-kicker">بوابة إدارة مجموعة أوربان رايز</p>
-        <div class="portal-admin-actions">{daily_report_button}{admin_users_button}{featured_projects_button}</div>
+        <div class="portal-admin-actions">{daily_report_button}{admin_users_button}{featured_projects_button}{real_estate_projects_button}</div>
     </section>
 
     <section class="portal-company-grid" aria-label="بوابات الشركات">
@@ -5342,6 +5358,19 @@ def home(request: Request):
             "request": request,
         },
     )
+
+
+@app.get("/real-estate", response_class=HTMLResponse)
+def real_estate_home(request: Request):
+    return templates.TemplateResponse(request, "real_estate.html", {"page": None, "slug": "", "pages": REAL_ESTATE_PAGES, "featured_projects": [p for p in published_real_estate_projects() if p["featured"]]})
+
+
+@app.get("/real-estate/{slug}", response_class=HTMLResponse)
+def real_estate_section(request: Request, slug: str):
+    if slug not in REAL_ESTATE_PAGES:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404)
+    return templates.TemplateResponse(request, "real_estate.html", {"page": REAL_ESTATE_PAGES[slug], "slug": slug, "pages": REAL_ESTATE_PAGES, "published_projects": published_real_estate_projects() if slug == "projects" else []})
 
 
 @app.get("/works", response_class=HTMLResponse)
@@ -22538,5 +22567,6 @@ app.include_router(maintenance_work_orders_router)
 app.include_router(maintenance_finance_router)
 register_client_portal(app)
 register_featured_projects(app, templates)
+register_real_estate_projects(app, templates)
 register_assets_custody(app)
 
