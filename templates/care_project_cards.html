@@ -1,0 +1,11 @@
+<div class="care-project-grid">
+{% for project in projects %}
+<article class="care-project-card">
+  <a class="care-project-image" href="/works/care/projects/{{ project.slug }}" aria-label="عرض المشروع: {{ project.name }}"><img src="{{ project.cover_thumb }}" alt="{{ project.cover_alt }}" loading="lazy" width="560" height="420"></a>
+  <div class="care-project-body"><div class="care-project-meta"><span>{{ project.project_type }}</span><span>{{ project.project_state }}</span></div>
+    <h3>{{ project.name }}</h3><p class="care-project-place">{{ project.city }}{% if project.location %}، {{ project.location }}{% endif %}</p>
+    <p>{{ project.summary }}</p><a class="care-project-link" href="/works/care/projects/{{ project.slug }}">عرض المشروع ←</a>
+  </div>
+</article>
+{% endfor %}
+</div>
