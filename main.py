@@ -13,10 +13,12 @@ from fastapi.staticfiles import StaticFiles
 from db import get_db
 from featured_projects import published_projects, register_featured_projects
 from real_estate_projects import published_projects as published_real_estate_projects, register_real_estate_projects
+from care_projects import published_projects as published_care_projects, register_care_projects
 from html import escape
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import sqlite3
 import urllib.error
@@ -1932,7 +1934,7 @@ PROJECT_EXPENSE_CATEGORY_THEMES = {
     "أخرى": "other",
 }
 PDF_REPORT_FONT_NAME = "UrbanRiseArabic"
-PDF_REPORT_FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "fonts")
+PDF_REPORT_FONT_DIR = Path(__file__).resolve().parent / "static" / "fonts"
 PDF_REPORT_FONT_CANDIDATES = [
     os.path.join(PDF_REPORT_FONT_DIR, "NotoNaskhArabic-Regular.ttf"),
     os.path.join(PDF_REPORT_FONT_DIR, "Amiri-Regular.ttf"),
@@ -2074,13 +2076,13 @@ def get_pdf_report_font_name() -> str:
 def get_quote_contract_font_name(bold=False):
     filename = "IBMPlexSansArabic-SemiBold.ttf" if bold else "IBMPlexSansArabic-Regular.ttf"
     name = "QuoteContractIBMPlexSemiBold" if bold else "QuoteContractIBMPlexRegular"
-    path = os.path.join(PDF_REPORT_FONT_DIR, filename)
+    path = PDF_REPORT_FONT_DIR / filename
     try:
         pdfmetrics.getFont(name)
     except KeyError:
-        if not os.path.exists(path):
+        if not path.is_file():
             raise FileNotFoundError(path)
-        pdfmetrics.registerFont(TTFont(name, path))
+        pdfmetrics.registerFont(TTFont(name, str(path)))
     return name
 
 
@@ -2907,9 +2909,10 @@ def build_quote_report_pdf(quote, items, payments, company: str = "", financials
 
 def build_contract_report_pdf(contract, quote, items, payments, company: str = "", project=None, financials=None) -> tuple[str, str]:
     from uuid import uuid4
-    os.makedirs("pdfs", exist_ok=True)
+    pdf_dir = Path(__file__).resolve().parent / "pdfs"
+    pdf_dir.mkdir(exist_ok=True)
     file_name = f"contract_report_{contract['id']}_{uuid4().hex}.pdf"
-    file_path = os.path.join("pdfs", file_name)
+    file_path = str(pdf_dir / file_name)
     font_name = get_quote_contract_font_name()
     bold_font_name = get_quote_contract_font_name(True)
     company_profile = WORKS_COMPANY_PROFILE
@@ -2964,7 +2967,8 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
             description = (item["description"] or "").strip() or ""
             line_total = item["line_total"] if v3_contract_pdf else safe_float(item["qty"]) * safe_float(item["unit_price"]) * display_factor
             scope_story.append(contract_paragraph(f"{index}. {description}", body_style))
-            scope_story.append(contract_paragraph(f"الكمية: {item['qty']} | سعر الوحدة: {item.get('unit_price_display', format_currency(item['unit_price']))} ريال | إجمالي البند: {format_currency(line_total)} ريال", body_style))
+            unit_price_display = item["unit_price_display"] if "unit_price_display" in item.keys() else format_currency(item["unit_price"])
+            scope_story.append(contract_paragraph(f"الكمية: {item['qty']} | سعر الوحدة: {unit_price_display} ريال | إجمالي البند: {format_currency(line_total)} ريال", body_style))
     else:
         scope_story.append(contract_paragraph("1. ", body_style))
         scope_story.append(contract_paragraph("بمبلغ: ", body_style))
@@ -5032,7 +5036,7 @@ async def public_domain_middleware(request: Request, call_next):
         return RedirectResponse(target, status_code=301)
 
     response = await call_next(request)
-    if request.url.path not in {"/", "/works", "/works/build", "/works/care", "/robots.txt", "/sitemap.xml", "/real-estate", "/real-estate/projects", "/real-estate/development", "/real-estate/investment-partnerships", "/real-estate/property-management", "/real-estate/marketing"} and not ((request.url.path.startswith("/works/projects/") or request.url.path.startswith("/real-estate/projects/")) and response.status_code == 200):
+    if request.url.path not in {"/", "/works", "/works/build", "/works/care", "/works/care/projects", "/robots.txt", "/sitemap.xml", "/real-estate", "/real-estate/projects", "/real-estate/development", "/real-estate/investment-partnerships", "/real-estate/property-management", "/real-estate/marketing"} and not ((request.url.path.startswith("/works/projects/") or request.url.path.startswith("/works/care/projects/") or request.url.path.startswith("/real-estate/projects/")) and response.status_code == 200):
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
     return response
 
@@ -5097,9 +5101,11 @@ def render_internal_portal(user) -> HTMLResponse:
     daily_report_button = ""
     featured_projects_button = ""
     real_estate_projects_button = ""
+    care_projects_button = ""
     if is_admin(user):
         featured_projects_button = '<a href="/admin/featured-projects" class="portal-admin-btn">مشاريع مختارة للمقاولات</a>'
         real_estate_projects_button = '<a href="/admin/real-estate-projects" class="portal-admin-btn">مشاريع مختارة للتطوير العقاري</a>'
+        care_projects_button = '<a href="/admin/care-projects" class="portal-admin-btn">مشاريع الإدارة والتشغيل والصيانة والنظافة</a>'
         admin_users_button = '<a href="/admin/users" class="portal-admin-btn">تسجيل مستخدم جديد</a>'
         conn = get_db()
         unread_requests = conn.execute("""SELECT COUNT(*) total FROM client_change_requests
@@ -5324,7 +5330,7 @@ def render_internal_portal(user) -> HTMLResponse:
     <section class="portal-hero">
         <h1 class="portal-title">Urban Rise AI</h1>
         <p class="portal-kicker">بوابة إدارة مجموعة أوربان رايز</p>
-        <div class="portal-admin-actions">{daily_report_button}{admin_users_button}{featured_projects_button}{real_estate_projects_button}</div>
+        <div class="portal-admin-actions">{daily_report_button}{admin_users_button}{featured_projects_button}{real_estate_projects_button}{care_projects_button}</div>
     </section>
 
     <section class="portal-company-grid" aria-label="بوابات الشركات">
@@ -5399,7 +5405,7 @@ def works_build(request: Request):
 
 @app.get("/works/care", response_class=HTMLResponse)
 def works_care(request: Request):
-    return templates.TemplateResponse(request, "works_care.html")
+    return templates.TemplateResponse(request, "works_care.html", {"care_projects": published_care_projects(featured_only=True)})
 
 
 @app.get("/portal", response_class=HTMLResponse)
@@ -22582,5 +22588,6 @@ app.include_router(maintenance_finance_router)
 register_client_portal(app)
 register_featured_projects(app, templates)
 register_real_estate_projects(app, templates)
+register_care_projects(app, templates)
 register_assets_custody(app)
 
