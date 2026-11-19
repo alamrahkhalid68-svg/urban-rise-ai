@@ -2917,16 +2917,28 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     bold_font_name = get_quote_contract_font_name(True)
     company_profile = WORKS_COMPANY_PROFILE
     v3_contract_pdf = "contract_number" in contract.keys() and bool(contract["contract_number"])
-    items_total = sum((item["line_total"] for item in items), Decimal("0")) if v3_contract_pdf else sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
+    raw_items_total = sum((item["line_total"] for item in items), Decimal("0")) if v3_contract_pdf else sum(safe_float(item["qty"]) * safe_float(item["unit_price"]) for item in items)
     financials = financials or calculate_contract_financials(contract["id"]) or {
-        "items_total": items_total,
-        "subtotal_before_vat": items_total,
+        "items_total": raw_items_total,
+        "subtotal_before_vat": raw_items_total,
         "vat_rate": 0,
         "vat_amount": 0,
-        "grand_total_with_vat": items_total,
+        "grand_total_with_vat": raw_items_total,
     }
-    subtotal_before_vat = financials["subtotal_before_vat"] if v3_contract_pdf else safe_float(financials["subtotal_before_vat"])
-    total = financials["grand_total_with_vat"] if v3_contract_pdf else safe_float(financials["grand_total_with_vat"])
+    subtotal_before_vat = decimal_from_value(financials["subtotal_before_vat"])
+    if v3_contract_pdf:
+        sale_items = customer_sale_items(items, subtotal_before_vat)
+        item_amounts = [item["line_total"] for item in sale_items]
+    else:
+        display_factor = safe_float(financials["subtotal_before_vat"]) / raw_items_total if raw_items_total else 1.0
+        item_amounts = [from_halalas(to_halalas(safe_float(item["qty"]) * safe_float(item["unit_price"]) * display_factor)) for item in items]
+        if item_amounts:
+            item_amounts[-1] += subtotal_before_vat - sum(item_amounts, Decimal("0"))
+    items_total = sum(item_amounts, Decimal("0"))
+    vat_enabled = bool(financials.get("vat_enabled", quote["vat_enabled"] if "vat_enabled" in quote.keys() else 1))
+    vat_rate = decimal_from_value(financials["vat_rate"])
+    vat_amount = decimal_from_value(financials["vat_amount"]) if vat_enabled else Decimal("0")
+    total = items_total + vat_amount
     contract_number = contract["contract_number"] if "contract_number" in contract.keys() and contract["contract_number"] else f"25/{int(contract['id']):04d}"
     issue_date = contract["issued_at"] if "issued_at" in contract.keys() and contract["issued_at"] else datetime.now().strftime("%d-%m-%Y")
     project_name = ""
@@ -2960,16 +2972,25 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
 
     scope_story = []
     if items:
-        for index, item in enumerate(items, start=1):
+        for index, (item, amount) in enumerate(zip(items, item_amounts), start=1):
             description = (item["description"] or "").strip() or ""
             scope_story.append(contract_paragraph(f"{index}. {description}", body_style))
+            scope_story.append(contract_paragraph(f"مبلغ البند: {format_currency(amount)} ريال", body_style))
     else:
         scope_story.append(contract_paragraph("لا توجد بنود مسجلة", body_style))
+    if vat_enabled:
+        scope_story.extend([
+            contract_paragraph(f"الإجمالي قبل الضريبة: {format_currency(items_total)} ريال", total_value_style),
+            contract_paragraph(f"ضريبة القيمة المضافة {format_percentage_display(vat_rate)}: {format_currency(vat_amount)} ريال", total_value_style),
+            contract_paragraph(f"الإجمالي شامل الضريبة: {format_currency(total)} ريال", total_value_style),
+        ])
+    else:
+        scope_story.append(contract_paragraph(f"الإجمالي: {format_currency(total)} ريال", total_value_style))
 
     payment_story = []
     if payments:
-        for payment in payments:
-            amount = payment["amount"] if v3_contract_pdf else calculate_percentage_amount(total, payment["percentage"])
+        payment_amounts = quote_payment_amounts(total, payments)
+        for payment, amount in zip(payments, payment_amounts):
             title = (payment["title"] or "").strip()
             if title:
                 payment_text = f"- {title} بنسبة ({format_percentage_display(payment['percentage'])}) بمبلغ {format_currency(amount)} ريال"
@@ -3066,34 +3087,6 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ]))
 
-    contract_value_details = [
-        contract_paragraph("إجمالي قيمة العقد", small_label_style, contract_page_width - 16),
-        Spacer(1, 4),
-    ]
-    if financials.get("vat_enabled", 1):
-        contract_value_details.extend([
-            contract_paragraph(f"ضريبة القيمة المضافة {format_percentage_display(financials['vat_rate'])}: {format_currency(financials['vat_amount'])} ريال", card_value_style, contract_page_width - 16),
-            contract_paragraph(f"إجمالي قيمة العقد: {format_currency(total)} ريال سعودي فقط لا غير", total_value_style, contract_page_width - 16),
-        ])
-    else:
-        contract_value_details.extend([
-            contract_paragraph(f"إجمالي قيمة العقد: {format_currency(total)} ريال سعودي فقط لا غير", total_value_style, contract_page_width - 16),
-        ])
-
-    contract_value_card = Table([[
-        [
-            *contract_value_details,
-        ]
-    ]], colWidths=[166 * mm], hAlign="RIGHT")
-    contract_value_card.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#EEE4CF")),
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#BFA06A")),
-        ("TOPPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-        ("LEFTPADDING", (0, 0), (-1, -1), 12),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-    ]))
-
     story = [
         header_band,
         Spacer(1, 8),
@@ -3124,8 +3117,6 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
         Spacer(1, 8),
         build_section_heading("رابعاً: قيمة العقد والدفعات"),
         Spacer(1, 4),
-        contract_value_card,
-        Spacer(1, 6),
         contract_paragraph("2. يتم السداد كالتالي:", body_style),
     ])
     story.extend(payment_story)
