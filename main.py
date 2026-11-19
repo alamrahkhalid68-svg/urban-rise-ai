@@ -3127,7 +3127,7 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
         Spacer(1, 4),
         contract_paragraph("1. تنفيذ الأعمال وفق المتطلبات المتفق عليها.", body_style),
         contract_paragraph("2. مسؤولية سلامة العاملين على الطرف الأول.", body_style),
-        contract_paragraph("3. يحق للمقاول وضع لوحة تعريفية في الموقع.", body_style),
+        contract_paragraph("3. يحق للمقاول وضع لوحة تعريفية وتصوير الأعمال واستخدامها تسويقيًا، مع الحفاظ على خصوصية العميل.", body_style),
         contract_paragraph("4- تعتبر رسائل الواتساب والبريد الإلكتروني ومحاضر استلام المواد من وسائل الإثبات المعتمدة بين الطرفين.", body_style),
         Spacer(1, 8),
         build_section_heading("سادساً: مسؤوليات الطرفين"),
