@@ -2926,9 +2926,6 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
         "grand_total_with_vat": items_total,
     }
     subtotal_before_vat = financials["subtotal_before_vat"] if v3_contract_pdf else safe_float(financials["subtotal_before_vat"])
-    display_factor = 1.0 if v3_contract_pdf else (subtotal_before_vat / items_total if items_total else 1.0)
-    if v3_contract_pdf:
-        items = customer_sale_items(items, subtotal_before_vat)
     total = financials["grand_total_with_vat"] if v3_contract_pdf else safe_float(financials["grand_total_with_vat"])
     contract_number = contract["contract_number"] if "contract_number" in contract.keys() and contract["contract_number"] else f"25/{int(contract['id']):04d}"
     issue_date = contract["issued_at"] if "issued_at" in contract.keys() and contract["issued_at"] else datetime.now().strftime("%d-%m-%Y")
@@ -2965,13 +2962,9 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     if items:
         for index, item in enumerate(items, start=1):
             description = (item["description"] or "").strip() or ""
-            line_total = item["line_total"] if v3_contract_pdf else safe_float(item["qty"]) * safe_float(item["unit_price"]) * display_factor
             scope_story.append(contract_paragraph(f"{index}. {description}", body_style))
-            unit_price_display = item["unit_price_display"] if "unit_price_display" in item.keys() else format_currency(item["unit_price"])
-            scope_story.append(contract_paragraph(f"الكمية: {item['qty']} | سعر الوحدة: {unit_price_display} ريال | إجمالي البند: {format_currency(line_total)} ريال", body_style))
     else:
-        scope_story.append(contract_paragraph("1. ", body_style))
-        scope_story.append(contract_paragraph("بمبلغ: ", body_style))
+        scope_story.append(contract_paragraph("لا توجد بنود مسجلة", body_style))
 
     payment_story = []
     if payments:
@@ -3074,19 +3067,17 @@ def build_contract_report_pdf(contract, quote, items, payments, company: str = "
     ]))
 
     contract_value_details = [
-        contract_paragraph("القيمة الإجمالية", small_label_style, contract_page_width - 16),
+        contract_paragraph("إجمالي قيمة العقد", small_label_style, contract_page_width - 16),
         Spacer(1, 4),
     ]
     if financials.get("vat_enabled", 1):
         contract_value_details.extend([
-            contract_paragraph(f"قيمة الأعمال قبل الضريبة: {format_currency(subtotal_before_vat)} ريال", card_value_style, contract_page_width - 16),
             contract_paragraph(f"ضريبة القيمة المضافة {format_percentage_display(financials['vat_rate'])}: {format_currency(financials['vat_amount'])} ريال", card_value_style, contract_page_width - 16),
-            contract_paragraph(f"الإجمالي شامل الضريبة: {format_currency(total)} ريال سعودي فقط لا غير", total_value_style, contract_page_width - 16),
+            contract_paragraph(f"إجمالي قيمة العقد: {format_currency(total)} ريال سعودي فقط لا غير", total_value_style, contract_page_width - 16),
         ])
     else:
         contract_value_details.extend([
-            contract_paragraph(f"قيمة الأعمال: {format_currency(subtotal_before_vat)} ريال", card_value_style, contract_page_width - 16),
-            contract_paragraph(f"الإجمالي النهائي: {format_currency(total)} ريال سعودي فقط لا غير", total_value_style, contract_page_width - 16),
+            contract_paragraph(f"إجمالي قيمة العقد: {format_currency(total)} ريال سعودي فقط لا غير", total_value_style, contract_page_width - 16),
         ])
 
     contract_value_card = Table([[
